@@ -29,6 +29,10 @@ class State:
     entity_id: str
     state: str
     attributes: dict[str, Any]
+    # HA flytter kun ``last_changed`` når tilstanden faktisk skifter værdi, så
+    # den identificerer en måling. Det er sådan en poller kan kende en ny
+    # aflæsning fra den samme aflæsning set igen.
+    last_changed: str | None = None
 
     def as_float(self) -> float | None:
         """Tilstanden som tal, eller None hvis den ikke er et.
@@ -81,6 +85,7 @@ class HomeAssistant:
             entity_id=body.get("entity_id", entity_id),
             state=str(body.get("state", "")),
             attributes=body.get("attributes") or {},
+            last_changed=body.get("last_changed"),
         )
 
     async def set_state(

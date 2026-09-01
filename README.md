@@ -21,7 +21,10 @@ Hvad der virker nu:
 - Migrerer den indlærte COP-tabel ud af Node-REDs context til `/data` — 333
   celler og godt 17.000 målinger, med de defekte `NaN`-nøgler renset fra.
 - Lærer videre i sin egen tabel, med et delta-T-afhængigt plausibilitetsfilter
-  i stedet for det flade 1,0–7,0 Node-RED bruger.
+  i stedet for det flade 1,0–7,0 Node-RED bruger. Hver måling tælles **én
+  gang**: add-on'en poller, hvor Node-RED lyttede på hændelser, så uden det
+  ville en stillestående aflæsning blive lært om igen hvert minut og `count`
+  tælle minutter i stedet for målinger.
 - Slår COP op med **rettet 2D-interpolation.** Node-RED-udgaven satte
   `count: 0` på alt interpoleret, hvorfor blandingsgrenene aldrig udløste og
   opslaget faldt tilbage på fabrikkens TA-kurve overalt undtagen ved eksakte

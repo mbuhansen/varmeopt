@@ -19,7 +19,7 @@ from typing import Any
 import aiohttp
 
 from .cop import CopTable
-from .ha import HaError, HomeAssistant
+from .ha import HaError, HomeAssistant, State
 from .migrate import COP_TABLE_FILE, load_cop_table
 from .nodered import NodeRed
 from .options import Options
@@ -43,16 +43,20 @@ class Varmeopt:
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         self._dirty = False
         self._last_save = 0.0
+        self._last_learned_stamp: str | None = None
 
     # ------------------------------------------------------------------ cyklus
 
     async def cycle(self, ha: HomeAssistant | None, nodered: NodeRed) -> None:
-        flow_temp = outdoor_temp = measured_cop = None
+        flow_temp = outdoor_temp = measured_cop = measured_stamp = None
 
         if ha is not None:
             flow_temp = await self._number(ha, self.options.entity_flow_temp)
             outdoor_temp = await self._number(ha, self.options.entity_outdoor_temp)
-            measured_cop = await self._number(ha, self.options.entity_cop_measured)
+            measured = await self._state(ha, self.options.entity_cop_measured)
+            if measured is not None:
+                measured_cop = measured.as_float()
+                measured_stamp = measured.last_changed
 
         # Udetemperaturen kommer i dag fra MQTT direkte ind i Node-REDs flow-
         # context og findes ikke som HA-entitet. Indtil den gør, læser vi den
@@ -67,9 +71,9 @@ class Varmeopt:
         learn_note = "—"
         if flow_temp is not None and outdoor_temp is not None:
             if measured_cop is not None:
-                learn_note = self.table.learn(flow_temp, outdoor_temp, measured_cop)
-                if not learn_note.startswith("ignoreret"):
-                    self._dirty = True
+                learn_note = self._learn(
+                    flow_temp, outdoor_temp, measured_cop, measured_stamp
+                )
             lookup = self.table.lookup(flow_temp, outdoor_temp)
         else:
             lookup = None
@@ -124,15 +128,48 @@ class Varmeopt:
             },
         )
 
+    def _learn(
+        self,
+        flow_temp: float,
+        outdoor_temp: float,
+        measured_cop: float,
+        stamp: str | None,
+    ) -> str:
+        """Indarbejd en måling, men kun én gang pr. måling.
+
+        Node-RED lærer hændelsesdrevet — dens ``Cop learning``-node fyrer når
+        sensoren skifter. Vi poller i stedet, og uden det her ville en
+        stillestående aflæsning blive lært om igen hver eneste cyklus.
+        ``count`` ville så tælle minutter i stedet for målinger, og det er
+        præcis det tal der afgør hvor meget en lært celle vejer mod TA-kurven.
+        Et døgn i ét driftspunkt ville dermed drukne den migrerede historik.
+
+        Uden ``last_changed`` (lokal afprøvning mod en attrap) kan vi ikke
+        kende to målinger fra hinanden, og så lærer vi hellere for meget end
+        for lidt.
+        """
+        if stamp is not None and stamp == self._last_learned_stamp:
+            return "ignoreret: uændret måling, allerede lært"
+
+        note = self.table.learn(flow_temp, outdoor_temp, measured_cop)
+        if not note.startswith("ignoreret"):
+            self._last_learned_stamp = stamp
+            self._dirty = True
+        return note
+
     @staticmethod
-    async def _number(ha: HomeAssistant, entity_id: str) -> float | None:
+    async def _state(ha: HomeAssistant, entity_id: str) -> State | None:
         if not entity_id:
             return None
         try:
-            state = await ha.get_state(entity_id)
+            return await ha.get_state(entity_id)
         except HaError as exc:
             log.warning("%s: %s", entity_id, exc)
             return None
+
+    @classmethod
+    async def _number(cls, ha: HomeAssistant, entity_id: str) -> float | None:
+        state = await cls._state(ha, entity_id)
         return state.as_float() if state else None
 
     # ------------------------------------------------------------------- lager
