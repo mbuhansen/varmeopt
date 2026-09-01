@@ -1,0 +1,30 @@
+name: Varmeopt
+version: "0.1.0"
+slug: varmeopt
+description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
+url: https://github.com/mbuhansen/varmeopt
+arch:
+  - amd64
+  - aarch64
+init: false
+startup: application
+boot: auto
+homeassistant_api: true
+ingress: true
+ingress_port: 8099
+panel_icon: mdi:radiator
+panel_title: Varmeopt
+options:
+  log_level: info
+  cycle_seconds: 60
+  nodered_url: "http://192.168.1.159:1880"
+  entity_flow_temp: sensor.node_1_analog_logging_13
+  entity_cop_measured: sensor.node_1_analog_logging_12
+  entity_outdoor_temp: ""
+schema:
+  log_level: list(debug|info|warning|error)
+  cycle_seconds: int(30,600)
+  nodered_url: str
+  entity_flow_temp: str
+  entity_cop_measured: str
+  entity_outdoor_temp: str?
