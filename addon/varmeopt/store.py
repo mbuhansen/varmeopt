@@ -17,9 +17,18 @@ from typing import Any
 DEFAULT_DATA_DIR = Path("/data")
 
 
+def default_root() -> Path:
+    """``/data`` i add-on'en; overstyrbar til lokal afprøvning.
+
+    Uden overstyringen ville et lokalt kald på Windows oprette ``C:\\data``.
+    """
+    override = os.environ.get("VARMEOPT_DATA_DIR")
+    return Path(override) if override else DEFAULT_DATA_DIR
+
+
 class Store:
     def __init__(self, root: Path | None = None) -> None:
-        self.root = root or DEFAULT_DATA_DIR
+        self.root = root or default_root()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def path(self, name: str) -> Path:
