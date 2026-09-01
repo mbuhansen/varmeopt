@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -27,6 +28,10 @@ from .store import Store
 from .web import WebUI
 
 log = logging.getLogger("varmeopt")
+
+# Sat af Dockerfilen ud fra Supervisors BUILD_VERSION. Uden for add-on'en
+# (lokal afprøvning) er den ikke sat.
+VERSION = os.environ.get("VARMEOPT_VERSION", "ukendt")
 
 SENSOR = "sensor.varmeopt_cop"
 
@@ -199,6 +204,7 @@ async def run() -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    log.info("varmeopt %s starter", VERSION)
 
     store = Store()
     app = Varmeopt(options, store)
