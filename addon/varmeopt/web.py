@@ -233,7 +233,8 @@ class WebUI:
         return _page("Nu", "now", body)
 
     async def tank(self, _request: web.Request) -> web.Response:
-        buffer = self._status().get("tank")
+        status = self._status()
+        buffer = status.get("tank")
 
         if buffer is None:
             return _page(
@@ -269,7 +270,13 @@ class WebUI:
             )
 
         rows = [
-            ("Plads til", f"{buffer.headroom_kwh:.1f} kWh"),
+            ("Plads til varmepumpe", f"{buffer.headroom_kwh:.1f} kWh"),
+            (
+                "Plads i alt",
+                f"{buffer.peak_headroom_kwh:.1f} kWh"
+                f" <span style='color:var(--muted)'>solvarme og ACthor,"
+                f" op til {buffer.peak_ceiling:.0f} °C</span>",
+            ),
             ("Fyldning", _fmt(buffer.charge_percent, "%", 0)),
             ("Middeltemperatur", _fmt(buffer.mean_temp, "°C", 1)),
             ("Leverer op til", _fmt(buffer.deliverable, "°C", 1)),
@@ -298,6 +305,8 @@ class WebUI:
             f'{buffer.reference:.0f} °C</div></div>'
             f'<div class="tanks">{"".join(cards)}</div>'
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
+            + _balance_section(status.get("balance"), buffer)
+            + _vessel_section(status)
         )
         return _page("Lager", "tank", body)
 
@@ -523,6 +532,72 @@ class WebUI:
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
         )
         return _page("COP-tabel", "cop", body)
+
+
+def _balance_section(balance: Any, buffer: Any) -> str:
+    """Effekt ind mod effekt ud — og hvor længe det holder."""
+    if balance is None:
+        return ""
+
+    sources = balance.sources
+    rows = [(name.capitalize(), f"{kilowatt:.2f} kW") for name, kilowatt in sources.items()]
+    if not rows:
+        rows = [("Kilder", "ingen leverer lige nu")]
+
+    load_kw = balance.load.kw
+    rows += [
+        ("Husets behov", _fmt(load_kw, "kW", 2)),
+        (
+            "Frem / retur",
+            f"{_fmt(balance.load.flow, '°C', 1)} / {_fmt(balance.load.ret, '°C', 1)}"
+            f" · {_fmt(balance.load.litres_per_hour, 'l/h', 0)}",
+        ),
+        ("Netto", _fmt(balance.net_kw, "kW", 2)),
+    ]
+
+    if buffer is not None:
+        left = balance.hours_left(buffer.stored_kwh)
+        full = balance.hours_to_full(buffer.headroom_kwh)
+        if left is not None:
+            rows.append(("Lageret rækker", f"{left:.1f} timer"))
+        elif full is not None:
+            rows.append(("Fuldt om", f"{full:.1f} timer"))
+        else:
+            rows.append(("Vandret", "hverken fyldes eller tømmes nævneværdigt"))
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    free = balance.free_kw
+    note = ""
+    if free > 0.05:
+        note = (
+            f'<p class="legend">Heraf {free:.2f} kW fra solvarmen, som er gratis. '
+            "En opladning med varmepumpen oven i den fortrænger fri varme med købt.</p>"
+        )
+    return f'<h2>Effektbalance</h2><div class="card"><dl>{dl}</dl></div>{note}'
+
+
+def _vessel_section(status: dict[str, Any]) -> str:
+    """Varmtvandsbeholder og spa: egne lagre, samme varmekilder."""
+    rows = [
+        ("VVB top", _fmt(status.get("vvb_top"), "°C", 1)),
+        ("VVB bund", _fmt(status.get("vvb_bottom"), "°C", 1)),
+        ("Spa", _fmt(status.get("spa_temp"), "°C", 1)),
+        ("Spa mål", _fmt(status.get("spa_target"), "°C", 1)),
+    ]
+    heating = status.get("spa_heating")
+    if heating is not None:
+        rows.append(("Spa varmer", "ja" if heating else "nej"))
+
+    if all(value == "—" for _, value in rows):
+        return ""
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    return (
+        f'<h2>Brugsvand og spa</h2><div class="card"><dl>{dl}</dl></div>'
+        '<p class="legend">Egne lagre ved siden af buffertankene — de deler '
+        "varmekilder, men ikke energi, og lægges derfor ikke sammen med dem. "
+        "Det er dem der kalder med 56 °C.</p>"
+    )
 
 
 def _fmt(value: Any, unit: str = "", digits: int = 2) -> str:

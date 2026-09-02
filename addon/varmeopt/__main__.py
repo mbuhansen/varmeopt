@@ -21,6 +21,7 @@ import aiohttp
 from . import VERSION, selfupdate
 from .cop import CopTable
 from .curve import HeatCurve
+from .demand import Balance, Load
 from .ha import HaError, HomeAssistant, State
 from .migrate import COP_TABLE_FILE, CURVE_FILE, load_cop_table, load_heat_curve
 from .nodered import NodeRed
@@ -33,6 +34,7 @@ log = logging.getLogger("varmeopt")
 
 SENSOR = "sensor.varmeopt_cop"
 SENSOR_TANK = "sensor.varmeopt_lager"
+SENSOR_DEMAND = "sensor.varmeopt_behov"
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
@@ -78,6 +80,8 @@ class Varmeopt:
                 flow_temp = _as_number(context.get("flowTemp"))
 
         buffer = await self._read_tank(ha)
+        balance = await self._read_balance(ha, measured_cop)
+        vessels = await self._read_vessels(ha)
 
         # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
         # med et fast setpunkt. Den slags målinger siger intet om kurven, og
@@ -107,6 +111,8 @@ class Varmeopt:
             measured_cop=measured_cop,
             lookup=lookup,
             tank=buffer,
+            balance=balance,
+            **vessels,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
             hp_return=hp_return,
@@ -150,6 +156,29 @@ class Varmeopt:
                 _tank_summary(buffer),
             )
             await self._publish_tank(ha, buffer)
+
+        if balance is not None and ha is not None:
+            load_kw = balance.load.kw
+            if load_kw is not None or balance.sources:
+                horizon = ""
+                if buffer is not None:
+                    left = balance.hours_left(buffer.stored_kwh)
+                    full = balance.hours_to_full(buffer.headroom_kwh)
+                    if left is not None:
+                        horizon = f" | raekker {left:.1f} t"
+                    elif full is not None:
+                        horizon = f" | fuld om {full:.1f} t"
+                net = balance.net_kw
+                log.info(
+                    "behov %s | ind %.2f kW (%s) | netto %s%s",
+                    f"{load_kw:.2f} kW" if load_kw is not None else "-",
+                    balance.input_kw,
+                    ", ".join(f"{k} {v:.2f}" for k, v in balance.sources.items())
+                    or "ingen kilder",
+                    f"{net:+.2f} kW" if net is not None else "-",
+                    horizon,
+                )
+            await self._publish_demand(ha, balance, buffer)
 
         self._maybe_save()
 
@@ -208,6 +237,7 @@ class Varmeopt:
             tuple(tanks),
             self.options.tank_reference_temp,
             self.options.tank_max_temp,
+            self.options.tank_peak_temp,
         )
         return buffer if buffer.covered else None
 
@@ -225,6 +255,15 @@ class Varmeopt:
             "foelere": buffer.sensor_count,
             "reference_temp": buffer.reference,
             "loft_temp": buffer.ceiling,
+            "plads_i_alt_kwh": round(buffer.peak_headroom_kwh, 2),
+            "over_vp_loft": buffer.above_heatpump_ceiling,
+            # Beholderne ved siden af: de deler varmekilder med tankene, men
+            # ikke energi, og de må derfor ikke lægges sammen med dem.
+            "vvb_top": self.status.get("vvb_top"),
+            "vvb_bund": self.status.get("vvb_bottom"),
+            "spa_temp": self.status.get("spa_temp"),
+            "spa_maal": self.status.get("spa_target"),
+            "spa_varmer": self.status.get("spa_heating"),
         }
         for tank in buffer.measured:
             key = tank.name.lower()
@@ -279,6 +318,108 @@ class Varmeopt:
     async def _number(cls, ha: HomeAssistant, entity_id: str) -> float | None:
         state = await cls._state(ha, entity_id)
         return state.as_float() if state else None
+
+    @classmethod
+    async def _power_kw(cls, ha: HomeAssistant, entity_id: str) -> float | None:
+        """Effekt i kW, uanset om føleren melder watt eller kilowatt.
+
+        Enheden læses af entitetens egen attribut frem for at antages: ACthor
+        melder watt, solvarmen kilowatt, og en faktor tusind det forkerte sted
+        ville se ud som et anlæg der yder vanvittigt.
+        """
+        state = await cls._state(ha, entity_id)
+        if state is None:
+            return None
+        value = state.as_float()
+        if value is None:
+            return None
+        unit = str(state.attributes.get("unit_of_measurement", "")).strip().lower()
+        return value / 1000 if unit in ("w", "watt") else value
+
+    @classmethod
+    async def _binary(cls, ha: HomeAssistant, entity_id: str) -> bool | None:
+        state = await cls._state(ha, entity_id)
+        return None if state is None else state.state.strip().lower() == "on"
+
+    async def _read_vessels(self, ha: HomeAssistant | None) -> dict[str, Any]:
+        """Varmtvandsbeholder og spa — de to lagre ved siden af buffertankene.
+
+        Begge kalder med samme setpunkt som brugsvandet, så deres tilstand
+        forklarer hvorfor varmekurven pludselig springer til 56 °C.
+        """
+        if ha is None:
+            return {}
+        return {
+            "vvb_top": await self._number(ha, self.options.entity_vvb_top),
+            "vvb_bottom": await self._number(ha, self.options.entity_vvb_bottom),
+            "spa_temp": await self._number(ha, self.options.entity_spa_temp),
+            "spa_target": await self._number(ha, self.options.entity_spa_target),
+            "spa_heating": await self._binary(ha, self.options.entity_spa_heater),
+        }
+
+    # -------------------------------------------------------------- balance
+
+    async def _read_balance(
+        self, ha: HomeAssistant | None, measured_cop: float | None
+    ) -> Balance | None:
+        """Hvad huset trækker ud, og hvad de fire kilder lader ind."""
+        if ha is None:
+            return None
+
+        load = Load(
+            flow=await self._number(ha, self.options.entity_flow_measured),
+            ret=await self._number(ha, self.options.entity_ch_return),
+            litres_per_hour=await self._number(ha, self.options.entity_ch_flow_rate),
+        )
+
+        # Varmepumpens ydelse regnes af dens elforbrug og den målte COP.
+        # Tanktemperaturen kan ikke bruges: solvarmen lader de samme tanke, og
+        # så ville solen blive krediteret varmepumpen.
+        hp_power = await self._power_kw(ha, self.options.entity_hp_power)
+        heatpump_kw = (
+            hp_power * measured_cop
+            if hp_power is not None and measured_cop is not None and measured_cop > 0
+            else None
+        )
+
+        return Balance(
+            load=load,
+            solar_kw=await self._power_kw(ha, self.options.entity_solar_power),
+            element_kw=await self._power_kw(ha, self.options.entity_element_power),
+            boiler_kw=await self._power_kw(ha, self.options.entity_boiler_power),
+            heatpump_kw=heatpump_kw,
+        )
+
+    async def _publish_demand(
+        self, ha: HomeAssistant, balance: Balance, buffer: Buffer | None
+    ) -> None:
+        if balance.load.kw is None:
+            return
+
+        stored = buffer.stored_kwh if buffer is not None else None
+        headroom = buffer.headroom_kwh if buffer is not None else None
+
+        attributes: dict[str, Any] = {
+            "friendly_name": "Varmeopt varmebehov",
+            "unit_of_measurement": "kW",
+            "device_class": "power",
+            "state_class": "measurement",
+            "icon": "mdi:radiator",
+            "frem": balance.load.flow,
+            "retur": balance.load.ret,
+            "delta_t": _round(balance.load.delta, 1),
+            "flow_lh": balance.load.litres_per_hour,
+            "cirkulerer": balance.load.circulating,
+            "ind_kw": round(balance.input_kw, 2),
+            "gratis_kw": round(balance.free_kw, 2),
+            "netto_kw": _round(balance.net_kw, 2),
+            "timer_tilbage": _round(balance.hours_left(stored), 1),
+            "timer_til_fuld": _round(balance.hours_to_full(headroom), 1),
+        }
+        for name, kilowatt in balance.sources.items():
+            attributes[f"kilde_{name}"] = round(kilowatt, 2)
+
+        await ha.set_state(SENSOR_DEMAND, round(balance.load.kw, 2), attributes)
 
     # ------------------------------------------------------------------- lager
 

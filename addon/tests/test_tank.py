@@ -95,6 +95,34 @@ class BufferTest(unittest.TestCase):
         self.assertAlmostEqual(full.charge_percent, 100.0, places=6)
         self.assertAlmostEqual(full.headroom_kwh, 0.0, places=6)
 
+    def test_room_remains_above_what_the_heat_pump_can_reach(self):
+        # Solvarme og ACthor kan begge presse tankene til 90 °C. Er de allerede
+        # over varmepumpens loft, er der nul plads *til varmepumpen* — men de
+        # to andre har stadig et sted at gøre af varmen.
+        hot = Buffer(
+            tanks=(tank("A", top=65.0, mid=65.0, bottom=65.0),),
+            reference=30.0,
+            ceiling=60.0,
+            peak_ceiling=90.0,
+        )
+
+        self.assertEqual(hot.headroom_kwh, 0.0)
+        self.assertGreater(hot.peak_headroom_kwh, 0.0)
+        self.assertTrue(hot.above_heatpump_ceiling)
+
+    def test_a_cool_buffer_is_not_above_the_heat_pump_ceiling(self):
+        self.assertFalse(self.buffer.above_heatpump_ceiling)
+        self.assertGreater(self.buffer.peak_headroom_kwh, self.buffer.headroom_kwh)
+
+    def test_an_unmeasured_buffer_is_not_declared_full(self):
+        blind = Buffer(
+            tanks=(tank("A", top=None, mid=None, bottom=None),),
+            reference=30.0,
+            ceiling=60.0,
+        )
+
+        self.assertFalse(blind.above_heatpump_ceiling)
+
     def test_imbalance_is_the_gap_between_tank_means(self):
         # A har middel 45, B har middel 40.
         self.assertAlmostEqual(self.buffer.imbalance, 5.0, places=6)

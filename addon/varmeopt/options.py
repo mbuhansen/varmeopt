@@ -21,14 +21,47 @@ _DEFAULTS: dict[str, object] = {
     # UVR'ens beregnede setpunkt, ikke en måling: det er kurven anlægget
     # styrer efter, og den akse COP-tabellen er indekseret på.
     "entity_flow_temp": "sensor.node_1_analog_logging_13",
-    # Det faktisk målte fremløb på centralvarmen. Forskellen til setpunktet
-    # siger om anlægget kan følge med.
+    # Centralvarmens fremløb ud mod huset. Den sidder *efter* tankene og måler
+    # altså forbrugssiden, ikke hvad varmepumpen laver — og den er derfor ikke
+    # en akse COP kan indekseres på.
+    #
+    # Afvigelsen fra setpunktet er heller ikke en diagnose så længe
+    # vejrkompenseringsventilen efter tankene er sat ud af spil: så *er*
+    # fremløbet tanktoppen, og forskellen er ventilens manglende blanding,
+    # ikke et anlæg der ikke kan følge med.
     "entity_flow_measured": "sensor.node_1_dl_bus_1",
     # Varmepumpens egne følere. BT12 er kondensatorafgangen — den fysisk
     # rigtige temperatur for COP, målt før hydraulikken blander noget — og
     # BT12 minus BT3 er løftet over kondensatoren, altså hvor hårdt den kører.
     "entity_hp_flow": "sensor.nibe_eb101_ep14_bt12_condensor_out",
     "entity_hp_return": "sensor.nibe_eb101_ep14_bt3_return_temp",
+    # Varmepumpens elforbrug. Ganget med den målte COP giver det dens
+    # varmeydelse, uafhængigt af hvad tankene i øvrigt får fra solen.
+    "entity_hp_power": "sensor.node_1_input_15",
+    # Husets forbrug: retur og flow hører til fremløbet ovenfor, alle tre
+    # efter tankene.
+    "entity_ch_return": "sensor.node_1_dl_bus_2",
+    "entity_ch_flow_rate": "sensor.node_1_dl_bus_3",
+    # De øvrige kilder ind i lageret. Solvarmen er gratis varme, og den skal
+    # kunne skelnes fra den købte.
+    #
+    # Bemærk at solvarmeproduktionen er *modelleret*, ikke målt: en flowkurve
+    # i UVR'en der følger pumpens PWM-signal og et analogt flow. Der er ingen
+    # digital flowmåler, så tallet er mindre sikkert end husets forbrug.
+    "entity_solar_power": "sensor.solvarme_produktion",
+    "entity_element_power": "sensor.my_pv_ac_thor_9s_effekt",
+    "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
+    # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
+    "entity_vvb_top": "sensor.node_1_input_7",
+    "entity_vvb_bottom": "sensor.node_1_input_8",
+    # Spabadet kalder med samme setpunkt som brugsvandet, så dets tilstand
+    # forklarer hvorfor varmekurven pludselig springer til 56 °C.
+    "entity_spa_temp": "sensor.tub_temperature",
+    "entity_spa_target": "sensor.target_tub_temp",
+    "entity_spa_heater": "binary_sensor.heater",
+    # Beholderens rumfang kendes ikke. Nul betyder "regn ikke energi på den" —
+    # to temperaturer er mere ærligt end en kWh-værdi bygget på et gæt.
+    "vvb_liters": 0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     "entity_outdoor_temp": "",
     # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
@@ -50,6 +83,10 @@ _DEFAULTS: dict[str, object] = {
     # på godt 31 °C fremløb. Loftet er hvad varmepumpen realistisk når.
     "tank_reference_temp": 30,
     "tank_max_temp": 60,
+    # Solvarmen og ACthors elpatroner kan begge naa 90 grader, langt over
+    # varmepumpens raekkevidde. Det er anlaeggets fysiske top, ikke
+    # varmepumpens.
+    "tank_peak_temp": 90,
     # Hent nyeste kode fra master ved opstart. Slaaet fra som udgangspunkt:
     # det koerer kode fra internettet uden et menneske imellem.
     "auto_update": False,
@@ -72,6 +109,18 @@ class Options:
     entity_flow_measured: str
     entity_hp_flow: str
     entity_hp_return: str
+    entity_hp_power: str
+    entity_ch_return: str
+    entity_ch_flow_rate: str
+    entity_solar_power: str
+    entity_element_power: str
+    entity_boiler_power: str
+    entity_vvb_top: str
+    entity_vvb_bottom: str
+    entity_spa_temp: str
+    entity_spa_target: str
+    entity_spa_heater: str
+    vvb_liters: int
     entity_cop_measured: str
     entity_outdoor_temp: str
     dhw_setpoint: float
@@ -87,6 +136,7 @@ class Options:
     tank_liters: int
     tank_reference_temp: float
     tank_max_temp: float
+    tank_peak_temp: float
 
     @property
     def tanks(self) -> tuple[tuple[str, str, str, str, str], ...]:
@@ -133,8 +183,10 @@ class Options:
             auto_update=_as_bool(values["auto_update"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),
+            vvb_liters=int(values["vvb_liters"]),
             tank_reference_temp=float(values["tank_reference_temp"]),
             tank_max_temp=float(values["tank_max_temp"]),
+            tank_peak_temp=float(values["tank_peak_temp"]),
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.
             **{k: str(values[k]) for k in _DEFAULTS if k.startswith("entity_")},

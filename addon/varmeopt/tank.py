@@ -96,6 +96,13 @@ class Buffer:
     tanks: tuple[Tank, ...]
     reference: float
     ceiling: float
+    # Solvarmen og ACthors elpatroner kan begge presse tankene helt op til
+    # 90 °C, langt over hvad varmepumpen kan levere. De to lofter svarer på
+    # hver sit spørgsmål: hvor meget *varmepumpen* kan nå at tilføre, og hvor
+    # meget der overhovedet er plads til. Det første styrer en blokplan; det
+    # andet siger om der stadig er et sted at gøre af gratis eller overskydende
+    # varme.
+    peak_ceiling: float = 90.0
 
     @property
     def measured(self) -> tuple[Tank, ...]:
@@ -115,7 +122,23 @@ class Buffer:
 
     @property
     def headroom_kwh(self) -> float:
+        """Hvor meget varmepumpen kan nå at tilføre, før den løber tør for løft."""
         return sum(t.headroom_kwh(self.ceiling) for t in self.measured)
+
+    @property
+    def peak_headroom_kwh(self) -> float:
+        """Hvor meget der fysisk er plads til — det solvarme og ACthor kan nå."""
+        return sum(t.headroom_kwh(self.peak_ceiling) for t in self.measured)
+
+    @property
+    def above_heatpump_ceiling(self) -> bool:
+        """Er lageret allerede varmere end varmepumpen kan levere?
+
+        Sker det, har solvarmen eller elpatronerne fyldt tankene forbi
+        varmepumpens rækkevidde, og en blokopladning ville ikke bare være
+        unødvendig — den ville være umulig.
+        """
+        return self.covered and self.headroom_kwh <= 0.01
 
     @property
     def charge_percent(self) -> float | None:

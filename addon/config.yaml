@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.4.1"
+version: "0.5.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -22,6 +22,18 @@ options:
   entity_flow_measured: sensor.node_1_dl_bus_1
   entity_hp_flow: sensor.nibe_eb101_ep14_bt12_condensor_out
   entity_hp_return: sensor.nibe_eb101_ep14_bt3_return_temp
+  entity_hp_power: sensor.node_1_input_15
+  entity_ch_return: sensor.node_1_dl_bus_2
+  entity_ch_flow_rate: sensor.node_1_dl_bus_3
+  entity_solar_power: sensor.solvarme_produktion
+  entity_element_power: sensor.my_pv_ac_thor_9s_effekt
+  entity_boiler_power: sensor.nbe_boiler_49812_power_kw
+  entity_vvb_top: sensor.node_1_input_7
+  entity_vvb_bottom: sensor.node_1_input_8
+  entity_spa_temp: sensor.tub_temperature
+  entity_spa_target: sensor.target_tub_temp
+  entity_spa_heater: binary_sensor.heater
+  vvb_liters: 0
   entity_cop_measured: sensor.node_1_analog_logging_12
   entity_outdoor_temp: ""
   dhw_setpoint: 56
@@ -36,6 +48,7 @@ options:
   tank_liters: 1000
   tank_reference_temp: 30
   tank_max_temp: 60
+  tank_peak_temp: 90
   auto_update: false
 schema:
   log_level: list(debug|info|warning|error)
@@ -45,6 +58,18 @@ schema:
   entity_flow_measured: str?
   entity_hp_flow: str?
   entity_hp_return: str?
+  entity_hp_power: str?
+  entity_ch_return: str?
+  entity_ch_flow_rate: str?
+  entity_solar_power: str?
+  entity_element_power: str?
+  entity_boiler_power: str?
+  entity_vvb_top: str?
+  entity_vvb_bottom: str?
+  entity_spa_temp: str?
+  entity_spa_target: str?
+  entity_spa_heater: str?
+  vvb_liters: int(0,3000)
   entity_cop_measured: str
   entity_outdoor_temp: str?
   dhw_setpoint: float(20,90)
@@ -59,4 +84,5 @@ schema:
   tank_liters: int(100,20000)
   tank_reference_temp: float(0,80)
   tank_max_temp: float(20,95)
+  tank_peak_temp: float(20,120)
   auto_update: bool
