@@ -79,14 +79,17 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 1.15, places=9)
         self.assertIn("frit", price.reason)
 
-    def test_energy_is_reserved_when_export_is_coming(self):
+    def test_energy_is_valued_against_a_coming_export(self):
         # Eksport om en time til 1,60 er mere vaerd end batteriets 1,00.
+        #
+        # Det er en vaerdisaettelse, ikke en beslutning: om energien faktisk
+        # bliver gemt, afgoeres af hvad den ellers skulle bruges til.
         p = plan(row(), row(), row(state="exp", export_rate=160), battery_average=1.0)
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.60 * 0.90, places=9)
-        self.assertIn("gemt til eksport", price.reason)
+        self.assertIn("vaerdisat mod eksport", price.reason)
 
     def test_a_cheap_charge_soon_frees_the_battery(self):
         p = plan(row(), row(state="chrg", import_rate=40), battery_average=1.0)

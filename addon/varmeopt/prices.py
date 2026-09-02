@@ -30,8 +30,15 @@ EXPORT_FLOOR = 0.80
 # det bliver alligevel fyldt op igen.
 CHARGE_SOON_MINUTES = 120
 
-# Er der planlagt eksport inden for det her, er batteriets energi reserveret.
+# Er der planlagt eksport inden for det her, vaerdisaettes batteriets energi
+# mod den eksport i stedet for mod sit eget gennemsnit.
 EXPORT_SOON_MINUTES = 180
+
+# Rabat paa den fremtidige eksportpris. Uden den ville en energi der lige
+# akkurat kunne saelges, altid slaa enhver anden anvendelse - og det er for
+# skarpt et snit til et tal der er et gaet om fremtiden. Samme vaerdi som
+# Node-RED bruger.
+EXPORT_DISCOUNT = 0.90
 
 SLOT_MINUTES = 30
 
@@ -233,15 +240,21 @@ class Plan:
         next_charge = self._next_where(lambda s: s.charging, after)
 
         # Venter der eksport snart, og bliver batteriet ikke fyldt inden, er
-        # energien reserveret til at blive solgt.
+        # energien mere vaerd end sit gennemsnit: den kan saelges.
+        #
+        # Bemaerk at det er en *vaerdisaettelse*, ikke en beslutning. Om
+        # energien faktisk bliver gemt, afgoeres af hvad den saa bruges til:
+        # kan varmepumpen lave varme til under pillefyrets pris af den, er
+        # det bedre at bruge den end at saelge den, og saa bliver den brugt.
         if next_export is not None and next_export.export_price is not None:
             soon = next_export.minutes_ahead - slot.minutes_ahead <= EXPORT_SOON_MINUTES
             no_charge_first = next_charge is None or next_charge.index > next_export.index
             worth_it = next_export.export_price > self.battery_average
             if soon and no_charge_first and worth_it:
+                minutes = next_export.minutes_ahead - slot.minutes_ahead
                 return Price(
-                    next_export.export_price * 0.90,
-                    f"batteri: gemt til eksport om {next_export.minutes_ahead - slot.minutes_ahead} min",
+                    next_export.export_price * EXPORT_DISCOUNT,
+                    f"batteri: vaerdisat mod eksport om {minutes} min",
                 )
 
         # Fyldes batteriet billigt snart, kan det bruges frit - det bliver
