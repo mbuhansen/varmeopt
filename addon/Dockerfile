@@ -3,12 +3,21 @@ FROM python:3.12-alpine
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# Til at hente kode fra GitHub over HTTPS.
+RUN apk add --no-cache ca-certificates
+
 WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY varmeopt ./varmeopt
+
+# /data/code staar foer /app, saa en hentet udgave vinder over den indbyggede.
+# Arbejdsmappen flyttes vaek fra /app, fordi "python -m" ellers saetter /app
+# forrest paa sys.path og saa ville den indbyggede kode altid vinde.
+WORKDIR /
+ENV PYTHONPATH=/data/code:/app
 
 # Supervisor sender add-on'ens version fra config.yaml ind som build-argument.
 # Ved at tage den den vej findes versionen kun ét sted, og loggen kan sige

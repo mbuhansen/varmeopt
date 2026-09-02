@@ -12,10 +12,11 @@ Alpine-container skal ikke slaebe rundt paa den afhaengighed.
 from __future__ import annotations
 
 import html
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
+from . import VERSION, selfupdate
 from .cop import CopTable
 
 PORT = 8099
@@ -82,6 +83,16 @@ code { font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;
         margin:10px 2px 0; font-size:12px; }
 .foot dt { color:var(--muted); }
 .foot dd { margin:0; font-variant-numeric:tabular-nums; }
+button { font:inherit; font-weight:600; padding:9px 16px; border-radius:8px;
+         border:1px solid var(--line); background:var(--accent); color:#fff;
+         cursor:pointer; }
+button:hover { filter:brightness(1.08); }
+button.plain { background:var(--card); color:var(--fg); }
+button:focus-visible, a:focus-visible { outline:2px solid var(--accent);
+         outline-offset:2px; }
+.actions { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0 16px; }
+.note { border-left:3px solid var(--accent); padding:8px 0 8px 14px;
+        margin:0 0 16px; }
 """
 
 _SOURCE_LABEL = {
@@ -103,6 +114,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
             ("now", "./", "Nu"),
             ("tank", "./tank", "Lager"),
             ("cop", "./cop", "COP-tabel"),
+            ("system", "./system", "System"),
         )
     )
     doc = (
@@ -138,10 +150,14 @@ class WebUI:
         status: Callable[[], dict[str, Any]],
         table: Callable[[], CopTable],
         port: int = PORT,
+        check: Callable[[], Awaitable[Any]] | None = None,
+        update: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
         self._status = status
         self._table = table
         self._port = port
+        self._check = check
+        self._update = update
         self._runner: web.AppRunner | None = None
 
     @property
@@ -153,6 +169,8 @@ class WebUI:
         app.router.add_get("/", self.now)
         app.router.add_get("/tank", self.tank)
         app.router.add_get("/cop", self.cop)
+        app.router.add_get("/system", self.system)
+        app.router.add_post("/system", self.system)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, "0.0.0.0", self._port)
@@ -271,6 +289,58 @@ class WebUI:
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
         )
         return _page("Lager", "tank", body)
+
+    async def system(self, request: web.Request) -> web.Response:
+        note = ""
+        if request.method == "POST":
+            note = (
+                await self._update()
+                if self._update is not None
+                else "Selvopdatering er ikke tilgængelig i denne udgave."
+            )
+
+        # GitHub spørges kun når der bliver bedt om det. Et opslag pr.
+        # sidevisning ville brænde den uautentificerede kvote på en time.
+        latest = "Ikke tjekket"
+        if request.query.get("check") and self._check is not None:
+            revision = await self._check()
+            if revision is None:
+                latest = "GitHub svarede ikke"
+            elif revision.sha == selfupdate.current():
+                latest = f"{revision.short} — du har den nyeste"
+            else:
+                latest = f"{revision.short} — {_esc(revision.message)}"
+
+        running = selfupdate.current()
+        rows = [
+            ("Add-on-version", _esc(VERSION)),
+            (
+                "Kører kode fra",
+                "master, hentet her" if selfupdate.running_downloaded() else "add-on-imaget",
+            ),
+            ("Hentet udgave", _esc(running[:8]) if running else "ingen"),
+            ("Nyeste på master", latest),
+        ]
+        dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+
+        body = (
+            "<h1>System</h1>"
+            '<p class="sub">Hent nyeste kode direkte fra master uden at vente på '
+            "at add-on-butikken opdager et push.</p>"
+            + (f'<p class="note">{_esc(note)}</p>' if note else "")
+            + f'<div class="card"><dl>{dl}</dl></div>'
+            '<div class="actions">'
+            '<form method="get" action="./system">'
+            '<input type="hidden" name="check" value="1">'
+            '<button class="plain" type="submit">Tjek master</button></form>'
+            '<form method="post" action="./system">'
+            '<button type="submit">Hent nyeste og genstart</button></form>'
+            "</div>"
+            '<p class="legend">Henter kun Python-koden. Nye indstillinger, nye '
+            "pakker og ændringer i Dockerfilen hører til add-on-imaget og kræver "
+            "stadig en almindelig opdatering gennem butikken.</p>"
+        )
+        return _page("System", "system", body)
 
     async def cop(self, _request: web.Request) -> web.Response:
         table = self._table()

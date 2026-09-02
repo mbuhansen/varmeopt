@@ -62,6 +62,35 @@ røres ikke — der læses kun.
 | `entity_flow_temp` | `sensor.node_1_analog_logging_13` | Fremløbstemperatur |
 | `entity_cop_measured` | `sensor.node_1_analog_logging_12` | Målt COP fra UVR'en |
 | `entity_outdoor_temp` | *(tom)* | Udetemperatur. Er den tom, læses `udeTemp` fra Node-REDs flow-context, hvor MQTT-værdien fra Nibe lander i dag |
+| `entity_tank_a_*` / `entity_tank_b_*` | *(udfyldt)* | Tre dybdefølere pr. tank — `top`, `mid`, `bottom` — plus `outlet` på afgangsrøret. Rækkefølgen bærer betydning: lagdelingen kan ikke regnes uden at vide hvilken føler der sidder hvor |
+| `tank_liters` | 1000 | Samlet volumen, fordelt ligeligt på tankene |
+| `tank_reference_temp` | 30 | Under den er varmen ikke til nogen nytte — radiatorkredsen kører på godt 31 °C |
+| `tank_max_temp` | 60 | Loftet der regnes plads op til |
+| `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
+
+## Opdatering
+
+Supervisor er langsom til at opdage et push, og under udvikling er ventetiden
+den dyreste del af en rettelse. Fanen **System** i web-UI'et henter derfor
+Python-koden direkte fra master og starter add-on'en forfra — uden at
+Supervisor skal bygge et image.
+
+Koden lægges i `/data/code`, som står før `/app` på `PYTHONPATH`, så en hentet
+udgave vinder over den indbyggede. Siden viser hvilken af de to der kører.
+
+**Det dækker kun Python-koden.** Nye indstillinger i `config.yaml`, nye pakker
+i `requirements.txt` og ændringer i Dockerfilen hører til imaget og kræver
+stadig en almindelig opdatering gennem butikken.
+
+To sikkerhedsnet: den hentede kode oversættes før der skiftes til den, så en
+halv commit aldrig bliver det der starter, og der sættes et mærke før
+genstarten som først ryddes når web-UI'et er oppe. Findes mærket ved opstart,
+nåede sidste forsøg aldrig frem, og forrige udgave rulles tilbage automatisk —
+ellers ville en ImportError sende add-on'en i genstartsløkke.
+
+`auto_update` gør det samme ved hver opstart. Den er slået fra som
+udgangspunkt: det kører kode fra internettet uden et menneske imellem, og den
+der kan pushe til master, kan køre kode i containeren.
 
 ## Udvikling
 
@@ -89,6 +118,8 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | Fil | Ansvar |
 |-----|--------|
 | `cop.py` | COP-tabel, læring, 2D-interpolation. Ren, testet |
+| `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
+| `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
 | `store.py` | Atomisk JSON-lager i `/data` |
 | `nodered.py` | Read-only klient mod Node-REDs admin-API |
 | `migrate.py` | Engangsflytning af COP-tabellen |
@@ -96,6 +127,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `web.py` | Web-UI gennem ingress |
 | `__main__.py` | Hovedløkken |
 
-Kommende faser tilføjer `prices.py` (Predbats marginalpriser),
-`thermal.py` (tankenergi), `demand.py` (varmebehov), `planner.py`
-(blokplanlægning) og `guard.py` (sessionslås og sikkerhed).
+Kommende faser tilføjer `prices.py` (Predbats marginalpriser), `demand.py`
+(varmebehov), `planner.py` (blokplanlægning) og `guard.py` (sessionslås og
+sikkerhed). Tankenergien, der stod på listen som `thermal.py`, ligger nu i
+`tank.py`.

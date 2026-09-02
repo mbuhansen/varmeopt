@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.2.0"
+version: "0.3.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -32,6 +32,7 @@ options:
   tank_liters: 1000
   tank_reference_temp: 30
   tank_max_temp: 60
+  auto_update: false
 schema:
   log_level: list(debug|info|warning|error)
   cycle_seconds: int(30,600)
@@ -50,3 +51,4 @@ schema:
   tank_liters: int(100,20000)
   tank_reference_temp: float(0,80)
   tank_max_temp: float(20,95)
+  auto_update: bool

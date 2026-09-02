@@ -37,7 +37,17 @@ _DEFAULTS: dict[str, object] = {
     # på godt 31 °C fremløb. Loftet er hvad varmepumpen realistisk når.
     "tank_reference_temp": 30,
     "tank_max_temp": 60,
+    # Hent nyeste kode fra master ved opstart. Slaaet fra som udgangspunkt:
+    # det koerer kode fra internettet uden et menneske imellem.
+    "auto_update": False,
 }
+
+
+def _as_bool(value: object) -> bool:
+    """HA giver en rigtig bool; en miljoevariabel giver strengen "false"."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("1", "true", "yes", "on", "ja")
 
 
 @dataclass(frozen=True)
@@ -56,6 +66,7 @@ class Options:
     entity_tank_b_mid: str
     entity_tank_b_bottom: str
     entity_tank_b_outlet: str
+    auto_update: bool
     tank_liters: int
     tank_reference_temp: float
     tank_max_temp: float
@@ -102,6 +113,7 @@ class Options:
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
             nodered_url=str(values["nodered_url"]).rstrip("/"),
+            auto_update=_as_bool(values["auto_update"]),
             tank_liters=int(values["tank_liters"]),
             tank_reference_temp=float(values["tank_reference_temp"]),
             tank_max_temp=float(values["tank_max_temp"]),

@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
-import os
 import signal
 import sys
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from typing import Any
 
 import aiohttp
 
+from . import VERSION, selfupdate
 from .cop import CopTable
 from .ha import HaError, HomeAssistant, State
 from .migrate import COP_TABLE_FILE, load_cop_table
@@ -29,10 +29,6 @@ from .tank import Buffer, Tank
 from .web import WebUI
 
 log = logging.getLogger("varmeopt")
-
-# Sat af Dockerfilen ud fra Supervisors BUILD_VERSION. Uden for add-on'en
-# (lokal afprøvning) er den ikke sat.
-VERSION = os.environ.get("VARMEOPT_VERSION", "ukendt")
 
 SENSOR = "sensor.varmeopt_cop"
 SENSOR_TANK = "sensor.varmeopt_lager"
@@ -275,7 +271,15 @@ async def run() -> None:
     store = Store()
     app = Varmeopt(options, store)
 
+    if selfupdate.boot_failed():
+        # Sidste opstart naaede aldrig frem. Den hentede kode faar ikke
+        # lov at proeve igen.
+        log.error("forrige opstart fejlede - ruller den hentede kode tilbage")
+        selfupdate.rollback()
+        selfupdate.clear_boot()
+
     async with aiohttp.ClientSession() as session:
+        await _self_update_on_start(session, options)
         nodered = NodeRed(session, options.nodered_url)
 
         try:
@@ -290,9 +294,28 @@ async def run() -> None:
         app.status["note"] = note
         log.info(note)
 
-        web = WebUI(lambda: app.status, lambda: app.table)
+        loop = asyncio.get_running_loop()
+
+        async def update() -> str:
+            revision = await selfupdate.download(session)
+            if revision is None:
+                return "Kunne ikke hente koden. Se loggen for hvorfor."
+            # Svar foerst, genstart bagefter - ellers dor forbindelsen
+            # midt i, og brugeren ser en fejl i stedet for en kvittering.
+            selfupdate.mark_boot()
+            loop.call_later(1.0, selfupdate.restart)
+            return f"Hentet {revision.short} - {revision.message}. Genstarter ..."
+
+        web = WebUI(
+            lambda: app.status,
+            lambda: app.table,
+            check=lambda: selfupdate.latest(session),
+            update=update,
+        )
         await web.start()
         log.info("web-UI lytter paa port %d (ingress)", web.port)
+        # Naaede vi hertil, virker koden. Maerket kan ryddes.
+        selfupdate.clear_boot()
 
         stopping = asyncio.Event()
         loop = asyncio.get_running_loop()
@@ -315,6 +338,24 @@ async def run() -> None:
             log.info("stopper, gemmer COP-tabellen")
             app.save()
             await web.stop()
+
+
+async def _self_update_on_start(
+    session: aiohttp.ClientSession, options: Options
+) -> None:
+    """Hent nyeste master ved opstart, hvis brugeren har bedt om det."""
+    if not options.auto_update:
+        return
+    revision = await selfupdate.latest(session)
+    if revision is None or not revision.sha:
+        return
+    if revision.sha == selfupdate.current():
+        log.info("koden er nyeste paa master (%s)", revision.short)
+        return
+    log.info("ny kode paa master: %s - %s", revision.short, revision.message)
+    if await selfupdate.download(session) is not None:
+        selfupdate.mark_boot()
+        selfupdate.restart()
 
 
 def _round(value: float | None, digits: int) -> float | None:
