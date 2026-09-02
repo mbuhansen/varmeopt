@@ -137,6 +137,11 @@ class Varmeopt:
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
         )
+        projection = self.planner.project(
+            prices.get("plan"),
+            lookup.cop if lookup is not None else None,
+            target_minutes=decision.window_minutes,
+        )
 
         self.status.update(
             flow_temp=flow_temp,
@@ -149,6 +154,7 @@ class Varmeopt:
             **solar,
             **prices,
             decision=decision,
+            projection=projection,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
             hp_return=hp_return,

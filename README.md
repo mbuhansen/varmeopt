@@ -78,6 +78,13 @@ Hvad der virker nu:
 - Fører forskellen mellem de to tankes middeltemperatur med. To parallelle
   tanke bør lagdele ens; gør de ikke det, er det flowfordelingen der er skæv,
   ikke varmen.
+- **Plan-siden** viser fremskrivningen halvtime for halvtime — pris, varmepris,
+  hvilken kilde der vinder, og hvorfor — med prisbjælker så de dyre timer
+  springer i øjnene. «Nu» og «hertil» markerer den time planlæggeren regner
+  imod. Den er til at *se* på, ikke til at handle på: styringen spørger
+  planlæggeren igen hvert minut og bruger kun svaret for nu. Men uden
+  fremskrivningen kan man ikke se hvorfor den svarer som den gør — og så er
+  den umulig at stole på.
 - Web-UI gennem HA's ingress: aktuel COP med hele begrundelseskæden, et
   varmekort over den indlærte tabel hvor huller i dækningen er synlige, og en
   lagerside der tegner begge tanke lag for lag.

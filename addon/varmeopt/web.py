@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import html
 import math
+from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
@@ -95,12 +96,34 @@ button:focus-visible, a:focus-visible { outline:2px solid var(--accent);
 .actions { display:flex; gap:10px; flex-wrap:wrap; margin:4px 0 16px; }
 .note { border-left:3px solid var(--accent); padding:8px 0 8px 14px;
         margin:0 0 16px; }
+table.plan { width:100%; font-size:13px; }
+table.plan th, table.plan td { border:0; border-bottom:1px solid var(--line);
+        text-align:left; padding:6px 10px; }
+table.plan thead th { background:var(--card); color:var(--muted);
+        font-size:11px; text-transform:uppercase; letter-spacing:.06em; }
+table.plan tr.now { background:#8881; }
+table.plan td.clock { font-variant-numeric:tabular-nums; white-space:nowrap; }
+table.plan td.bar { position:relative; min-width:130px;
+        font-variant-numeric:tabular-nums; }
+table.plan td.bar span { position:absolute; left:10px; top:50%;
+        transform:translateY(-50%); height:16px; border-radius:3px;
+        opacity:.22; }
+table.plan td.bar b { position:relative; font-weight:600; }
+table.plan td.why { color:var(--muted); font-size:12px; }
+.tag { display:inline-block; margin-left:7px; padding:1px 6px;
+        border-radius:10px; font-size:10px; font-weight:600;
+        background:var(--fg); color:var(--bg); vertical-align:1px; }
+.tag.target { background:var(--accent); color:#fff; }
 """
 
 # Kurvens egen farve. Fast frem for currentColor, fordi linjen er det ene
 # element på siden der bærer betydning — valgt så den holder på både lys og
 # mørk bund.
 _CURVE_INK = "#4a90c2"
+
+# Kilderne har hver sin farve hele vejen gennem UI'et, saa en raekke
+# kan laeses paa farven alene.
+_SOURCE_INK = {"varmepumpe": "#1f7a4d", "pillefyr": "#b4530a"}
 
 _SOURCE_LABEL = {
     "exact": ("Indlært", "#1f7a4d"),
@@ -120,6 +143,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
         for key, href, label in (
             ("now", "./", "Nu"),
             ("tank", "./tank", "Lager"),
+            ("plan", "./plan", "Plan"),
             ("curve", "./curve", "Varmekurve"),
             ("cop", "./cop", "COP-tabel"),
             ("system", "./system", "System"),
@@ -179,6 +203,7 @@ class WebUI:
         app.router.add_get("/", self.now)
         app.router.add_get("/tank", self.tank)
         app.router.add_get("/cop", self.cop)
+        app.router.add_get("/plan", self.plan)
         app.router.add_get("/curve", self.curve)
         app.router.add_get("/system", self.system)
         app.router.add_post("/system", self.system)
@@ -311,6 +336,67 @@ class WebUI:
             + _vessel_section(status)
         )
         return _page("Lager", "tank", body)
+
+    async def plan(self, _request: web.Request) -> web.Response:
+        status = self._status()
+        rows = status.get("projection") or []
+        decision = status.get("decision")
+
+        if not rows:
+            return _page(
+                "Plan",
+                "plan",
+                "<h1>Plan</h1><p class='sub'>Ingen plan fra Predbat endnu. "
+                "Kildevalget staar stadig — det kraever ingen plan.</p>"
+                + (_price_section(status) if status.get("price_now") else ""),
+            )
+
+        top = max(r.electricity for r in rows) or 1.0
+        start = datetime.now().astimezone()
+
+        cells = []
+        for row in rows:
+            clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
+            width = max(2.0, 100 * row.electricity / top)
+            colour = _SOURCE_INK["varmepumpe" if row.source == "varmepumpe" else "pillefyr"]
+
+            mark = ""
+            if row.now:
+                mark = '<span class="tag">nu</span>'
+            elif row.target:
+                mark = '<span class="tag target">hertil</span>'
+
+            cells.append(
+                f'<tr class="{"now" if row.now else ""}">'
+                f"<td class=\"clock\">{clock}{mark}</td>"
+                f'<td class="bar"><span style="width:{width:.0f}%;'
+                f'background:{colour}"></span>'
+                f"<b>{row.electricity:.2f}</b></td>"
+                f"<td>{_fmt(row.heat_price, '', 2)}</td>"
+                f'<td style="color:{colour};font-weight:600">'
+                f"{_esc(row.source)}</td>"
+                f'<td class="why">{_esc(row.reason)}</td></tr>'
+            )
+
+        head = (
+            "<thead><tr><th>Tid</th><th>El kr/kWh</th><th>Varme kr/kWh</th>"
+            "<th>Kilde</th><th>Hvorfor</th></tr></thead>"
+        )
+        summary = _decision_banner(decision)
+        hours = rows[-1].minutes / 60
+
+        body = (
+            "<h1>Plan</h1>"
+            f'<p class="sub">{len(rows)} halvtimer frem, {hours:.0f} timer · '
+            "priserne er Predbats, COP fremad regnes på nuværende udetemperatur</p>"
+            f"{summary}"
+            f'<div class="scroll"><table class="plan">{head}'
+            f"<tbody>{''.join(cells)}</tbody></table></div>"
+            '<p class="legend">Bjælken viser elprisen i forhold til den dyreste '
+            "time i vinduet. «Hertil» markerer den time planlæggeren regner imod "
+            "når den vurderer om det betaler sig at lade op nu.</p>"
+        )
+        return _page("Plan", "plan", body)
 
     async def curve(self, _request: web.Request) -> web.Response:
         curve = self._curve() if self._curve is not None else None
@@ -534,6 +620,27 @@ class WebUI:
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
         )
         return _page("COP-tabel", "cop", body)
+
+
+def _decision_banner(decision: Any) -> str:
+    """Hvad den vil gøre, med det samme og med store bogstaver."""
+    if decision is None:
+        return ""
+    colour = _SOURCE_INK.get(decision.source, "#8a8a82")
+    extra = ""
+    if decision.charge and decision.charge_kwh is not None:
+        extra = (
+            f'<div class="sub" style="margin:6px 0 0">Lad {decision.charge_kwh:.1f} kWh '
+            f"op nu — {decision.saving_kr:.2f} kr at hente mod om "
+            f"{decision.window_minutes} min</div>"
+        )
+    else:
+        extra = '<div class="sub" style="margin:6px 0 0">Lader ikke op</div>'
+    return (
+        f'<div class="card"><div class="big" style="color:{colour}">'
+        f"{_esc(decision.source.upper())}</div>"
+        f'<div class="sub" style="margin:0">{_esc(decision.reason)}</div>{extra}</div>'
+    )
 
 
 def _price_section(status: dict[str, Any]) -> str:

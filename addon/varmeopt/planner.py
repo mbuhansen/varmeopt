@@ -55,6 +55,28 @@ class Decision:
         return "lad ikke op"
 
 
+@dataclass(frozen=True)
+class Projection:
+    """Én halvtime, set forfra. Til at vise, ikke til at handle på.
+
+    Forskellen er vigtig. Styringen spørger planlæggeren igen hvert minut og
+    handler kun på svaret for *nu* — et fastlåst skema ville forældes i samme
+    øjeblik en pris flyttede sig. Men uden en fremskrivning kan man ikke se
+    *hvorfor* den svarer som den gør, og så er den umulig at stole på.
+    """
+
+    minutes: int
+    electricity: float
+    reason: str
+    heat_price: float | None
+    source: str
+    target: bool = False
+
+    @property
+    def now(self) -> bool:
+        return self.minutes == 0
+
+
 def _finite(value: Any) -> bool:
     return (
         isinstance(value, (int, float))
@@ -191,6 +213,47 @@ class Planner:
                 f"mod om {best_when} min"
             ),
         )
+
+
+    # ------------------------------------------------------------ fremskrivning
+
+    def project(
+        self,
+        plan: Any,
+        cop_now: float | None,
+        cop_later: float | None = None,
+        target_minutes: int | None = None,
+    ) -> list[Projection]:
+        """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
+
+        COP fremad regnes på den nuværende udetemperatur, fordi vi ikke har en
+        vejrudsigt. Over nogle timer flytter prisen sig langt mere end COP'en,
+        så rangordenen mellem timerne holder — men de absolutte varmepriser
+        længst ude skal læses med det forbehold.
+        """
+        if plan is None:
+            return []
+
+        later_cop = cop_later if cop_later is not None else cop_now
+        rows: list[Projection] = []
+        for minutes in range(0, self.horizon_minutes + 1, SLOT_MINUTES):
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            cop = cop_now if minutes == 0 else later_cop
+            heat = self.heat_price(price.kr_per_kwh, cop)
+            source, _ = source_now(heat, self.pellet_price, self.hysteresis)
+            rows.append(
+                Projection(
+                    minutes=minutes,
+                    electricity=price.kr_per_kwh,
+                    reason=price.reason,
+                    heat_price=heat,
+                    source=source,
+                    target=target_minutes is not None and minutes == target_minutes,
+                )
+            )
+        return rows
 
 
 def _with(decision: Decision, **changes: Any) -> Decision:
