@@ -110,6 +110,7 @@ table.plan td.bar span { position:absolute; left:10px; top:50%;
         opacity:.22; }
 table.plan td.bar b { position:relative; font-weight:600; }
 table.plan td.why { color:var(--muted); font-size:12px; }
+table.plan td.raw { color:var(--muted); font-variant-numeric:tabular-nums; }
 .tag { display:inline-block; margin-left:7px; padding:1px 6px;
         border-radius:10px; font-size:10px; font-weight:600;
         background:var(--fg); color:var(--bg); vertical-align:1px; }
@@ -383,6 +384,8 @@ class WebUI:
                 f'<td class="bar"><span style="width:{width:.0f}%;'
                 f'background:{colour}"></span>'
                 f"<b>{row.electricity:.2f}</b></td>"
+                f"<td class=\"raw\">{_fmt(row.import_price, '', 2)}</td>"
+                f"<td class=\"raw\">{_fmt(row.export_price, '', 2)}</td>"
                 f"<td>{_fmt(row.heat_price, '', 2)}</td>"
                 f'<td style="color:{colour};font-weight:600">'
                 f"{_esc(row.source)}</td>"
@@ -390,8 +393,9 @@ class WebUI:
             )
 
         head = (
-            "<thead><tr><th>Tid</th><th>El kr/kWh</th><th>Varme kr/kWh</th>"
-            "<th>Kilde</th><th>Hvorfor</th></tr></thead>"
+            "<thead><tr><th>Tid</th><th>Marginal</th><th>Import</th>"
+            "<th>Eksport</th><th>Varme</th><th>Kilde</th><th>Hvorfor</th>"
+            "</tr></thead>"
         )
         summary = _decision_banner(decision)
         hours = rows[-1].minutes / 60
@@ -403,9 +407,7 @@ class WebUI:
             f"{summary}"
             f'<div class="scroll"><table class="plan">{head}'
             f"<tbody>{''.join(cells)}</tbody></table></div>"
-            '<p class="legend">Bjælken viser elprisen i forhold til den dyreste '
-            "time i vinduet. «Hertil» markerer den time planlæggeren regner imod "
-            "når den vurderer om det betaler sig at lade op nu.</p>"
+            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. Bjælken viser den i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod.</p>'
         )
         return _page("Plan", "plan", body)
 

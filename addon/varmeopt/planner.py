@@ -66,10 +66,15 @@ class Projection:
     """
 
     minutes: int
+    # Marginalprisen: den af raapriserne der faktisk gaelder i timen.
+    # Raapriserne foelger med, saa man kan se hvor den kommer fra i stedet
+    # for at skulle regne det ud af begrundelsen.
     electricity: float
     reason: str
-    heat_price: float | None
-    source: str
+    import_price: float | None = None
+    export_price: float | None = None
+    heat_price: float | None = None
+    source: str = "varmepumpe"
     target: bool = False
 
     @property
@@ -240,6 +245,7 @@ class Planner:
             price = plan.marginal(minutes)
             if price is None:
                 break
+            slot = plan.at(minutes)
             cop = cop_now if minutes == 0 else later_cop
             heat = self.heat_price(price.kr_per_kwh, cop)
             source, _ = source_now(heat, self.pellet_price, self.hysteresis)
@@ -248,6 +254,8 @@ class Planner:
                     minutes=minutes,
                     electricity=price.kr_per_kwh,
                     reason=price.reason,
+                    import_price=slot.import_price if slot else None,
+                    export_price=slot.export_price if slot else None,
                     heat_price=heat,
                     source=source,
                     target=target_minutes is not None and minutes == target_minutes,
