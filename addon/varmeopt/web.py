@@ -11,7 +11,9 @@ Alpine-container skal ikke slaebe rundt paa den afhaengighed.
 
 from __future__ import annotations
 
+import dataclasses
 import html
+import json
 import math
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
@@ -186,6 +188,8 @@ class WebUI:
         check: Callable[[], Awaitable[Any]] | None = None,
         update: Callable[[], Awaitable[str]] | None = None,
         curve: Callable[[], HeatCurve] | None = None,
+        journal: Any = None,
+        options: Any = None,
     ) -> None:
         self._status = status
         self._table = table
@@ -193,6 +197,8 @@ class WebUI:
         self._check = check
         self._update = update
         self._curve = curve
+        self._journal = journal
+        self._options = options
         self._runner: web.AppRunner | None = None
 
     @property
@@ -207,6 +213,7 @@ class WebUI:
         app.router.add_get("/plan", self.plan)
         app.router.add_get("/curve", self.curve)
         app.router.add_get("/system", self.system)
+        app.router.add_get("/debug.json", self.debug)
         app.router.add_post("/system", self.system)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -553,6 +560,40 @@ class WebUI:
         )
         return _page("Varmekurve", "curve", body)
 
+    async def debug(self, _request: web.Request) -> web.Response:
+        """Hele tilstanden som én fil, til at sende videre eller gemme.
+
+        Der er ingen hemmeligheder i den: indstillingerne rummer entity-id'er
+        og en LAN-adresse, mens tokens kommer fra miljøet og aldrig herind.
+        """
+        status = {k: _plain(v) for k, v in self._status().items()}
+        table = self._table()
+        payload: dict[str, Any] = {
+            "version": VERSION,
+            "hentet_kode": selfupdate.current(),
+            "tidspunkt": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "status": status,
+            "cop_tabel": table.to_raw(),
+            "cop_celler": table.cell_count,
+            "cop_maalinger": round(table.sample_count),
+        }
+        if self._curve is not None:
+            payload["varmekurve"] = self._curve().to_raw()
+        if self._options is not None:
+            payload["indstillinger"] = _plain(self._options)
+        if self._journal is not None:
+            payload["log"] = self._journal.dump()
+
+        stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M")
+        return web.Response(
+            text=json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            content_type="application/json",
+            charset="utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="varmeopt-{stamp}.json"'
+            },
+        )
+
     async def system(self, request: web.Request) -> web.Response:
         note = ""
         if request.method == "POST":
@@ -598,6 +639,9 @@ class WebUI:
             '<button class="plain" type="submit">Tjek master</button></form>'
             '<form method="post" action="./system">'
             '<button type="submit">Hent nyeste og genstart</button></form>'
+            '<form method="get" action="./debug.json">'
+            '<button class="plain" type="submit">Hent fejlsøgningsfil</button>'
+            '</form>'
             "</div>"
             '<p class="legend">Henter kun Python-koden. Nye indstillinger, nye '
             "pakker og ændringer i Dockerfilen hører til add-on-imaget og kræver "
@@ -649,6 +693,29 @@ class WebUI:
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
         )
         return _page("COP-tabel", "cop", body)
+
+
+def _plain(value: Any) -> Any:
+    """Gør vilkårlig tilstand til noget json kan skrive.
+
+    Dataklasser foldes ud, modeller har deres eget ``to_raw``, og alt andet
+    ender som tekst frem for at vælte hele filen. En fejlsøgningsfil der ikke
+    kan hentes fordi ét felt var mærkeligt, er værdiløs.
+    """
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {k: _plain(v) for k, v in dataclasses.asdict(value).items()}
+    if hasattr(value, "to_raw"):
+        try:
+            return value.to_raw()
+        except Exception:
+            return str(value)
+    if isinstance(value, dict):
+        return {str(k): _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_plain(v) for v in value]
+    return str(value)
 
 
 def _basis(reason: str) -> str:

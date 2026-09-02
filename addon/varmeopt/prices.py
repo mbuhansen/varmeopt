@@ -181,6 +181,24 @@ class Plan:
 
     # ------------------------------------------------------------------ opslag
 
+    def to_raw(self) -> dict[str, Any]:
+        """Planen som almindelige tal — til debug-filen."""
+        return {
+            "battery_average": self.battery_average,
+            "export_floor": self.export_floor,
+            "horizon_minutes": self.horizon_minutes,
+            "slots": [
+                {
+                    "minutes": s.minutes_ahead,
+                    "state": s.state,
+                    "import": s.import_price,
+                    "export": s.export_price,
+                    "soc": s.soc_percent,
+                }
+                for s in self.slots
+            ],
+        }
+
     def at(self, minutes_ahead: int = 0) -> Slot | None:
         index = max(0, minutes_ahead) // SLOT_MINUTES
         return self.slots[index] if index < len(self.slots) else None

@@ -24,6 +24,7 @@ from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
 from .demand import Balance, Load
 from .ha import HaError, HomeAssistant, State
+from .journal import install as install_journal
 from .migrate import (
     COP_TABLE_FILE,
     CURVE_FILE,
@@ -740,6 +741,9 @@ async def run() -> None:
         format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
         datefmt="%H:%M:%S",
     )
+    # Efter basicConfig, ikke før: rod-loggerens niveau filtrerer records
+    # inden håndtagene ser dem, og så ville journalen kun fange advarsler.
+    journal = install_journal()
     log.info("varmeopt %s starter", VERSION)
 
     store = Store()
@@ -800,6 +804,8 @@ async def run() -> None:
             check=lambda: selfupdate.latest(session),
             update=update,
             curve=lambda: app.curve,
+            journal=journal,
+            options=options,
         )
         await web.start()
         log.info("web-UI lytter paa port %d (ingress)", web.port)
