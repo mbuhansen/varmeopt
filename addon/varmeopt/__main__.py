@@ -33,6 +33,7 @@ from .migrate import (
 )
 from .nodered import NodeRed
 from .options import Options
+from .prices import Grid, Plan
 from .solar import DayTracker, SolarModel
 from .store import Store
 from .tank import Buffer, Tank
@@ -43,6 +44,7 @@ log = logging.getLogger("varmeopt")
 SENSOR = "sensor.varmeopt_cop"
 SENSOR_TANK = "sensor.varmeopt_lager"
 SENSOR_DEMAND = "sensor.varmeopt_behov"
+SENSOR_PRICE = "sensor.varmeopt_elpris"
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
@@ -79,15 +81,14 @@ class Varmeopt:
                 measured_cop = measured.as_float()
                 measured_stamp = measured.last_changed
 
-        # Udetemperaturen kommer i dag fra MQTT direkte ind i Node-REDs flow-
-        # context og findes ikke som HA-entitet. Indtil den gør, læser vi den
-        # samme værdi som Node-RED selv regner på.
-        if flow_temp is None or outdoor_temp is None:
-            context = await nodered.flow_context()
-            if outdoor_temp is None:
-                outdoor_temp = _as_number(context.get("udeTemp"))
-            if flow_temp is None:
-                flow_temp = _as_number(context.get("flowTemp"))
+        # Flow-contexten hentes hver cyklus. Udetemperaturen kommer fra MQTT
+        # direkte ind i Node-RED og findes ikke som HA-entitet, og batteriets
+        # gennemsnitspris er regnet af Node-RED — begge dele skal vi bruge.
+        context = await nodered.flow_context()
+        if outdoor_temp is None:
+            outdoor_temp = _as_number(context.get("udeTemp"))
+        if flow_temp is None:
+            flow_temp = _as_number(context.get("flowTemp"))
 
         buffer = await self._read_tank(ha)
         balance = await self._read_balance(ha, measured_cop)
@@ -116,6 +117,8 @@ class Varmeopt:
             lookup = None
             learn_note = "ignoreret: mangler temperaturdata"
 
+        prices = await self._read_prices(ha, context, lookup)
+
         self.status.update(
             flow_temp=flow_temp,
             outdoor_temp=outdoor_temp,
@@ -125,6 +128,7 @@ class Varmeopt:
             balance=balance,
             **vessels,
             **solar,
+            **prices,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
             hp_return=hp_return,
@@ -191,6 +195,19 @@ class Varmeopt:
                     horizon,
                 )
             await self._publish_demand(ha, balance, buffer)
+
+        if prices.get("price_now") is not None and ha is not None:
+            price = prices["price_now"]
+            heat = prices.get("heat_price")
+            log.info(
+                "el %.2f kr/kWh (%s) | varme %s mod pille %.2f -> %s",
+                price.kr_per_kwh,
+                price.reason,
+                f"{heat:.2f}" if heat is not None else "-",
+                prices["pellet_price"],
+                prices.get("decision") or "-",
+            )
+            await self._publish_price(ha, prices)
 
         self._maybe_save()
 
@@ -374,6 +391,88 @@ class Varmeopt:
             "spa_target": await self._number(ha, self.options.entity_spa_target),
             "spa_heating": await self._binary(ha, self.options.entity_spa_heater),
         }
+
+    # ---------------------------------------------------------------- pris
+
+    async def _read_prices(
+        self, ha: HomeAssistant | None, context: dict[str, Any], lookup: Any
+    ) -> dict[str, Any]:
+        """Marginalprisen nu og fremad, og hvad varmen dermed koster.
+
+        Det er her add-on'en for foerste gang regner den *samme* beslutning som
+        Node-RED - men paa den rettede COP. Den styrer stadig intet; forskellen
+        mellem de to svar er praecis det fase 1 skal vurderes paa.
+        """
+        if ha is None:
+            return {}
+
+        state = await self._state(ha, self.options.entity_predbat_plan)
+        if state is None:
+            return {}
+
+        battery_average = _as_number(context.get("battery_avg_price")) or 0.0
+        plan = Plan.from_predbat(state.attributes, battery_average=battery_average)
+        if not len(plan):
+            log.warning(
+                "kunne ikke laese Predbats plan fra %s", self.options.entity_predbat_plan
+            )
+            return {}
+
+        grid = Grid(
+            battery_power=await self._number(ha, self.options.entity_battery_power) or 0.0,
+            grid_power=await self._number(ha, self.options.entity_grid_power) or 0.0,
+        )
+        now = plan.marginal(0, grid=grid)
+        if now is None:
+            return {}
+
+        pellet = self.options.pellet_kwh_price
+        heat_price = decision = None
+        if lookup is not None and lookup.cop > 0:
+            heat_price = now.kr_per_kwh / lookup.cop
+            gap = heat_price - pellet
+            hysteresis = self.options.source_hysteresis
+            # Ved uafgjort vinder varmepumpen, som Node-RED ogsaa goer.
+            decision = "pillefyr" if gap > hysteresis else "varmepumpe"
+
+        return {
+            "plan": plan,
+            "price_now": now,
+            "grid": grid,
+            "heat_price": heat_price,
+            "pellet_price": pellet,
+            "decision": decision,
+        }
+
+    async def _publish_price(self, ha: HomeAssistant, prices: dict[str, Any]) -> None:
+        price = prices["price_now"]
+        plan: Plan = prices["plan"]
+
+        attributes: dict[str, Any] = {
+            "friendly_name": "Varmeopt elpris",
+            "unit_of_measurement": "kr/kWh",
+            "state_class": "measurement",
+            "icon": "mdi:cash-clock",
+            "begrundelse": price.reason,
+            "vp_varmepris": _round(prices.get("heat_price"), 3),
+            "pille_varmepris": round(prices["pellet_price"], 3),
+            "beslutning": prices.get("decision"),
+            "horisont_timer": round(plan.horizon_minutes / 60, 1),
+        }
+
+        for hours in (2, 4, 6):
+            ahead = plan.marginal(hours * 60)
+            if ahead is not None:
+                attributes[f"om_{hours}t"] = round(ahead.kr_per_kwh, 3)
+                attributes[f"om_{hours}t_hvorfor"] = ahead.reason
+
+        window = plan.cheapest_window(int(self.options.hp_min_runtime_minutes))
+        if window is not None:
+            start, average = window
+            attributes["billigste_vindue_om_min"] = start
+            attributes["billigste_vindue_pris"] = round(average, 3)
+
+        await ha.set_state(SENSOR_PRICE, round(price.kr_per_kwh, 3), attributes)
 
     # ------------------------------------------------------------- solvarme
 

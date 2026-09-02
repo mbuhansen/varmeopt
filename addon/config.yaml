@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.6.1"
+version: "0.7.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -28,6 +28,9 @@ options:
   entity_solar_power: sensor.solvarme_produktion
   entity_element_power: sensor.my_pv_ac_thor_9s_effekt
   entity_boiler_power: sensor.nbe_boiler_49812_power_kw
+  entity_predbat_plan: predbat.plan_html
+  entity_battery_power: sensor.hostname_scb_5313dd_battery_power
+  entity_grid_power: sensor.hostname_scb_5313dd_grid_power
   entity_solar_today: sensor.solvarme_produktion_idag
   entity_solcast_remaining: sensor.solcast_pv_forecast_forecast_remaining_today
   entity_solcast_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
@@ -64,6 +67,10 @@ options:
   tank_reference_temp: 30
   tank_max_temp: 60
   tank_peak_temp: 90
+  pellet_price_per_kg: 2.88
+  pellet_kwh_per_kg: 4.8
+  pellet_efficiency: 0.85
+  source_hysteresis: 0.05
   auto_update: false
 schema:
   log_level: list(debug|info|warning|error)
@@ -79,6 +86,9 @@ schema:
   entity_solar_power: str?
   entity_element_power: str?
   entity_boiler_power: str?
+  entity_predbat_plan: str?
+  entity_battery_power: str?
+  entity_grid_power: str?
   entity_solar_today: str?
   entity_solcast_remaining: str?
   entity_solcast_tomorrow: str?
@@ -115,4 +125,8 @@ schema:
   tank_reference_temp: float(0,80)
   tank_max_temp: float(20,95)
   tank_peak_temp: float(20,120)
+  pellet_price_per_kg: float(0,100)
+  pellet_kwh_per_kg: float(1,20)
+  pellet_efficiency: float(0.1,1)
+  source_hysteresis: float(0,5)
   auto_update: bool

@@ -147,6 +147,78 @@ class CycleTest(unittest.TestCase):
         self.assertIsNone(self.app.status["tank"])
         self.assertNotIn("sensor.varmeopt_lager", dict(self.ha.published))
 
+    def test_the_price_and_the_source_decision_are_published(self):
+        # Hele kaeden: Predbats plan -> marginalpris -> varmepris via COP ->
+        # valg mod pillefyret. Det er den beslutning Node-RED traeffer i dag,
+        # regnet paa den rettede COP.
+        o = self.app.options
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {
+                "raw": {
+                    "rows": [
+                        {"state": "holdchrg", "import_rate": 180, "export_rate": 60},
+                        {"state": "", "import_rate": 40, "export_rate": 55},
+                    ]
+                }
+            },
+            "plan-1",
+        )
+        self.cycle()
+
+        published = dict(self.ha.published)
+        self.assertIn("sensor.varmeopt_elpris", published)
+        # Batteriet er bundet, saa varmepumpen koerer paa nettet: 1,80 kr.
+        self.assertAlmostEqual(published["sensor.varmeopt_elpris"], 1.80, places=3)
+
+        status = self.app.status
+        self.assertEqual(status["price_now"].reason, "net: batteriet er bundet")
+        # 1,80 delt med den lærte COP mod pillefyrets 0,706.
+        self.assertIsNotNone(status["heat_price"])
+        self.assertIn(status["decision"], ("varmepumpe", "pillefyr"))
+
+    def test_a_missing_predbat_plan_is_not_fatal(self):
+        # Predbat kan vaere nede eller endnu ikke have lagt en plan. Cyklussen
+        # skal koere videre - COP-laeringen afhaenger ikke af priser.
+        self.cycle()
+
+        self.assertNotIn("sensor.varmeopt_elpris", dict(self.ha.published))
+        self.assertIsNone(self.app.status.get("price_now"))
+
+    def test_battery_average_comes_from_nodered(self):
+        o = self.app.options
+        self.nodered = FakeNodeRed({"udeTemp": 17.2, "battery_avg_price": 1.35})
+        # Batteriet aflader maalbart - ellers staar anlaegget i balance, og saa
+        # er det den billigste af net og batteri der gaelder, ikke batteriet.
+        self.ha._states[o.entity_battery_power] = State(o.entity_battery_power, "3000", {}, "b")
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {"raw": {"rows": [{"state": "", "import_rate": 300, "export_rate": 50}]}},
+            "plan-1",
+        )
+        self.cycle()
+
+        self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 1.35, places=3)
+        self.assertIn("batteri", self.app.status["price_now"].reason)
+
+    def test_a_balanced_plant_takes_the_cheaper_of_grid_and_battery(self):
+        # Ingen maalbar stroem nogen vej: solen daekker. Saa er svaret den
+        # billigste af de to muligheder.
+        o = self.app.options
+        self.nodered = FakeNodeRed({"udeTemp": 17.2, "battery_avg_price": 1.35})
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {"raw": {"rows": [{"state": "", "import_rate": 40, "export_rate": 50}]}},
+            "plan-1",
+        )
+        self.cycle()
+
+        self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 0.40, places=3)
+        self.assertEqual(self.app.status["price_now"].reason, "balanceret")
+
     def test_outdoor_temp_falls_back_to_nodered(self):
         self.cycle()
 

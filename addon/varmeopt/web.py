@@ -229,6 +229,7 @@ class WebUI:
             f'<div class="card"><div class="big">{lookup.cop:.2f}</div>'
             f'<div class="sub" style="margin:0">{_esc(label)} · {_esc(lookup.detail)}</div></div>'
             f'<h2>Detaljer</h2><div class="card"><dl>{dl}</dl></div>'
+            + _price_section(s)
         )
         return _page("Nu", "now", body)
 
@@ -533,6 +534,52 @@ class WebUI:
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
         )
         return _page("COP-tabel", "cop", body)
+
+
+def _price_section(status: dict[str, Any]) -> str:
+    """Marginalprisen nu, hvad varmen koster, og hvad Node-RED ville vælge."""
+    price = status.get("price_now")
+    if price is None:
+        return ""
+
+    heat = status.get("heat_price")
+    pellet = status.get("pellet_price")
+    decision = status.get("decision")
+
+    rows = [
+        ("Marginal elpris", f"{price.kr_per_kwh:.2f} kr/kWh"),
+        ("Hvorfor", _esc(price.reason)),
+        ("Varmepumpevarme", _fmt(heat, "kr/kWh", 3)),
+        ("Pillevarme", _fmt(pellet, "kr/kWh", 3)),
+    ]
+
+    plan = status.get("plan")
+    if plan is not None:
+        for hours in (2, 4, 6):
+            ahead = plan.marginal(hours * 60)
+            if ahead is not None:
+                rows.append(
+                    (
+                        f"Om {hours} timer",
+                        f"{ahead.kr_per_kwh:.2f} kr/kWh "
+                        f"<span style='color:var(--muted)'>{_esc(ahead.reason)}</span>",
+                    )
+                )
+        rows.append(("Planens horisont", f"{plan.horizon_minutes / 60:.1f} timer"))
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+
+    badge = ""
+    if decision is not None:
+        colour = "#1f7a4d" if decision == "varmepumpe" else "#b4530a"
+        badge = (
+            f'<div class="card"><div class="big" style="color:{colour}">'
+            f"{_esc(decision.upper())}</div>"
+            '<div class="sub" style="margin:0">add-on\'ens svar — Node-RED '
+            "træffer stadig den rigtige beslutning</div></div>"
+        )
+
+    return f"<h2>Pris og valg</h2>{badge}<div class=\"card\"><dl>{dl}</dl></div>"
 
 
 def _balance_section(balance: Any, buffer: Any) -> str:

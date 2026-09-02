@@ -51,6 +51,11 @@ _DEFAULTS: dict[str, object] = {
     "entity_solar_power": "sensor.solvarme_produktion",
     "entity_element_power": "sensor.my_pv_ac_thor_9s_effekt",
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
+    # Predbats plan, laest direkte fra HA. Vi bruger raw.rows, den
+    # strukturerede udgave - ikke HTML-tabellen, som ville vaere skroebelig.
+    "entity_predbat_plan": "predbat.plan_html",
+    "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
+    "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
     # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
     # kalibrerer hinanden: solfangerne og cellerne ser samme sol.
     "entity_solar_today": "sensor.solvarme_produktion_idag",
@@ -115,6 +120,13 @@ _DEFAULTS: dict[str, object] = {
     "tank_peak_temp": 90,
     # Hent nyeste kode fra master ved opstart. Slaaet fra som udgangspunkt:
     # det koerer kode fra internettet uden et menneske imellem.
+    # Pillefyret. Braendvaerdi og virkningsgrad som Node-RED regner med.
+    "pellet_price_per_kg": 2.88,
+    "pellet_kwh_per_kg": 4.8,
+    "pellet_efficiency": 0.85,
+    # Hysterese paa kildevalget, saa den ikke vipper frem og tilbage paa
+    # nogle oerer. Samme vaerdi som Node-RED bruger.
+    "source_hysteresis": 0.05,
     "auto_update": False,
 }
 
@@ -141,6 +153,9 @@ class Options:
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
+    entity_predbat_plan: str
+    entity_battery_power: str
+    entity_grid_power: str
     entity_solar_today: str
     entity_solcast_remaining: str
     entity_solcast_tomorrow: str
@@ -156,6 +171,17 @@ class Options:
     solar_scale: float
     hp_min_runtime_minutes: float
     hp_charge_kw: float
+    pellet_price_per_kg: float
+    pellet_kwh_per_kg: float
+    pellet_efficiency: float
+    source_hysteresis: float
+
+    @property
+    def pellet_kwh_price(self) -> float:
+        """Pillevarme i kr pr. kWh leveret varme."""
+        if self.pellet_kwh_per_kg <= 0 or self.pellet_efficiency <= 0:
+            return 0.0
+        return (self.pellet_price_per_kg / self.pellet_kwh_per_kg) / self.pellet_efficiency
 
     @property
     def min_charge_kwh(self) -> float:
@@ -258,7 +284,8 @@ class Options:
             **{
                 key: float(values[key])
                 for key in _DEFAULTS
-                if key == "latitude" or key.startswith(("solar_", "pv_", "hp_"))
+                if key == "latitude"
+                or key.startswith(("solar_", "pv_", "hp_", "pellet_", "source_"))
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.

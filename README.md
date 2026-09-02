@@ -42,6 +42,15 @@ Hvad der virker nu:
   ACthor kan presse tankene til 90. «Plads til varmepumpe» og «plads i alt» er
   derfor to forskellige tal, og er tankene allerede over 60, er en
   blokopladning ikke bare unødvendig — den er umulig.
+- Regner **marginalprisen** paa strøm — nu og i hver halvtime fremad — af
+  Predbats plan, læst direkte fra HA. Spotprisen er ikke svaret: strøm fra
+  nettet, strøm fra et batteri der alligevel lades billigt om to timer, og
+  strøm man kunne have solgt er tre forskellige tal i det samme minut. Node-REDs
+  syv prisgrene er generaliseret fra «hvad koster den nu» til «hvad koster den
+  kl. 18» — og uden det kan man vælge kilde, men ikke lægge en blok.
+- Træffer **det samme valg som Node-RED**, men på den rettede COP, og udstiller
+  det side om side. Add-on'en styrer stadig intet; forskellen mellem de to svar
+  er præcis det fase 1 skal vurderes på.
 - Modellerer **UVR'ens varmekurve**: udetemperatur ind, fremløbssetpunkt ud.
   `sensor.node_1_analog_logging_13` er ikke en måling, men det setpunkt UVR'en
   regner sig frem til — det kan ses direkte i de indlærte data, hvor det falder
@@ -215,6 +224,9 @@ røres ikke — der læses kun.
 | `latitude`, `solar_thermal_*`, `pv_a_*`, `pv_b_*` | Fyn, 45° syd, 6,4 kW syd/20° + 4 kW vest/15° | Anlæggets geometri. Årstidsvariationen regnes heraf i stedet for at læres |
 | `solar_scale` | 0,43 | Startværdi for skalafaktoren, kalibreret på 24. august 2026. Modellen retter den selv |
 | `entity_spa_*` | `sensor.tub_temperature` m.fl. | Spabadets tilstand. Det kalder med samme setpunkt som brugsvandet og forklarer hvorfor kurven springer til 56 °C |
+| `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
+| `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
+| `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
 
 ## Opdatering
@@ -277,6 +289,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `cop.py` | COP-tabel, læring, 2D-interpolation. Ren, testet |
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
+| `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
@@ -288,7 +301,6 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `web.py` | Web-UI gennem ingress |
 | `__main__.py` | Hovedløkken |
 
-Kommende faser tilføjer `prices.py` (Predbats marginalpriser),
-`planner.py` (blokplanlægning) og `guard.py` (sessionslås og
+Kommende faser tilføjer `planner.py` (blokplanlægning) og `guard.py` (sessionslås og
 sikkerhed). Tankenergien, der stod på listen som `thermal.py`, ligger nu i
-`tank.py`.
+`tank.py`, og `prices.py` er på plads.
