@@ -88,6 +88,24 @@ class HomeAssistant:
             last_changed=body.get("last_changed"),
         )
 
+    async def call_service(
+        self, domain: str, service: str, data: dict[str, Any]
+    ) -> Any:
+        """Kald en service og få svaret med tilbage.
+
+        Vejrudsigten kan ikke læses som en tilstand: siden Home Assistant
+        2023.7 ligger den bag ``weather.get_forecasts``, som svarer på kaldet
+        i stedet for at lægge noget i en attribut. Derfor ``return_response``.
+        """
+        url = f"{self._url}/api/services/{domain}/{service}?return_response"
+        try:
+            async with self._session.post(url, headers=self._headers, json=data) as res:
+                if res.status >= 400:
+                    raise HaError(f"POST {domain}.{service} -> HTTP {res.status}")
+                return await res.json()
+        except (aiohttp.ClientError, ValueError) as exc:
+            raise HaError(f"POST {domain}.{service}: {exc}") from exc
+
     async def set_state(
         self, entity_id: str, state: Any, attributes: dict[str, Any] | None = None
     ) -> None:

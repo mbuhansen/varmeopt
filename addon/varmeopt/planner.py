@@ -134,6 +134,19 @@ class Planner:
 
     # ------------------------------------------------------------------ pris
 
+    def _cop_for(self, minutes: int, cop_now: float | None, cop_later: Any) -> float | None:
+        """COP i en given time.
+
+        ``cop_later`` maa gerne vaere et opslag frem for et tal. Med en
+        vejrudsigt faar hver time sin egen: forudsagt temperatur gennem
+        varmekurven giver setpunktet, og setpunktet giver COP'en. Uden
+        udsigt falder vi tilbage paa den vi har nu.
+        """
+        if callable(cop_later):
+            value = cop_later(minutes)
+            return value if value is not None else cop_now
+        return cop_later if cop_later is not None else cop_now
+
     def heat_price(self, electricity_price: float | None, cop: float | None) -> float | None:
         if not _finite(electricity_price) or not _finite(cop) or cop <= 0:
             return None
@@ -155,7 +168,7 @@ class Planner:
         self,
         plan: Any,
         cop_now: float | None,
-        cop_later: float | None = None,
+        cop_later: Any = None,
         headroom_kwh: float | None = None,
         solar_expected_kwh: float | None = None,
     ) -> Decision:
@@ -176,14 +189,14 @@ class Planner:
             return decision
 
         # Spoergsmaal 2: findes der en senere time hvor varmen bliver dyrere?
-        later_cop = cop_later if cop_later is not None else cop_now
         best_gap = 0.0
         best_when = None
         for minutes in range(SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break
-            gap = self.cheapest_heat(price.kr_per_kwh, later_cop) - vp_now
+            cop = self._cop_for(minutes, cop_now, cop_later)
+            gap = self.cheapest_heat(price.kr_per_kwh, cop) - vp_now
             if gap > best_gap:
                 best_gap, best_when = gap, minutes
 
@@ -229,7 +242,7 @@ class Planner:
         self,
         plan: Any,
         cop_now: float | None,
-        cop_later: float | None = None,
+        cop_later: Any = None,
         target_minutes: int | None = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
@@ -242,14 +255,13 @@ class Planner:
         if plan is None:
             return []
 
-        later_cop = cop_later if cop_later is not None else cop_now
         rows: list[Projection] = []
         for minutes in range(0, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break
             slot = plan.at(minutes)
-            cop = cop_now if minutes == 0 else later_cop
+            cop = cop_now if minutes == 0 else self._cop_for(minutes, cop_now, cop_later)
             heat = self.heat_price(price.kr_per_kwh, cop)
             source, note = source_now(heat, self.pellet_price, self.hysteresis)
             rows.append(

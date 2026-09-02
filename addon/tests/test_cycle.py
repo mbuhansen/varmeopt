@@ -33,6 +33,9 @@ class FakeHa:
     def __init__(self, states: dict[str, State]) -> None:
         self._states = states
         self.published: list[tuple[str, object]] = []
+        # Vejrudsigten hentes med et service-kald, ikke som en tilstand.
+        self.forecast_response: dict = {}
+        self.services: list[tuple[str, str]] = []
 
     def measure(self, cop: object, last_changed: str | None) -> None:
         self._states[COP] = State(COP, str(cop), {}, last_changed)
@@ -42,6 +45,10 @@ class FakeHa:
 
     async def set_state(self, entity_id, state, attributes=None) -> None:
         self.published.append((entity_id, state))
+
+    async def call_service(self, domain, service, data):
+        self.services.append((domain, service))
+        return self.forecast_response
 
 
 class FakeNodeRed:
@@ -238,6 +245,56 @@ class CycleTest(unittest.TestCase):
         # stadig et svar, og det er med vilje.
         self.assertNotIn("sensor.varmeopt_cop", dict(self.ha.published))
         self.assertIn("sensor.varmeopt_beslutning", dict(self.ha.published))
+
+
+class ForecastTest(unittest.TestCase):
+    """Vejrudsigten: hver time i planen faar sin egen COP."""
+
+    def setUp(self):
+        from datetime import datetime, timedelta, timezone
+
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.app.table = CopTable(
+            {44: {5: Cell(3.9, 300.0)}, 32: {15: Cell(4.6, 300.0)}}
+        )
+        from varmeopt.curve import HeatCurve, Point
+
+        self.app.curve = HeatCurve({5: Point(44.0, 500.0), 15: Point(32.0, 500.0)})
+        self.ha = FakeHa({FLOW: State(FLOW, "32.0", {}, "f")})
+        now = datetime.now(timezone.utc)
+        self.ha.forecast_response = {
+            self.app.options.entity_weather: {
+                "forecast": [
+                    {"datetime": (now + timedelta(hours=h)).isoformat(), "temperature": t}
+                    for h, t in ((0, 15.0), (6, 5.0))
+                ]
+            }
+        }
+        self.nodered = FakeNodeRed({"udeTemp": 15.0})
+
+    def test_the_forecast_is_fetched_once_and_then_cached(self):
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        # Udsigten aendrer sig i timer, ikke i minutter.
+        self.assertEqual(self.ha.services, [("weather", "get_forecasts")])
+        self.assertGreater(len(self.app.forecast), 0)
+
+    def test_a_colder_evening_gives_a_lower_cop_six_hours_out(self):
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        # 15 grader nu -> setpunkt 32 -> COP 4,6.
+        # 5 grader om seks timer -> setpunkt 44 -> COP 3,9.
+        self.assertAlmostEqual(self.app._cop_at(0), 4.6, places=1)
+        self.assertAlmostEqual(self.app._cop_at(360), 3.9, places=1)
+
+    def test_without_a_forecast_there_is_no_answer(self):
+        self.ha.forecast_response = {}
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        # Planlaeggeren falder saa tilbage paa den COP vi har nu.
+        self.assertIsNone(self.app._cop_at(360))
 
 
 if __name__ == "__main__":

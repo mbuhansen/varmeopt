@@ -23,6 +23,7 @@ from .compare import Accuracy, Tally, normalise
 from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
 from .demand import Balance, Load
+from .forecast import Forecast
 from .guard import Guard
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
@@ -65,6 +66,8 @@ class Varmeopt:
         self.curve = HeatCurve(dhw_setpoint=options.dhw_setpoint)
         self.solar = SolarModel(options.geometry)
         self.solar_day = DayTracker()
+        self.forecast = Forecast()
+        self._forecast_at: float | None = None
         self.tally = Tally()
         self.accuracy = Accuracy()
         self.guard = Guard(
@@ -154,6 +157,7 @@ class Varmeopt:
             lookup = None
             learn_note = "ignoreret: mangler temperaturdata"
 
+        await self._refresh_forecast(ha)
         prices = await self._read_prices(ha, context, lookup)
 
         # Planlaeggeren binder pris, COP, lager og sol sammen. Den svarer
@@ -161,6 +165,7 @@ class Varmeopt:
         decision = self.planner.decide(
             plan=prices.get("plan"),
             cop_now=lookup.cop if lookup is not None else None,
+            cop_later=self._cop_at,
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
         )
@@ -173,6 +178,7 @@ class Varmeopt:
         projection = self.planner.project(
             prices.get("plan"),
             lookup.cop if lookup is not None else None,
+            cop_later=self._cop_at,
             target_minutes=decision.window_minutes,
         )
 
@@ -188,6 +194,7 @@ class Varmeopt:
             **prices,
             decision=decision,
             command=command,
+            forecast=self.forecast,
             tally=self.tally,
             accuracy=self.accuracy,
             projection=projection,
@@ -464,6 +471,61 @@ class Varmeopt:
             "spa_target": await self._number(ha, self.options.entity_spa_target),
             "spa_heating": await self._binary(ha, self.options.entity_spa_heater),
         }
+
+    # ------------------------------------------------------------ vejrudsigt
+
+    async def _refresh_forecast(self, ha: HomeAssistant | None) -> None:
+        """Hent udsigten, men ikke hvert minut — den ændrer sig i timer."""
+        if ha is None or not self.options.entity_weather:
+            return
+        now = asyncio.get_running_loop().time()
+        if (
+            self._forecast_at is not None
+            and now - self._forecast_at < self.options.forecast_refresh_minutes * 60
+        ):
+            return
+
+        self._forecast_at = now
+        try:
+            response = await ha.call_service(
+                "weather",
+                "get_forecasts",
+                {"entity_id": self.options.entity_weather, "type": "hourly"},
+            )
+        except HaError as exc:
+            log.warning("kunne ikke hente vejrudsigten: %s", exc)
+            return
+
+        forecast = Forecast.from_response(
+            response, self.options.entity_weather, datetime.now(timezone.utc)
+        )
+        if len(forecast):
+            self.forecast = forecast
+            log.info(
+                "vejrudsigt: %d timer frem, %.1f til %.1f grader",
+                forecast.horizon_minutes / 60,
+                min(t for _, t in forecast.points),
+                max(t for _, t in forecast.points),
+            )
+        else:
+            log.warning(
+                "vejrudsigten fra %s kunne ikke laeses", self.options.entity_weather
+            )
+
+    def _cop_at(self, minutes: int) -> float | None:
+        """COP om saa mange minutter, hele vejen gennem kaeden.
+
+        Forudsagt temperatur -> varmekurven giver setpunktet -> COP-tabellen
+        giver virkningsgraden. Uden udsigt er der intet svar, og planlaeggeren
+        falder tilbage paa den COP vi har nu.
+        """
+        temp = self.forecast.temperature_at(minutes)
+        if temp is None:
+            return None
+        setpoint = self.curve.predict(temp)
+        if setpoint is None:
+            return None
+        return self.table.lookup(setpoint, temp).cop
 
     # ---------------------------------------------------------------- pris
 

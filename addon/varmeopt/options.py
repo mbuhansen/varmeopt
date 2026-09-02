@@ -55,6 +55,10 @@ _DEFAULTS: dict[str, object] = {
     # strukturerede udgave - ikke HTML-tabellen, som ville vaere skroebelig.
     # Node-REDs egen beslutning, saa de to kan sammenlignes. Sensoren
     # hedder "Varme Styring" i Node-REDs ha-entity-config.
+    # Home Assistants egen vejrudsigt. Med den faar hver time i planen sin
+    # egen COP i stedet for at arve den vi har nu.
+    "entity_weather": "weather.hjem",
+    "forecast_refresh_minutes": 30,
     "entity_nodered_decision": "sensor.varme_styring",
     "entity_predbat_plan": "predbat.plan_html",
     "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
@@ -175,6 +179,8 @@ class Options:
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
+    entity_weather: str
+    forecast_refresh_minutes: float
     entity_nodered_decision: str
     entity_predbat_plan: str
     entity_battery_power: str
@@ -318,7 +324,11 @@ class Options:
                 or key.startswith(
                     ("solar_", "pv_", "hp_", "pellet_", "source_", "planner_")
                 )
-                or key in ("control_min_dwell_minutes", "control_warmup_minutes")
+                or key in (
+                    "control_min_dwell_minutes",
+                    "control_warmup_minutes",
+                    "forecast_refresh_minutes",
+                )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.

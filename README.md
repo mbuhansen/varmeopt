@@ -66,6 +66,12 @@ Hvad der virker nu:
 - Træffer **det samme valg som Node-RED**, men på den rettede COP, og udstiller
   det side om side. Add-on'en styrer stadig intet; forskellen mellem de to svar
   er præcis det fase 1 skal vurderes på.
+- Giver **hver time i planen sin egen COP** af Home Assistants vejrudsigt.
+  Kæden bruger alt det andet: forudsagt temperatur → varmekurven giver
+  setpunktet → COP-tabellen giver virkningsgraden. Uden den arvede alle
+  fremtidige timer den temperatur der var *nu* — og netop for brugsvand var
+  det skævt, for aftenen er koldere end middagen, og det var hele argumentet
+  for at lade op i forvejen.
 - Svarer på **om det betaler sig at lade op på forhånd** — ikke med et døgnskema,
   men med tre spørgsmål hver cyklus: hvilken kilde nu, er der en senere time hvor
   varmen bliver dyrere nok til at dække slitagen, og hvor meget må der så lades
@@ -261,6 +267,8 @@ røres ikke — der læses kun.
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
 | `planner_horizon_hours` | 12 | Hvor langt frem det giver mening at gemme varme |
+| `entity_weather` | `weather.hjem` | Home Assistants egen vejrudsigt. Uden den arver hver time i planen den COP vi har nu |
+| `forecast_refresh_minutes` | 30 | Udsigten ændrer sig i timer, ikke i minutter |
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |
 | `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen |
 | `control_warmup_minutes` | 5 | Efter opstart: lad tabellerne komme på plads før der styres |
@@ -329,6 +337,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
 | `compare.py` | Regnskab over uenigheder med Node-RED. Ren, testet |
 | `guard.py` | Om beslutningen må handles på. Ren, testet |
+| `forecast.py` | Udetemperatur time for time fra HA's vejrudsigt. Ren, testet |
 | `journal.py` | De sidste loglinjer, til fejlsøgningsfilen |
 | `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
