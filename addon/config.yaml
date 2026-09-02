@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.6.0"
+version: "0.6.1"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -41,6 +41,8 @@ options:
   pv_b_tilt: 15
   pv_b_azimuth: 90
   solar_scale: 0.43
+  hp_min_runtime_minutes: 15
+  hp_charge_kw: 16.0
   entity_vvb_top: sensor.node_1_input_7
   entity_vvb_bottom: sensor.node_1_input_8
   entity_spa_temp: sensor.tub_temperature
@@ -90,6 +92,8 @@ schema:
   pv_b_tilt: float(0,90)
   pv_b_azimuth: float(-180,180)
   solar_scale: float(0,5)
+  hp_min_runtime_minutes: float(0,240)
+  hp_charge_kw: float(0,100)
   entity_vvb_top: str?
   entity_vvb_bottom: str?
   entity_spa_temp: str?

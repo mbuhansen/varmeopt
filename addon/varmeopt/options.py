@@ -72,6 +72,11 @@ _DEFAULTS: dict[str, object] = {
     # kWh mod 29 kWh solvarme. Modellen retter den selv naar den har set et
     # helt doegn.
     "solar_scale": 0.43,
+    # UVR'en har en minimums gangtid paa varmepumpen. Er der mindre plads end
+    # ét saadant traek fylder, er svaret "lad vaere" - ikke "lad lidt".
+    # Kortcykling slider og koster virkningsgrad ved hver opstart.
+    "hp_min_runtime_minutes": 15,
+    "hp_charge_kw": 16.0,
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
@@ -149,6 +154,18 @@ class Options:
     pv_b_tilt: float
     pv_b_azimuth: float
     solar_scale: float
+    hp_min_runtime_minutes: float
+    hp_charge_kw: float
+
+    @property
+    def min_charge_kwh(self) -> float:
+        """Mindste opladning der er værd at starte for.
+
+        Ét minimumstræk. Er der mindre plads end det, fylder varmepumpen det
+        og slukker igen — og en start der straks efterfølges af et stop er
+        slid uden udbytte.
+        """
+        return self.hp_charge_kw * self.hp_min_runtime_minutes / 60
     entity_vvb_top: str
     entity_vvb_bottom: str
     entity_spa_temp: str
@@ -241,7 +258,7 @@ class Options:
             **{
                 key: float(values[key])
                 for key in _DEFAULTS
-                if key == "latitude" or key.startswith(("solar_", "pv_"))
+                if key == "latitude" or key.startswith(("solar_", "pv_", "hp_"))
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.

@@ -583,16 +583,33 @@ def _solar_section(status: dict[str, Any], buffer: Any) -> str:
     if expected is None and status.get("solar_pv_remaining") is None:
         return ""
 
+    def pv(value: Any) -> str:
+        return f"<span style='color:var(--muted)'>af {_fmt(value, 'kWh PV', 1)}</span>"
+
     rows = [
-        ("Solceller, resten af dagen", _fmt(status.get("solar_pv_remaining"), "kWh", 1)),
-        ("Solceller i morgen", _fmt(status.get("solar_pv_tomorrow"), "kWh", 1)),
-        ("Forventet solvarme i dag", _fmt(expected, "kWh", 1)),
-        ("Solvarme indtil nu", _fmt(status.get("solar_today"), "kWh", 1)),
+        (
+            "Forventet solvarme, resten af i dag",
+            f"{_fmt(expected, 'kWh', 1)} {pv(status.get('solar_pv_remaining'))}",
+        ),
+        (
+            "Forventet solvarme i morgen",
+            f"{_fmt(status.get('solar_expected_tomorrow'), 'kWh', 1)} "
+            f"{pv(status.get('solar_pv_tomorrow'))}",
+        ),
+        ("Solvarme indtil nu i dag", _fmt(status.get("solar_today"), "kWh", 1)),
     ]
 
     may = status.get("solar_may_charge")
+    worth = status.get("solar_worth_starting")
     if may is not None and buffer is not None:
-        rows.append(("Varmepumpen må lade", f"{may:.1f} kWh"))
+        verdict = ""
+        if worth is False:
+            minimum = status.get("solar_min_charge") or 0
+            verdict = (
+                f" <span style='color:var(--accent)'>for lidt til at starte, "
+                f"mindst {minimum:.1f}</span>"
+            )
+        rows.append(("Varmepumpen må lade", f"{may:.1f} kWh{verdict}"))
 
     scale = status.get("solar_scale")
     days = status.get("solar_days") or 0
@@ -603,12 +620,21 @@ def _solar_section(status: dict[str, Any], buffer: Any) -> str:
     dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
     note = ""
     if may is not None and buffer is not None:
-        note = (
-            f'<p class="legend">Af varmepumpens {buffer.headroom_kwh:.1f} kWh plads '
-            f"venter solen at tage {expected:.1f}. Lader varmepumpen mere end "
-            f"{may:.1f} kWh, fortrænger den gratis varme — og skal den lade, så "
-            "oppefra, så bunden bliver kold nok til at solfangeren kan arbejde.</p>"
-        )
+        if worth is False:
+            note = (
+                f'<p class="legend">Af varmepumpens {buffer.headroom_kwh:.1f} kWh plads '
+                f"venter solen at tage {expected:.1f}, og der er kun {may:.1f} kWh "
+                "tilbage. Det fylder varmepumpen på under ét minimumstræk, hvorefter "
+                "den slukker igen — og en start der straks følges af et stop er slid "
+                "uden udbytte. Lad den stå.</p>"
+            )
+        else:
+            note = (
+                f'<p class="legend">Af varmepumpens {buffer.headroom_kwh:.1f} kWh plads '
+                f"venter solen at tage {expected:.1f}. Lader varmepumpen mere end "
+                f"{may:.1f} kWh, fortrænger den gratis varme — og skal den lade, så "
+                "oppefra, så bunden bliver kold nok til at solfangeren kan arbejde.</p>"
+            )
     return f'<h2>Solprognose</h2><div class="card"><dl>{dl}</dl></div>{note}'
 
 

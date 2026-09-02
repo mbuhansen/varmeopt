@@ -404,18 +404,28 @@ class Varmeopt:
             log.info("solvarme, doegnet %s: %s", date, note)
             self._dirty = True
 
-        expected = self.solar.expected_kwh(remaining, now.timetuple().tm_yday)
-        may_charge = None
+        day_of_year = now.timetuple().tm_yday
+        expected = self.solar.expected_kwh(remaining, day_of_year)
+        expected_tomorrow = self.solar.expected_kwh(tomorrow, day_of_year + 1)
+
+        may_charge = worth_starting = None
         if expected is not None and buffer is not None:
             # Det varmepumpen kan lade uden at tage plads fra solen.
             may_charge = max(0.0, buffer.headroom_kwh - expected)
+            # Men er der mindre plads end ét minimumstraek fylder, er svaret
+            # "lad vaere". En start der straks foelges af et stop er slid
+            # uden udbytte.
+            worth_starting = may_charge >= self.options.min_charge_kwh
 
         return {
             "solar_today": today,
             "solar_pv_remaining": remaining,
             "solar_pv_tomorrow": tomorrow,
             "solar_expected": expected,
+            "solar_expected_tomorrow": expected_tomorrow,
             "solar_may_charge": may_charge,
+            "solar_worth_starting": worth_starting,
+            "solar_min_charge": self.options.min_charge_kwh,
             "solar_scale": self.solar.scale,
             "solar_days": self.solar.days,
             "solar_note": note,

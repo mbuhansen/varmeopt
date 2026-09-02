@@ -89,12 +89,12 @@ Det er den regel de seks dybdefølere er nødvendige for — uden dem kan man ik
 skelne «tanken er 50 °C» fra «toppen er 60, bunden er 35», og det er præcis den
 forskel der afgør om solen har noget at arbejde med.
 
-**Hvor meget** varmepumpen må tage, afhænger så af hvor meget sol der kommer.
-Er dagen overskyet, laver solvarmen ikke nok til at fylde noget bånd, og
+**Hvor meget** varmepumpen må tage, afhænger af hvor meget sol der kommer. Er
+dagen overskyet, laver solvarmen ikke nok til at fylde noget bånd, og
 varmepumpen kan tage hele 30–60 uden at fortrænge en kilowatt-time. Bliver det
-en dag som i går, hvor solvarmen lavede 20 kWh, skal der stå plads tilbage.
+en klar dag, skal der stå plads tilbage.
 
-**Hvor meget** der må lades, kommer af Solcasts PV-prognose. Solfangerne og
+Det tal kommer fra Solcasts PV-prognose. Solfangerne og
 solcellerne ser den samme sol, men ikke fra samme vinkel: fire paneler i syd med
 45° hældning mod 6,4 kW syd/20° plus 4 kW vest/15°. Regnet på indfaldsvinklen
 svinger forholdet mellem de to flader med en faktor 2,5 hen over året — fra 0,90

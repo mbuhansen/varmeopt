@@ -225,3 +225,31 @@ class StorageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MinimumChargeTest(unittest.TestCase):
+    """Mindste opladning der er vaerd at starte for."""
+
+    def setUp(self):
+        from dataclasses import replace
+        from pathlib import Path
+
+        from varmeopt.options import Options
+
+        self.opts = Options.load(Path("findes-ikke.json"))
+        self.replace = replace
+
+    def test_minimum_follows_the_uvr_runtime(self):
+        # 16 kW i 15 minutter er 4 kWh. Er der mindre plads end det, fylder
+        # varmepumpen det og slukker igen.
+        self.assertAlmostEqual(self.opts.min_charge_kwh, 4.0, places=6)
+
+    def test_a_longer_minimum_runtime_raises_the_bar(self):
+        slow = self.replace(self.opts, hp_min_runtime_minutes=30)
+
+        self.assertAlmostEqual(slow.min_charge_kwh, 8.0, places=6)
+
+    def test_a_modulating_pump_lowers_it(self):
+        gentle = self.replace(self.opts, hp_charge_kw=4.0)
+
+        self.assertAlmostEqual(gentle.min_charge_kwh, 1.0, places=6)
