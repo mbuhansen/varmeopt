@@ -242,3 +242,79 @@ class CycleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ControlTest(unittest.TestCase):
+    """Styringen: add-on'en udstiller et flag, Node-RED følger det."""
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
+        o = self.app.options
+        self.ha = FakeHa(
+            {
+                FLOW: State(FLOW, "31.0", {}, "flow-1"),
+                COP: State(COP, "4.4", {}, "maaling-1"),
+                # Uden en plan er der ingen pris, og uden en pris ingen
+                # varmepris - saa naegter vagten med rette at styre.
+                o.entity_predbat_plan: State(
+                    o.entity_predbat_plan,
+                    "ok",
+                    {"raw": {"rows": [{"state": "holdchrg", "import_rate": 40,
+                                       "export_rate": 50}]}},
+                    "plan-1",
+                ),
+            }
+        )
+        self.nodered = FakeNodeRed({"udeTemp": 17.2})
+
+    def cycle(self):
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+    def test_control_is_off_by_default(self):
+        self.cycle()
+
+        command = self.app.status["command"]
+        self.assertFalse(command.acting)
+        self.assertIn("slået fra", command.reason)
+
+    def test_the_decision_is_still_published_when_not_controlling(self):
+        # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere det.
+        self.cycle()
+
+        self.assertIn("sensor.varmeopt_beslutning", dict(self.ha.published))
+        self.assertIsNotNone(self.app.status["decision"].source)
+
+    def test_control_holds_off_until_warmed_up(self):
+        self.app.guard.enabled = True
+        self.cycle()
+
+        command = self.app.status["command"]
+        self.assertFalse(command.acting)
+        self.assertIn("varmer op", command.reason)
+
+    def test_control_takes_over_once_warm(self):
+        self.app.guard.enabled = True
+        self.app.guard.warmup_minutes = 0.0
+        self.cycle()
+
+        command = self.app.status["command"]
+        self.assertTrue(command.acting)
+        self.assertEqual(command.source, self.app.status["decision"].source)
+
+    def test_no_price_means_no_control_even_when_enabled(self):
+        # Uden Predbats plan er der ingen varmepris. At handle paa en
+        # antagelse er ikke styring, det er et gaet.
+        self.app.guard.enabled = True
+        self.app.guard.warmup_minutes = 0.0
+        self.ha._states.pop(self.app.options.entity_predbat_plan)
+        self.cycle()
+
+        command = self.app.status["command"]
+        self.assertFalse(command.acting)
+        self.assertIn("ingen COP", command.reason)
+
+
+if __name__ == "__main__":
+    unittest.main()

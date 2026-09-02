@@ -141,6 +141,14 @@ _DEFAULTS: dict[str, object] = {
     # Hysterese paa kildevalget, saa den ikke vipper frem og tilbage paa
     # nogle oerer. Samme vaerdi som Node-RED bruger.
     "source_hysteresis": 0.05,
+    # Styring. Slaaet fra: add-on'en udstiller sin beslutning og et flag,
+    # og Node-RED foelger den kun naar flaget siger ja. Saa er der ét sted
+    # der styrer, og det sted kan altid sige nej til os.
+    "control_enabled": False,
+    # Mindste tid en kilde skal staa, foer den maa skifte igen.
+    "control_min_dwell_minutes": 15,
+    # Efter opstart: lad tabellerne komme paa plads foer der styres.
+    "control_warmup_minutes": 5,
     "auto_update": False,
 }
 
@@ -228,6 +236,9 @@ class Options:
     entity_tank_b_bottom: str
     entity_tank_b_outlet: str
     auto_update: bool
+    control_enabled: bool
+    control_min_dwell_minutes: float
+    control_warmup_minutes: float
     tank_liters: int
     tank_reference_temp: float
     tank_max_temp: float
@@ -290,6 +301,7 @@ class Options:
             cycle_seconds=int(values["cycle_seconds"]),
             nodered_url=str(values["nodered_url"]).rstrip("/"),
             auto_update=_as_bool(values["auto_update"]),
+            control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),
             vvb_liters=int(values["vvb_liters"]),
@@ -303,7 +315,10 @@ class Options:
                 key: float(values[key])
                 for key in _DEFAULTS
                 if key == "latitude"
-                or key.startswith(("solar_", "pv_", "hp_", "pellet_", "source_", "planner_"))
+                or key.startswith(
+                    ("solar_", "pv_", "hp_", "pellet_", "source_", "planner_")
+                )
+                or key in ("control_min_dwell_minutes", "control_warmup_minutes")
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.

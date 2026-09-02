@@ -22,12 +22,11 @@ Køreplanen frem herfra er fire skridt, i den rækkefølge:
 1. **Tæl uenighederne.** Uden et tal kan man kun se dem. Regnskabet står på
    Nu-siden: hvor tit, i hvilken retning, og hvad forskellen var værd. Det er dét
    tal der afgør om resten er værd at bygge. ✔ bygget
-2. **`guard.py`** — hvad sker der når planen er forældet, HA ikke svarer, en føler
-   lyver, eller add-on'en falder. Plus en sessionslås, så to ting ikke kan styre
-   samtidig. Skal ligge inden noget som helst overtages.
-3. **Én udgang, ikke alle.** Pillefyr/varmepumpe-valget er UVR'ens kanal 1 — én
-   digital udgang, som Node-RED allerede skriver. Den kan overtages alene, mens
-   Node-RED beholder resten. Går det galt, er det ét signal at rulle tilbage.
+2. **`guard.py`** — afgør om beslutningen må handles på. ✔ bygget
+3. **Kobl den til.** Add-on'en skriver ikke selv til UVR'en: den udstiller sin
+   beslutning og et flag, `styrer`, og Node-RED følger den kun når flaget siger
+   ja. Dermed er der ét sted der styrer, og det sted kan altid sige nej til os.
+   Mangler kun en `server-state-changed` på `sensor.varmeopt_beslutning`.
 4. **Blokopladning.** Den nye evne, og den farligste: at starte varmepumpen når
    ingen har bedt om varme. Bør vente til ståtabet er målt — med to kroners
    margin kan det led vende fortegnet.
@@ -262,6 +261,9 @@ røres ikke — der læses kun.
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
 | `planner_horizon_hours` | 12 | Hvor langt frem det giver mening at gemme varme |
+| `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |
+| `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen |
+| `control_warmup_minutes` | 5 | Efter opstart: lad tabellerne komme på plads før der styres |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
 
 ## Opdatering
@@ -326,6 +328,8 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
 | `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
 | `compare.py` | Regnskab over uenigheder med Node-RED. Ren, testet |
+| `guard.py` | Om beslutningen må handles på. Ren, testet |
+| `journal.py` | De sidste loglinjer, til fejlsøgningsfilen |
 | `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |

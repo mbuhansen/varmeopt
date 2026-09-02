@@ -615,8 +615,20 @@ class WebUI:
             else:
                 latest = f"{revision.short} — {_esc(revision.message)}"
 
+        command = self._status().get("command")
         running = selfupdate.current()
         rows = [
+            (
+                "Styring",
+                (
+                    f'<b style="color:{_SOURCE_INK.get(command.source, "")}">'
+                    f"STYRER {_esc((command.source or '').upper())}</b>"
+                    if command is not None and command.acting
+                    else "<b>styrer ikke</b>"
+                )
+                + (f' <span style="color:var(--muted)">{_esc(command.reason)}</span>'
+                   if command is not None else ""),
+            ),
             ("Add-on-version", _esc(VERSION)),
             (
                 "Kører kode fra",

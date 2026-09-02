@@ -23,6 +23,7 @@ from .compare import Accuracy, Tally, normalise
 from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
 from .demand import Balance, Load
+from .guard import Guard
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .migrate import (
@@ -66,6 +67,11 @@ class Varmeopt:
         self.solar_day = DayTracker()
         self.tally = Tally()
         self.accuracy = Accuracy()
+        self.guard = Guard(
+            enabled=options.control_enabled,
+            min_dwell_minutes=options.control_min_dwell_minutes,
+            warmup_minutes=options.control_warmup_minutes,
+        )
         self.planner = Planner(
             pellet_price=options.pellet_kwh_price,
             hysteresis=options.source_hysteresis,
@@ -158,6 +164,12 @@ class Varmeopt:
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
         )
+        # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
+        # det. Siger den nej, staar beslutningen der stadig, og Node-RED
+        # bruger sin egen logik.
+        command = self.guard.check(
+            decision, lookup, prices.get("plan"), asyncio.get_running_loop().time()
+        )
         projection = self.planner.project(
             prices.get("plan"),
             lookup.cop if lookup is not None else None,
@@ -175,6 +187,7 @@ class Varmeopt:
             **solar,
             **prices,
             decision=decision,
+            command=command,
             tally=self.tally,
             accuracy=self.accuracy,
             projection=projection,
@@ -259,9 +272,14 @@ class Varmeopt:
             await self._publish_price(ha, prices)
 
         if ha is not None:
-            log.info("beslutning: %s | %s", decision.source, decision.reason)
+            log.info(
+                "beslutning: %s | %s | styring: %s",
+                decision.source,
+                decision.reason,
+                command.note,
+            )
             await self._compare(ha, decision, balance)
-            await self._publish_decision(ha, decision)
+            await self._publish_decision(ha, decision, command)
 
         self._maybe_save()
 
@@ -555,7 +573,9 @@ class Varmeopt:
                 self.tally.summary(),
             )
 
-    async def _publish_decision(self, ha: HomeAssistant, decision: Any) -> None:
+    async def _publish_decision(
+        self, ha: HomeAssistant, decision: Any, command: Any
+    ) -> None:
         await ha.set_state(
             SENSOR_DECISION,
             decision.source,
@@ -563,6 +583,11 @@ class Varmeopt:
                 "friendly_name": "Varmeopt beslutning",
                 "icon": "mdi:scale-balance",
                 "begrundelse": decision.reason,
+                # Node-RED skal kun foelge os naar "styrer" er sand.
+                # Ellers bruger den sin egen logik, og det er meningen.
+                "styrer": command.acting,
+                "styr_til": command.source,
+                "styring_grund": command.reason,
                 "vp_varmepris": _round(decision.heat_price, 3),
                 "pille_varmepris": round(decision.pellet_price, 3),
                 "lad_op": decision.charge,

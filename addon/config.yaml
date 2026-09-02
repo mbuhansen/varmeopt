@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.13.0"
+version: "0.14.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -75,6 +75,9 @@ options:
   pellet_kwh_per_kg: 4.8
   pellet_efficiency: 0.85
   source_hysteresis: 0.05
+  control_enabled: false
+  control_min_dwell_minutes: 15
+  control_warmup_minutes: 5
   auto_update: false
 schema:
   log_level: list(debug|info|warning|error)
@@ -137,4 +140,7 @@ schema:
   pellet_kwh_per_kg: float(1,20)
   pellet_efficiency: float(0.1,1)
   source_hysteresis: float(0,5)
+  control_enabled: bool
+  control_min_dwell_minutes: float(0,240)
+  control_warmup_minutes: float(0,120)
   auto_update: bool
