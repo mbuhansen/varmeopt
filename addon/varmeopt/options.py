@@ -51,6 +51,27 @@ _DEFAULTS: dict[str, object] = {
     "entity_solar_power": "sensor.solvarme_produktion",
     "entity_element_power": "sensor.my_pv_ac_thor_9s_effekt",
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
+    # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
+    # kalibrerer hinanden: solfangerne og cellerne ser samme sol.
+    "entity_solar_today": "sensor.solvarme_produktion_idag",
+    "entity_solcast_remaining": "sensor.solcast_pv_forecast_forecast_remaining_today",
+    "entity_solcast_tomorrow": "sensor.solcast_pv_forecast_forecast_tomorrow",
+    # Anlaeggets geometri. Solfangerne staar stejlere end cellerne, og
+    # forholdet mellem dem svinger derfor med en faktor 2,5 hen over aaret -
+    # det regnes, det laeres ikke.
+    "latitude": 55.4,
+    "solar_thermal_tilt": 45,
+    "solar_thermal_azimuth": 0,
+    "pv_a_kwp": 6.4,
+    "pv_a_tilt": 20,
+    "pv_a_azimuth": 0,
+    "pv_b_kwp": 4.0,
+    "pv_b_tilt": 15,
+    "pv_b_azimuth": 90,
+    # Startvaerdi for skalafaktoren, kalibreret paa 24. august 2026: PV 60,9
+    # kWh mod 29 kWh solvarme. Modellen retter den selv naar den har set et
+    # helt doegn.
+    "solar_scale": 0.43,
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
@@ -115,6 +136,19 @@ class Options:
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
+    entity_solar_today: str
+    entity_solcast_remaining: str
+    entity_solcast_tomorrow: str
+    latitude: float
+    solar_thermal_tilt: float
+    solar_thermal_azimuth: float
+    pv_a_kwp: float
+    pv_a_tilt: float
+    pv_a_azimuth: float
+    pv_b_kwp: float
+    pv_b_tilt: float
+    pv_b_azimuth: float
+    solar_scale: float
     entity_vvb_top: str
     entity_vvb_bottom: str
     entity_spa_temp: str
@@ -158,6 +192,20 @@ class Options:
             ),
         )
 
+    @property
+    def geometry(self) -> Any:
+        """Solfangerens flade mod solcellernes, som ``solar.Geometry``."""
+        from .solar import Geometry, Plane
+
+        return Geometry(
+            latitude=self.latitude,
+            thermal=Plane(self.solar_thermal_tilt, self.solar_thermal_azimuth),
+            pv=(
+                Plane(self.pv_a_tilt, self.pv_a_azimuth, self.pv_a_kwp),
+                Plane(self.pv_b_tilt, self.pv_b_azimuth, self.pv_b_kwp),
+            ),
+        )
+
     @classmethod
     def load(cls, path: Path | None = None) -> Options:
         values = dict(_DEFAULTS)
@@ -187,6 +235,14 @@ class Options:
             tank_reference_temp=float(values["tank_reference_temp"]),
             tank_max_temp=float(values["tank_max_temp"]),
             tank_peak_temp=float(values["tank_peak_temp"]),
+            # Geometri og skalafaktor er alle tal, saa de kan tages under ét.
+            # Solvarmens *entiteter* hedder entity_solar_* og fanges af
+            # entity-linjen nedenfor, ikke af denne.
+            **{
+                key: float(values[key])
+                for key in _DEFAULTS
+                if key == "latitude" or key.startswith(("solar_", "pv_"))
+            },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.
             **{k: str(values[k]) for k in _DEFAULTS if k.startswith("entity_")},

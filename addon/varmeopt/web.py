@@ -306,6 +306,7 @@ class WebUI:
             f'<div class="tanks">{"".join(cards)}</div>'
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
             + _balance_section(status.get("balance"), buffer)
+            + _solar_section(status, buffer)
             + _vessel_section(status)
         )
         return _page("Lager", "tank", body)
@@ -574,6 +575,41 @@ def _balance_section(balance: Any, buffer: Any) -> str:
             "En opladning med varmepumpen oven i den fortrænger fri varme med købt.</p>"
         )
     return f'<h2>Effektbalance</h2><div class="card"><dl>{dl}</dl></div>{note}'
+
+
+def _solar_section(status: dict[str, Any], buffer: Any) -> str:
+    """Hvor meget af varmepumpens bånd solen selv tager i dag."""
+    expected = status.get("solar_expected")
+    if expected is None and status.get("solar_pv_remaining") is None:
+        return ""
+
+    rows = [
+        ("Solceller, resten af dagen", _fmt(status.get("solar_pv_remaining"), "kWh", 1)),
+        ("Solceller i morgen", _fmt(status.get("solar_pv_tomorrow"), "kWh", 1)),
+        ("Forventet solvarme i dag", _fmt(expected, "kWh", 1)),
+        ("Solvarme indtil nu", _fmt(status.get("solar_today"), "kWh", 1)),
+    ]
+
+    may = status.get("solar_may_charge")
+    if may is not None and buffer is not None:
+        rows.append(("Varmepumpen må lade", f"{may:.1f} kWh"))
+
+    scale = status.get("solar_scale")
+    days = status.get("solar_days") or 0
+    if scale is not None:
+        seen = f"{days:.0f} egne døgn" if days else "startværdi, endnu ingen egne døgn"
+        rows.append(("Skalafaktor", f"{scale:.3f} <span style='color:var(--muted)'>{seen}</span>"))
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    note = ""
+    if may is not None and buffer is not None:
+        note = (
+            f'<p class="legend">Af varmepumpens {buffer.headroom_kwh:.1f} kWh plads '
+            f"venter solen at tage {expected:.1f}. Lader varmepumpen mere end "
+            f"{may:.1f} kWh, fortrænger den gratis varme — og skal den lade, så "
+            "oppefra, så bunden bliver kold nok til at solfangeren kan arbejde.</p>"
+        )
+    return f'<h2>Solprognose</h2><div class="card"><dl>{dl}</dl></div>{note}'
 
 
 def _vessel_section(status: dict[str, Any]) -> str:

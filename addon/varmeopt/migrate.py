@@ -8,6 +8,7 @@ er skrevet til disk og kan sikkerhedskopieres. Node-RED røres ikke.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from .cop import CopTable
 from .curve import HeatCurve
@@ -18,6 +19,36 @@ log = logging.getLogger(__name__)
 
 COP_TABLE_FILE = "cop_table.json"
 CURVE_FILE = "heat_curve.json"
+SOLAR_FILE = "solar.json"
+
+
+def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]:
+    """Indlæs solvarmemodellen og det døgn der er i gang.
+
+    Har den aldrig lært noget, startes den på en kalibrering fra en rigtig
+    dag frem for på ingenting: 24. august 2026, hvor solcellerne lavede 60,9
+    kWh mod solvarmens 29. Modellen retter selv tallet efter første hele døgn
+    den selv har set.
+    """
+    from .solar import DayTracker, SolarModel
+
+    raw = store.load(SOLAR_FILE, {}) if store.exists(SOLAR_FILE) else {}
+    raw = raw if isinstance(raw, dict) else {}
+
+    model = SolarModel.from_raw(raw.get("model"), geometry)
+    tracker = DayTracker.from_raw(raw.get("day"))
+
+    if model.scale is None:
+        model.scale = seed if seed > 0 else None
+        note = (
+            f"solvarmemodel: startvaerdi k={seed:.3f}, endnu ingen egne doegn"
+            if model.scale is not None
+            else "solvarmemodel: intet at gaa ud fra endnu"
+        )
+    else:
+        note = f"solvarmemodel: k={model.scale:.3f} efter {model.days:.0f} doegn"
+
+    return model, tracker, note
 
 
 def load_heat_curve(

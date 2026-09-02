@@ -23,9 +23,17 @@ from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
 from .ha import HaError, HomeAssistant, State
-from .migrate import COP_TABLE_FILE, CURVE_FILE, load_cop_table, load_heat_curve
+from .migrate import (
+    COP_TABLE_FILE,
+    CURVE_FILE,
+    SOLAR_FILE,
+    load_cop_table,
+    load_heat_curve,
+    load_solar,
+)
 from .nodered import NodeRed
 from .options import Options
+from .solar import DayTracker, SolarModel
 from .store import Store
 from .tank import Buffer, Tank
 from .web import WebUI
@@ -47,6 +55,8 @@ class Varmeopt:
         self.store = store
         self.table = CopTable()
         self.curve = HeatCurve(dhw_setpoint=options.dhw_setpoint)
+        self.solar = SolarModel(options.geometry)
+        self.solar_day = DayTracker()
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         self._dirty = False
         self._last_save = 0.0
@@ -82,6 +92,7 @@ class Varmeopt:
         buffer = await self._read_tank(ha)
         balance = await self._read_balance(ha, measured_cop)
         vessels = await self._read_vessels(ha)
+        solar = await self._read_solar(ha, buffer)
 
         # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
         # med et fast setpunkt. Den slags målinger siger intet om kurven, og
@@ -113,6 +124,7 @@ class Varmeopt:
             tank=buffer,
             balance=balance,
             **vessels,
+            **solar,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
             hp_return=hp_return,
@@ -257,6 +269,12 @@ class Varmeopt:
             "loft_temp": buffer.ceiling,
             "plads_i_alt_kwh": round(buffer.peak_headroom_kwh, 2),
             "over_vp_loft": buffer.above_heatpump_ceiling,
+            # Hvor meget af varmepumpens baand solen selv tager i dag, og hvad
+            # der saa er tilbage at lade uden at fortraenge gratis varme.
+            "forventet_solvarme_kwh": _round(self.status.get("solar_expected"), 1),
+            "vp_maa_lade_kwh": _round(self.status.get("solar_may_charge"), 1),
+            "solvarme_i_dag_kwh": self.status.get("solar_today"),
+            "solar_k": _round(self.status.get("solar_scale"), 3),
             # Beholderne ved siden af: de deler varmekilder med tankene, men
             # ikke energi, og de må derfor ikke lægges sammen med dem.
             "vvb_top": self.status.get("vvb_top"),
@@ -357,6 +375,52 @@ class Varmeopt:
             "spa_heating": await self._binary(ha, self.options.entity_spa_heater),
         }
 
+    # ------------------------------------------------------------- solvarme
+
+    async def _read_solar(
+        self, ha: HomeAssistant | None, buffer: Buffer | None
+    ) -> dict[str, Any]:
+        """Følg døgnet, lær af det når det er slut, og forudsig resten af i dag."""
+        if ha is None:
+            return {}
+
+        remaining = await self._number(ha, self.options.entity_solcast_remaining)
+        tomorrow = await self._number(ha, self.options.entity_solcast_tomorrow)
+        today = await self._number(ha, self.options.entity_solar_today)
+
+        now = datetime.now().astimezone()
+        # Maetningen skal ses undervejs. Ved midnat er tankene koelet af, og
+        # en dag hvor solen bankede mod et fuldt lager ville se normal ud.
+        full_now = buffer.above_heatpump_ceiling if buffer is not None else False
+        finished = self.solar_day.observe(
+            now.strftime("%Y-%m-%d"), now.hour, remaining, today, store_full=full_now
+        )
+
+        note = None
+        if finished is not None:
+            thermal, forecast, date, saturated = finished
+            day_of_year = datetime.strptime(date, "%Y-%m-%d").timetuple().tm_yday
+            note = self.solar.learn(thermal, forecast, day_of_year, store_was_full=saturated)
+            log.info("solvarme, doegnet %s: %s", date, note)
+            self._dirty = True
+
+        expected = self.solar.expected_kwh(remaining, now.timetuple().tm_yday)
+        may_charge = None
+        if expected is not None and buffer is not None:
+            # Det varmepumpen kan lade uden at tage plads fra solen.
+            may_charge = max(0.0, buffer.headroom_kwh - expected)
+
+        return {
+            "solar_today": today,
+            "solar_pv_remaining": remaining,
+            "solar_pv_tomorrow": tomorrow,
+            "solar_expected": expected,
+            "solar_may_charge": may_charge,
+            "solar_scale": self.solar.scale,
+            "solar_days": self.solar.days,
+            "solar_note": note,
+        }
+
     # -------------------------------------------------------------- balance
 
     async def _read_balance(
@@ -436,6 +500,10 @@ class Varmeopt:
         try:
             self.store.save(COP_TABLE_FILE, self.table.to_raw())
             self.store.save(CURVE_FILE, self.curve.to_raw())
+            self.store.save(
+                SOLAR_FILE,
+                {"model": self.solar.to_raw(), "day": self.solar_day.to_raw()},
+            )
             self._dirty = False
             log.debug(
                 "gemt: %d COP-celler, %d kurvepunkter",
@@ -483,6 +551,11 @@ async def run() -> None:
 
         app.curve, curve_note = load_heat_curve(store, app.table, options.dhw_setpoint)
         log.info(curve_note)
+
+        app.solar, app.solar_day, solar_note = load_solar(
+            store, options.geometry, options.solar_scale
+        )
+        log.info(solar_note)
 
         loop = asyncio.get_running_loop()
 

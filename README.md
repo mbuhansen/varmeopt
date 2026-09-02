@@ -94,20 +94,35 @@ Er dagen overskyet, laver solvarmen ikke nok til at fylde noget bånd, og
 varmepumpen kan tage hele 30–60 uden at fortrænge en kilowatt-time. Bliver det
 en dag som i går, hvor solvarmen lavede 20 kWh, skal der stå plads tilbage.
 
-Reglen findes derfor i to udgaver, og kun den første kan bruges i dag:
+**Hvor meget** der må lades, kommer af Solcasts PV-prognose. Solfangerne og
+solcellerne ser den samme sol, men ikke fra samme vinkel: fire paneler i syd med
+45° hældning mod 6,4 kW syd/20° plus 4 kW vest/15°. Regnet på indfaldsvinklen
+svinger forholdet mellem de to flader med en faktor 2,5 hen over året — fra 0,90
+i juni til 2,28 i december, fordi 45° møder den lave vintersol nær vinkelret.
 
-1. **Uden prognose:** fyld oppefra og stop før bunden varmes. Det beskytter
-   solvarmens virkningsgrad uanset vejret, men siger intet om hvor meget der
-   bør lades.
-2. **Med prognose:** dimensionér opladningen efter dagens forventede
-   solvarmeudbytte. Det kræver et tal vi ikke har endnu — se nedenfor.
+En fast omregningsfaktor ville derfor være groft forkert det halve af året. Men
+**geometrien kan regnes, ikke læres.** Tilbage står ét enkelt tal: en skalafaktor
+for kollektorareal, virkningsgrad og Solcasts egen skævhed.
 
-Predbat kører i forvejen på en PV-prognose, og solvarme og solceller drives af
-den samme indstråling. Sammenhængen mellem de to kan læres af data på samme
-måde som varmekurven blev det, men i modsætning til varmekurven ligger den ikke
-allerede i noget vi har migreret: den skal opsamles over nogle uger, og
-opsamlingen begynder først nu, hvor `sensor.solvarme_produktion` bliver læst
-hvert minut.
+```
+forventet solvarme  =  Solcast kWh  ×  geometrisk forhold(dagen)  ×  k
+varmepumpen må lade =  plads til 60 °C  −  forventet solvarme
+```
+
+Skalafaktoren er kalibreret på en rigtig dag — 24. august 2026, hvor solcellerne
+lavede 60,9 kWh mod solvarmens 29 — og giver **k ≈ 0,43**. Modellen retter selv
+tallet efter hvert helt døgn den ser.
+
+Læringen er **med vilje skæv**, og det er den vigtigste beslutning i modellen. En
+dag hvor lageret var fuldt, får kollektoren til at holde igen, og målingen bliver
+for lav; en dag kan aldrig komme til at yde *mere* end solen gav. Fejlen er
+ensidig, så modellen tror hurtigt på en god dag og kun langsomt på en dårlig.
+
+Det er ikke teori. To dage fra anlægget: 24. august gav 60,9 kWh PV og 29 kWh
+solvarme med en top på 5,4 kW. Tre dage senere gav 55,4 kWh PV — kun 9 % mindre
+— men solvarmen faldt 34 % til 19 kWh, og toppen nåede kun 3,6 kW. Solen var der;
+kollektoren fik ikke lov. Symmetrisk læring ville have givet k = 0,397 af de to
+dage. Asymmetrisk giver 0,422, mod den frie dags 0,428.
 
 ## Installation
 
@@ -144,6 +159,10 @@ røres ikke — der læses kun.
 | `entity_element_power`, `entity_boiler_power` | ACthor, NBE-fyr | Elpatroner og pillefyr melder selv deres effekt |
 | `entity_vvb_top`, `entity_vvb_bottom` | `sensor.node_1_input_7`, `_8` | Varmtvandsbeholderen — eget lager ved siden af buffertankene |
 | `vvb_liters` | 0 | Beholderens rumfang. Nul betyder «regn ikke energi på den» — to temperaturer er mere ærligt end en kWh-værdi bygget på et gæt |
+| `entity_solar_today` | `sensor.solvarme_produktion_idag` | Døgntæller for solvarmen. Sammen med Solcast kalibrerer den skalafaktoren |
+| `entity_solcast_*` | Solcast-integrationen | Prognose for resten af i dag og for i morgen |
+| `latitude`, `solar_thermal_*`, `pv_a_*`, `pv_b_*` | Fyn, 45° syd, 6,4 kW syd/20° + 4 kW vest/15° | Anlæggets geometri. Årstidsvariationen regnes heraf i stedet for at læres |
+| `solar_scale` | 0,43 | Startværdi for skalafaktoren, kalibreret på 24. august 2026. Modellen retter den selv |
 | `entity_spa_*` | `sensor.tub_temperature` m.fl. | Spabadets tilstand. Det kalder med samme setpunkt som brugsvandet og forklarer hvorfor kurven springer til 56 °C |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
 
@@ -207,6 +226,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `cop.py` | COP-tabel, læring, 2D-interpolation. Ren, testet |
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
+| `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
 | `bootstrap.py` | Startskal i imaget; rydder op efter en mislykket selvopdatering |

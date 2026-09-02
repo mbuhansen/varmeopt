@@ -1,6 +1,6 @@
 import unittest
 
-from varmeopt.solar import Geometry, Plane, SolarModel, daily_incidence
+from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_incidence
 
 # Anlægget på Fyn: fire solfangere i syd med 45°, mod 6,4 kW syd/20° og
 # 4 kW vest/15° solceller.
@@ -142,6 +142,65 @@ class ExpectTest(unittest.TestCase):
         m = model(scale=0.4, days=20.0)
 
         self.assertIsNone(m.expected_kwh(None, MIDSUMMER))
+
+
+class DayTrackerTest(unittest.TestCase):
+    def setUp(self):
+        self.t = DayTracker()
+
+    def test_a_day_is_only_closed_when_the_next_one_starts(self):
+        self.assertIsNone(self.t.observe("2026-08-24", 0, 60.9, 0.0))
+        self.assertIsNone(self.t.observe("2026-08-24", 12, 30.0, 18.0))
+        self.assertIsNone(self.t.observe("2026-08-24", 23, 0.0, 29.0))
+
+        done = self.t.observe("2026-08-25", 0, 55.0, 0.0)
+
+        self.assertEqual(done, (29.0, 60.9, "2026-08-24", False))
+
+    def test_the_forecast_is_the_one_captured_at_midnight(self):
+        # "Resten af dagen" er kun hele dagen hvis man spoerger foer solopgang.
+        self.t.observe("2026-08-24", 0, 60.9, 0.0)
+        self.t.observe("2026-08-24", 14, 20.0, 22.0)
+
+        done = self.t.observe("2026-08-25", 0, 55.0, 0.0)
+
+        self.assertEqual(done[1], 60.9)
+
+    def test_a_day_started_in_the_afternoon_is_not_learned(self):
+        # Add-on'en blev startet kl. 14. Da er "resten af dagen" ikke hele
+        # dagen, og forholdet ville blive helt skaevt.
+        self.t.observe("2026-08-24", 14, 20.0, 22.0)
+        self.t.observe("2026-08-24", 23, 0.0, 29.0)
+
+        self.assertIsNone(self.t.observe("2026-08-25", 0, 55.0, 0.0))
+
+    def test_saturation_seen_during_the_day_is_carried_to_the_end(self):
+        # Ved midnat er tankene koelet af. Saa maetningen skal huskes fra da
+        # den skete, ikke aflaeses naar doegnet gores op.
+        self.t.observe("2026-08-27", 0, 55.4, 0.0)
+        self.t.observe("2026-08-27", 13, 20.0, 15.0, store_full=True)
+        self.t.observe("2026-08-27", 23, 0.0, 19.0, store_full=False)
+
+        done = self.t.observe("2026-08-28", 0, 50.0, 0.0)
+
+        self.assertTrue(done[3])
+
+    def test_saturation_resets_with_the_new_day(self):
+        self.t.observe("2026-08-27", 0, 55.4, 0.0, store_full=True)
+        self.t.observe("2026-08-28", 0, 50.0, 0.0)
+
+        self.assertFalse(self.t.saturated)
+
+    def test_round_trip_survives_a_restart(self):
+        self.t.observe("2026-08-24", 0, 60.9, 5.0, store_full=True)
+
+        back = DayTracker.from_raw(self.t.to_raw())
+        done = back.observe("2026-08-25", 0, 55.0, 0.0)
+
+        self.assertEqual(done, (5.0, 60.9, "2026-08-24", True))
+
+    def test_garbage_gives_a_fresh_tracker(self):
+        self.assertIsNone(DayTracker.from_raw("ikke en dag").date)
 
 
 class StorageTest(unittest.TestCase):

@@ -108,6 +108,94 @@ class Geometry:
         return daily_incidence(day_of_year, self.latitude, self.thermal) / pv
 
 
+# Prognosen for et døgn skal fanges før solen står op, ellers er "resten af
+# dagen" ikke hele dagen. Starter add-on'en klokken to om eftermiddagen, må
+# den dag ikke bruges til læring.
+MORNING_HOUR = 5
+
+
+@dataclass
+class DayTracker:
+    """Holder styr på et døgn ad gangen, så en dag kan læres når den er slut.
+
+    Solvarmens dagstæller nulstilles ved midnat, og Solcasts "resten af dagen"
+    er kun hele dagen hvis man spørger inden solopgang. Begge dele gør at et
+    døgn først kan gøres op *efter* det er forbi, med tal man huskede undervejs.
+    """
+
+    date: str | None = None
+    forecast_kwh: float | None = None
+    forecast_hour: int | None = None
+    thermal_kwh: float | None = None
+    saturated: bool = False
+
+    def observe(
+        self,
+        date: str,
+        hour: int,
+        forecast_remaining: float | None,
+        thermal_today: float | None,
+        store_full: bool = False,
+    ) -> tuple[float, float, str, bool] | None:
+        """Returnerer (solvarme, prognose, dato, maettet) når et døgn er slut.
+
+        ``store_full`` skal aflæses *undervejs*, ikke ved døgnskiftet — ved
+        midnat er tankene kølet af, og en dag hvor solen stod og bankede mod
+        et fuldt lager ville se helt normal ud.
+        """
+        finished = None
+
+        if self.date != date:
+            if (
+                self.date is not None
+                and self.thermal_kwh is not None
+                and self.forecast_kwh is not None
+                and self.forecast_hour is not None
+                and self.forecast_hour <= MORNING_HOUR
+            ):
+                finished = (self.thermal_kwh, self.forecast_kwh, self.date, self.saturated)
+
+            self.date = date
+            self.forecast_kwh = forecast_remaining
+            self.forecast_hour = hour
+            self.thermal_kwh = None
+            self.saturated = False
+
+        if thermal_today is not None:
+            self.thermal_kwh = thermal_today
+        if store_full:
+            self.saturated = True
+
+        return finished
+
+    def to_raw(self) -> dict[str, Any]:
+        return {
+            "date": self.date,
+            "forecast_kwh": self.forecast_kwh,
+            "forecast_hour": self.forecast_hour,
+            "thermal_kwh": self.thermal_kwh,
+            "saturated": self.saturated,
+        }
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> DayTracker:
+        if not isinstance(raw, dict):
+            return cls()
+        tracker = cls()
+        date = raw.get("date")
+        tracker.date = str(date) if isinstance(date, str) else None
+        tracker.saturated = bool(raw.get("saturated", False))
+        for field in ("forecast_kwh", "forecast_hour", "thermal_kwh"):
+            value = raw.get(field)
+            try:
+                setattr(tracker, field, float(value) if value is not None else None)
+            except (TypeError, ValueError):
+                setattr(tracker, field, None)
+        if tracker.forecast_hour is not None:
+            tracker.forecast_hour = int(tracker.forecast_hour)
+        return tracker
+
+
 class SolarModel:
     """Skalafaktoren mellem forudsagt PV og faktisk solvarme."""
 

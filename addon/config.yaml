@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.5.0"
+version: "0.6.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -28,6 +28,19 @@ options:
   entity_solar_power: sensor.solvarme_produktion
   entity_element_power: sensor.my_pv_ac_thor_9s_effekt
   entity_boiler_power: sensor.nbe_boiler_49812_power_kw
+  entity_solar_today: sensor.solvarme_produktion_idag
+  entity_solcast_remaining: sensor.solcast_pv_forecast_forecast_remaining_today
+  entity_solcast_tomorrow: sensor.solcast_pv_forecast_forecast_tomorrow
+  latitude: 55.4
+  solar_thermal_tilt: 45
+  solar_thermal_azimuth: 0
+  pv_a_kwp: 6.4
+  pv_a_tilt: 20
+  pv_a_azimuth: 0
+  pv_b_kwp: 4.0
+  pv_b_tilt: 15
+  pv_b_azimuth: 90
+  solar_scale: 0.43
   entity_vvb_top: sensor.node_1_input_7
   entity_vvb_bottom: sensor.node_1_input_8
   entity_spa_temp: sensor.tub_temperature
@@ -64,6 +77,19 @@ schema:
   entity_solar_power: str?
   entity_element_power: str?
   entity_boiler_power: str?
+  entity_solar_today: str?
+  entity_solcast_remaining: str?
+  entity_solcast_tomorrow: str?
+  latitude: float(-90,90)
+  solar_thermal_tilt: float(0,90)
+  solar_thermal_azimuth: float(-180,180)
+  pv_a_kwp: float(0,1000)
+  pv_a_tilt: float(0,90)
+  pv_a_azimuth: float(-180,180)
+  pv_b_kwp: float(0,1000)
+  pv_b_tilt: float(0,90)
+  pv_b_azimuth: float(-180,180)
+  solar_scale: float(0,5)
   entity_vvb_top: str?
   entity_vvb_bottom: str?
   entity_spa_temp: str?
