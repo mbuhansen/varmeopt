@@ -75,6 +75,9 @@ class Projection:
     export_price: float | None = None
     heat_price: float | None = None
     source: str = "varmepumpe"
+    # Hvorfor *den kilde* - ikke hvor prisen kommer fra. Det er den
+    # forklaring der hoerer hjemme paa en raekke hvor noget aendrer sig.
+    note: str = ""
     target: bool = False
 
     @property
@@ -248,7 +251,7 @@ class Planner:
             slot = plan.at(minutes)
             cop = cop_now if minutes == 0 else later_cop
             heat = self.heat_price(price.kr_per_kwh, cop)
-            source, _ = source_now(heat, self.pellet_price, self.hysteresis)
+            source, note = source_now(heat, self.pellet_price, self.hysteresis)
             rows.append(
                 Projection(
                     minutes=minutes,
@@ -258,6 +261,7 @@ class Planner:
                     export_price=slot.export_price if slot else None,
                     heat_price=heat,
                     source=source,
+                    note=note,
                     target=target_minutes is not None and minutes == target_minutes,
                 )
             )

@@ -364,8 +364,23 @@ class WebUI:
         )
         left = 30 - (clock_now.minute % 30)
 
+        # Varmepumpen er default. En raekke hvor den bare koerer videre, skal
+        # ikke fortaelle en historie om prissaetning - der blev jo ikke gjort
+        # noget. Den fulde begrundelse hoerer hjemme hvor noget aendrer sig:
+        # naar kilden skifter, naar vi staar i raekken, eller naar den er den
+        # planlaeggeren regner imod.
         cells = []
+        previous_source = None
         for row in rows:
+            changed = previous_source is not None and row.source != previous_source
+            previous_source = row.source
+            if changed or row.now:
+                # Hvorfor den kilde - det er dét der aendrede sig.
+                why = row.note
+            elif row.target:
+                why = "dyreste time - planlaeggeren regner herimod"
+            else:
+                why = _basis(row.reason)
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
             width = max(2.0, 100 * row.electricity / top)
             colour = _SOURCE_INK["varmepumpe" if row.source == "varmepumpe" else "pillefyr"]
@@ -389,7 +404,7 @@ class WebUI:
                 f"<td>{_fmt(row.heat_price, '', 2)}</td>"
                 f'<td style="color:{colour};font-weight:600">'
                 f"{_esc(row.source)}</td>"
-                f'<td class="why">{_esc(row.reason)}</td></tr>'
+                f'<td class="why">{_esc(why)}</td></tr>'
             )
 
         head = (
@@ -633,6 +648,16 @@ class WebUI:
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
         )
         return _page("COP-tabel", "cop", body)
+
+
+def _basis(reason: str) -> str:
+    """Kun hvor prisen kommer fra — «batteri», «net», «eksport».
+
+    Bruges på de rækker hvor intet ændrer sig. Begrundelsen bag prisen er
+    stadig rigtig og står på sensoren, men på skærmen ville den støje: den
+    ville få en helt almindelig time til at se ud som en beslutning.
+    """
+    return reason.split(":")[0].strip() or reason
 
 
 def _decision_banner(decision: Any) -> str:
