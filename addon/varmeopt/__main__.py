@@ -19,8 +19,8 @@ from typing import Any
 import aiohttp
 
 from . import VERSION, selfupdate
-from .compare import Tally, normalise
-from .cop import CopTable
+from .compare import Accuracy, Tally, normalise
+from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
 from .demand import Balance, Load
 from .ha import HaError, HomeAssistant, State
@@ -64,6 +64,7 @@ class Varmeopt:
         self.solar = SolarModel(options.geometry)
         self.solar_day = DayTracker()
         self.tally = Tally()
+        self.accuracy = Accuracy()
         self.planner = Planner(
             pellet_price=options.pellet_kwh_price,
             hysteresis=options.source_hysteresis,
@@ -129,6 +130,19 @@ class Varmeopt:
                     flow_temp, outdoor_temp, measured_cop, measured_stamp
                 )
             lookup = self.table.lookup(flow_temp, outdoor_temp)
+            # Anlaegget maaler selv sin COP. Den maaling er dommer mellem
+            # vores opslag og Node-REDs - og i modsaetning til at taelle
+            # uenigheder kraever det ikke at nogen af os har ret paa
+            # forhaand.
+            if measured_cop is not None:
+                low, high = plausible_cop_range(flow_temp, outdoor_temp)
+                if low <= measured_cop <= high:
+                    self.accuracy.observe(
+                        measured=measured_cop,
+                        ours=lookup.cop,
+                        theirs=self.table.nodered_lookup(flow_temp, outdoor_temp),
+                    )
+                    self._dirty = True
         else:
             lookup = None
             learn_note = "ignoreret: mangler temperaturdata"
@@ -161,6 +175,7 @@ class Varmeopt:
             **prices,
             decision=decision,
             tally=self.tally,
+            accuracy=self.accuracy,
             projection=projection,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
@@ -558,6 +573,10 @@ class Varmeopt:
                 "uenige": round(self.tally.disagreed),
                 "paa_spil_kr": round(self.tally.stake_kr, 2),
                 "maalt_siden": self.tally.since,
+                "cop_traef_pct": _round(self.accuracy.ours_closer_percent, 1),
+                "cop_fejl_vores": _round(self.accuracy.ours_mean_error, 3),
+                "cop_fejl_nodered": _round(self.accuracy.theirs_mean_error, 3),
+                "cop_forbedring_pct": _round(self.accuracy.improvement_percent, 1),
             },
         )
 
@@ -700,7 +719,10 @@ class Varmeopt:
                 SOLAR_FILE,
                 {"model": self.solar.to_raw(), "day": self.solar_day.to_raw()},
             )
-            self.store.save(COMPARE_FILE, self.tally.to_raw())
+            self.store.save(
+                COMPARE_FILE,
+                {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
+            )
             self._dirty = False
             log.debug(
                 "gemt: %d COP-celler, %d kurvepunkter",
@@ -754,8 +776,11 @@ async def run() -> None:
         )
         log.info(solar_note)
 
-        app.tally = Tally.from_raw(store.load(COMPARE_FILE, {}))
+        saved = store.load(COMPARE_FILE, {}) or {}
+        app.tally = Tally.from_raw(saved.get("tally"))
+        app.accuracy = Accuracy.from_raw(saved.get("accuracy"))
         log.info("mod Node-RED: %s", app.tally.summary())
+        log.info("COP-traefsikkerhed: %s", app.accuracy.summary())
 
         loop = asyncio.get_running_loop()
 

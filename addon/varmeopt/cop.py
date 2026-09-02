@@ -215,6 +215,28 @@ class CopTable:
 
     # ----------------------------------------------------------------- opslag
 
+    def nodered_lookup(self, flow: float, outdoor: float) -> float:
+        """Genskab Node-REDs opslag — fejlen inklusive.
+
+        Ikke for at gøre nar. Skal de to udgaver sammenlignes mod anlæggets
+        egen måling, må modparten være den rigtige og ikke en stråmand: hvor
+        Node-RED faktisk rammer en celle eksakt, bruger den den lærte værdi,
+        og der er den lige så god som os.
+
+        Fejlen er at ``getLearnedCop()`` sætter ``count: 0`` på alt den
+        interpolerer, hvorved begge tillidsgrene fejler og opslaget falder
+        tilbage på fabrikkens kurve. Her efterlignes det ved kun at slå op i
+        den eksakte celle — for det er reelt alt hvad den udgave bruger.
+        """
+        curve = ta_curve_cop(flow, outdoor)
+        cell = self.row(round(flow)).get(round(outdoor))
+        if cell is None or cell.count <= 0:
+            return curve
+        if cell.count >= FULL_TRUST_COUNT:
+            return cell.cop
+        weight = cell.count / FULL_TRUST_COUNT
+        return curve * (1 - weight) + cell.cop * weight
+
     def lookup(self, flow: float, outdoor: float) -> Lookup:
         curve = ta_curve_cop(flow, outdoor)
         learned = self._learned_at(flow, outdoor)

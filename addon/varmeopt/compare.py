@@ -50,6 +50,86 @@ def _finite(value: Any) -> bool:
 
 
 @dataclass
+class Accuracy:
+    """Hvem rammer den målte COP bedst — os eller Node-RED?
+
+    Det her er den ikke-cirkulære prøve. At tælle uenigheder siger kun hvor
+    tit de to peger forskelligt, og «på spil» er regnet med vores egen COP,
+    som er præcis det der er til debat.
+
+    Men anlægget måler selv sin COP hvert par minutter. Den måling er dommer:
+    begge udgaver kan slå op i det samme (fremløb, ude) og få hver sit tal, og
+    så kan man se hvis der lå nærmest. Det kræver ingen enighed om noget som
+    helst, og det kan afgøres af data alene.
+    """
+
+    samples: float = 0.0
+    ours_closer: float = 0.0
+    ours_error: float = 0.0
+    theirs_error: float = 0.0
+
+    def observe(self, measured: float, ours: float | None, theirs: float | None) -> None:
+        if not _finite(measured) or not _finite(ours) or not _finite(theirs):
+            return
+        mine = abs(ours - measured)
+        yours = abs(theirs - measured)
+        self.samples += 1
+        self.ours_error += mine
+        self.theirs_error += yours
+        if mine < yours:
+            self.ours_closer += 1
+
+    @property
+    def ours_mean_error(self) -> float | None:
+        return self.ours_error / self.samples if self.samples else None
+
+    @property
+    def theirs_mean_error(self) -> float | None:
+        return self.theirs_error / self.samples if self.samples else None
+
+    @property
+    def ours_closer_percent(self) -> float | None:
+        return 100 * self.ours_closer / self.samples if self.samples else None
+
+    @property
+    def improvement_percent(self) -> float | None:
+        """Hvor meget mindre vores fejl er. Negativt vil sige at vi er værre."""
+        if not self.samples or self.theirs_error <= 0:
+            return None
+        return 100 * (1 - self.ours_error / self.theirs_error)
+
+    def to_raw(self) -> dict[str, Any]:
+        return {
+            "samples": self.samples,
+            "ours_closer": self.ours_closer,
+            "ours_error": round(self.ours_error, 4),
+            "theirs_error": round(self.theirs_error, 4),
+        }
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> Accuracy:
+        a = cls()
+        if not isinstance(raw, dict):
+            return a
+        for name in ("samples", "ours_closer", "ours_error", "theirs_error"):
+            try:
+                value = float(raw.get(name, 0))
+            except (TypeError, ValueError):
+                value = 0.0
+            setattr(a, name, value if math.isfinite(value) else 0.0)
+        return a
+
+    def summary(self) -> str:
+        if not self.samples:
+            return "ingen COP-maalinger at doemme paa endnu"
+        return (
+            f"vores COP taettest paa i {self.ours_closer_percent:.0f} % af "
+            f"{self.samples:.0f} maalinger | middelfejl {self.ours_mean_error:.3f} "
+            f"mod {self.theirs_mean_error:.3f}"
+        )
+
+
+@dataclass
 class Tally:
     """Regnskabet. Tællere, ikke en historik — vi skal bruge et tal, ikke en log."""
 
