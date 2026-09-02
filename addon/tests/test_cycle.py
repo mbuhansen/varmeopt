@@ -120,10 +120,9 @@ class CycleTest(unittest.TestCase):
     def test_lookup_is_published_to_home_assistant(self):
         self.cycle()
 
-        self.assertEqual(len(self.ha.published), 1)
-        entity_id, value = self.ha.published[0]
-        self.assertEqual(entity_id, "sensor.varmeopt_cop")
-        self.assertIsInstance(value, float)
+        published = dict(self.ha.published)
+        self.assertIn("sensor.varmeopt_cop", published)
+        self.assertIsInstance(published["sensor.varmeopt_cop"], float)
 
     def test_tank_is_published_when_the_sensors_answer(self):
         o = self.app.options
@@ -176,7 +175,8 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(status["price_now"].reason, "net: batteriet er bundet")
         # 1,80 delt med den lærte COP mod pillefyrets 0,706.
         self.assertIsNotNone(status["heat_price"])
-        self.assertIn(status["decision"], ("varmepumpe", "pillefyr"))
+        self.assertIn(status["decision"].source, ("varmepumpe", "pillefyr"))
+        self.assertEqual(published["sensor.varmeopt_beslutning"], status["decision"].source)
 
     def test_a_missing_predbat_plan_is_not_fatal(self):
         # Predbat kan vaere nede eller endnu ikke have lagt en plan. Cyklussen
@@ -185,6 +185,8 @@ class CycleTest(unittest.TestCase):
 
         self.assertNotIn("sensor.varmeopt_elpris", dict(self.ha.published))
         self.assertIsNone(self.app.status.get("price_now"))
+        # Men kildevalget staar stadig - det kraever ingen plan.
+        self.assertEqual(self.app.status["decision"].source, "varmepumpe")
 
     def test_battery_average_comes_from_nodered(self):
         o = self.app.options
@@ -232,7 +234,10 @@ class CycleTest(unittest.TestCase):
 
         self.assertIsNone(self.app.status["lookup"])
         self.assertEqual(self.samples, 10.0)
-        self.assertEqual(self.ha.published, [])
+        # Uden temperaturer er der ingen COP at udgive - men styringen har
+        # stadig et svar, og det er med vilje.
+        self.assertNotIn("sensor.varmeopt_cop", dict(self.ha.published))
+        self.assertIn("sensor.varmeopt_beslutning", dict(self.ha.published))
 
 
 if __name__ == "__main__":

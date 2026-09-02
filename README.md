@@ -51,6 +51,11 @@ Hvad der virker nu:
 - Træffer **det samme valg som Node-RED**, men på den rettede COP, og udstiller
   det side om side. Add-on'en styrer stadig intet; forskellen mellem de to svar
   er præcis det fase 1 skal vurderes på.
+- Svarer på **om det betaler sig at lade op på forhånd** — ikke med et døgnskema,
+  men med tre spørgsmål hver cyklus: hvilken kilde nu, er der en senere time hvor
+  varmen bliver dyrere nok til at dække slitagen, og hvor meget må der så lades
+  når solen har fået sit. Et skema forældes i samme øjeblik en pris flytter sig,
+  og en styring bruger alligevel kun det første skridt.
 - Modellerer **UVR'ens varmekurve**: udetemperatur ind, fremløbssetpunkt ud.
   `sensor.node_1_analog_logging_13` er ikke en måling, men det setpunkt UVR'en
   regner sig frem til — det kan ses direkte i de indlærte data, hvor det falder
@@ -227,6 +232,8 @@ røres ikke — der læses kun.
 | `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
+| `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
+| `planner_horizon_hours` | 12 | Hvor langt frem det giver mening at gemme varme |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
 
 ## Opdatering
@@ -290,6 +297,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
 | `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
+| `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
@@ -301,6 +309,6 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `web.py` | Web-UI gennem ingress |
 | `__main__.py` | Hovedløkken |
 
-Kommende faser tilføjer `planner.py` (blokplanlægning) og `guard.py` (sessionslås og
+Kommende faser tilføjer `guard.py` (sessionslås og
 sikkerhed). Tankenergien, der stod på listen som `thermal.py`, ligger nu i
 `tank.py`, og `prices.py` er på plads.

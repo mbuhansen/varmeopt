@@ -33,6 +33,7 @@ from .migrate import (
 )
 from .nodered import NodeRed
 from .options import Options
+from .planner import Planner
 from .prices import Grid, Plan
 from .solar import DayTracker, SolarModel
 from .store import Store
@@ -45,6 +46,7 @@ SENSOR = "sensor.varmeopt_cop"
 SENSOR_TANK = "sensor.varmeopt_lager"
 SENSOR_DEMAND = "sensor.varmeopt_behov"
 SENSOR_PRICE = "sensor.varmeopt_elpris"
+SENSOR_DECISION = "sensor.varmeopt_beslutning"
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
@@ -59,6 +61,14 @@ class Varmeopt:
         self.curve = HeatCurve(dhw_setpoint=options.dhw_setpoint)
         self.solar = SolarModel(options.geometry)
         self.solar_day = DayTracker()
+        self.planner = Planner(
+            pellet_price=options.pellet_kwh_price,
+            hysteresis=options.source_hysteresis,
+            wear_kr_per_kwh=options.hp_wear_kr_per_kwh,
+            min_charge_kwh=options.min_charge_kwh,
+            charge_kw=options.hp_charge_kw,
+            horizon_minutes=int(options.planner_horizon_hours * 60),
+        )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         self._dirty = False
         self._last_save = 0.0
@@ -119,6 +129,15 @@ class Varmeopt:
 
         prices = await self._read_prices(ha, context, lookup)
 
+        # Planlaeggeren binder pris, COP, lager og sol sammen. Den svarer
+        # ogsaa uden en plan - saa er det bare kildevalget.
+        decision = self.planner.decide(
+            plan=prices.get("plan"),
+            cop_now=lookup.cop if lookup is not None else None,
+            headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
+            solar_expected_kwh=solar.get("solar_expected"),
+        )
+
         self.status.update(
             flow_temp=flow_temp,
             outdoor_temp=outdoor_temp,
@@ -129,6 +148,7 @@ class Varmeopt:
             **vessels,
             **solar,
             **prices,
+            decision=decision,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
             hp_return=hp_return,
@@ -200,14 +220,17 @@ class Varmeopt:
             price = prices["price_now"]
             heat = prices.get("heat_price")
             log.info(
-                "el %.2f kr/kWh (%s) | varme %s mod pille %.2f -> %s",
+                "el %.2f kr/kWh (%s) | varme %s mod pille %.2f",
                 price.kr_per_kwh,
                 price.reason,
                 f"{heat:.2f}" if heat is not None else "-",
                 prices["pellet_price"],
-                prices.get("decision") or "-",
             )
             await self._publish_price(ha, prices)
+
+        if ha is not None:
+            log.info("beslutning: %s | %s", decision.source, decision.reason)
+            await self._publish_decision(ha, decision)
 
         self._maybe_save()
 
@@ -426,22 +449,14 @@ class Varmeopt:
         if now is None:
             return {}
 
-        pellet = self.options.pellet_kwh_price
-        heat_price = decision = None
-        if lookup is not None and lookup.cop > 0:
-            heat_price = now.kr_per_kwh / lookup.cop
-            gap = heat_price - pellet
-            hysteresis = self.options.source_hysteresis
-            # Ved uafgjort vinder varmepumpen, som Node-RED ogsaa goer.
-            decision = "pillefyr" if gap > hysteresis else "varmepumpe"
-
         return {
             "plan": plan,
             "price_now": now,
             "grid": grid,
-            "heat_price": heat_price,
-            "pellet_price": pellet,
-            "decision": decision,
+            "heat_price": self.planner.heat_price(
+                now.kr_per_kwh, lookup.cop if lookup is not None else None
+            ),
+            "pellet_price": self.options.pellet_kwh_price,
         }
 
     async def _publish_price(self, ha: HomeAssistant, prices: dict[str, Any]) -> None:
@@ -456,7 +471,6 @@ class Varmeopt:
             "begrundelse": price.reason,
             "vp_varmepris": _round(prices.get("heat_price"), 3),
             "pille_varmepris": round(prices["pellet_price"], 3),
-            "beslutning": prices.get("decision"),
             "horisont_timer": round(plan.horizon_minutes / 60, 1),
         }
 
@@ -473,6 +487,23 @@ class Varmeopt:
             attributes["billigste_vindue_pris"] = round(average, 3)
 
         await ha.set_state(SENSOR_PRICE, round(price.kr_per_kwh, 3), attributes)
+
+    async def _publish_decision(self, ha: HomeAssistant, decision: Any) -> None:
+        await ha.set_state(
+            SENSOR_DECISION,
+            decision.source,
+            {
+                "friendly_name": "Varmeopt beslutning",
+                "icon": "mdi:scale-balance",
+                "begrundelse": decision.reason,
+                "vp_varmepris": _round(decision.heat_price, 3),
+                "pille_varmepris": round(decision.pellet_price, 3),
+                "lad_op": decision.charge,
+                "lad_kwh": _round(decision.charge_kwh, 1),
+                "besparelse_kr": _round(decision.saving_kr, 2),
+                "vindue_min": decision.window_minutes,
+            },
+        )
 
     # ------------------------------------------------------------- solvarme
 

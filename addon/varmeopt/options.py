@@ -82,6 +82,13 @@ _DEFAULTS: dict[str, object] = {
     # Kortcykling slider og koster virkningsgrad ved hver opstart.
     "hp_min_runtime_minutes": 15,
     "hp_charge_kw": 16.0,
+    # At koere varmepumpen koster noget ud over stroemmen. Tallet kommer
+    # fra den ukoblede v4-node i Node-RED, hvor det var en konstant - her
+    # er det en indstilling, saa det kan efterproeves mod virkeligheden.
+    "hp_wear_kr_per_kwh": 0.15,
+    # Hvor langt frem det giver mening at gemme varme. Ud over det aeder
+    # staatabet gevinsten, og prisprognosen bliver for usikker.
+    "planner_horizon_hours": 12,
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
@@ -171,6 +178,8 @@ class Options:
     solar_scale: float
     hp_min_runtime_minutes: float
     hp_charge_kw: float
+    hp_wear_kr_per_kwh: float
+    planner_horizon_hours: float
     pellet_price_per_kg: float
     pellet_kwh_per_kg: float
     pellet_efficiency: float
@@ -285,7 +294,7 @@ class Options:
                 key: float(values[key])
                 for key in _DEFAULTS
                 if key == "latitude"
-                or key.startswith(("solar_", "pv_", "hp_", "pellet_", "source_"))
+                or key.startswith(("solar_", "pv_", "hp_", "pellet_", "source_", "planner_"))
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
             # stedet for at gentage den samme linje tolv gange.

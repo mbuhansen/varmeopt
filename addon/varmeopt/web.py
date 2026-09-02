@@ -567,19 +567,25 @@ def _price_section(status: dict[str, Any]) -> str:
                 )
         rows.append(("Planens horisont", f"{plan.horizon_minutes / 60:.1f} timer"))
 
-    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
-
     badge = ""
     if decision is not None:
-        colour = "#1f7a4d" if decision == "varmepumpe" else "#b4530a"
+        colour = "#1f7a4d" if decision.source == "varmepumpe" else "#b4530a"
         badge = (
             f'<div class="card"><div class="big" style="color:{colour}">'
-            f"{_esc(decision.upper())}</div>"
-            '<div class="sub" style="margin:0">add-on\'ens svar — Node-RED '
-            "træffer stadig den rigtige beslutning</div></div>"
+            f"{_esc(decision.source.upper())}</div>"
+            f'<div class="sub" style="margin:0">{_esc(decision.reason)}</div></div>'
         )
+        rows.append(("Lad op", _esc(decision.charging_note)))
+        if decision.saving_kr is not None:
+            rows.append(
+                (
+                    "At hente",
+                    f"{decision.saving_kr:.2f} kr mod om {decision.window_minutes} min",
+                )
+            )
 
-    return f"<h2>Pris og valg</h2>{badge}<div class=\"card\"><dl>{dl}</dl></div>"
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    return f'<h2>Pris og valg</h2>{badge}<div class="card"><dl>{dl}</dl></div>'
 
 
 def _balance_section(balance: Any, buffer: Any) -> str:
