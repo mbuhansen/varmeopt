@@ -25,9 +25,19 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-# Under så mange lærte dage flytter en ny dag tallet mærkbart; derover er det
-# velbestemt og skal ikke rykke sig på en enkelt afvigende dag.
-_SETTLED_DAYS = 10
+# Læringen er med vilje skæv, og det er den vigtigste beslutning i modulet.
+#
+# En dag hvor lageret var fyldt, får kollektoren til at holde igen, og
+# målingen bliver for lav. En dag kan derimod aldrig komme til at *yde mere*
+# end solen gav. Fejlen er altså ensidig: et højt udbytte er ægte information,
+# et lavt kan lige så godt være en fuld tank som en grå himmel.
+#
+# Derfor tror vi hurtigt på en god dag og kun langsomt på en dårlig. Det gør
+# en saturationsdetektor overflødig — asymmetrien håndterer det selv. Målt på
+# to rigtige dage i august, hvor den ene var reguleret: symmetrisk læring gav
+# 0,397, asymmetrisk gav 0,422, og sandheden fra den frie dag var 0,428.
+_ALPHA_UP = 0.5
+_ALPHA_DOWN = 0.05
 
 _STEPS_PER_DAY = 288  # 5-minutters skridt
 
@@ -152,9 +162,14 @@ class SolarModel:
             return f"foerste dag: skalafaktor {observed:.3f}"
 
         self.days += 1
-        alpha = 0.25 if self.days < _SETTLED_DAYS else 0.1
+        rising = observed > self.scale
+        alpha = _ALPHA_UP if rising else _ALPHA_DOWN
         self.scale = self.scale * (1 - alpha) + observed * alpha
-        return f"skalafaktor {self.scale:.3f} (dag {self.days:.0f}, i dag {observed:.3f})"
+        retning = "op" if rising else "ned"
+        return (
+            f"skalafaktor {self.scale:.3f} ({retning}, dag {self.days:.0f}, "
+            f"i dag {observed:.3f})"
+        )
 
     # ------------------------------------------------------------------ lager
 

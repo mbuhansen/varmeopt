@@ -85,14 +85,42 @@ class LearnTest(unittest.TestCase):
 
         self.assertAlmostEqual(m.scale, 0.4, places=9)
 
-    def test_a_settled_scale_barely_moves(self):
-        m = model(scale=0.40, days=50.0)
-        before = m.scale
+    def test_a_good_day_is_believed_quickly(self):
+        # Et hoejt udbytte kan ikke skyldes regulering - det er aegte.
+        m = model(scale=0.30, days=20.0)
 
         m.learn(40.0, 50.0, MIDSUMMER)
+        observed = 40.0 / (50.0 * m.geometric_ratio(MIDSUMMER))
 
-        self.assertGreater(m.scale, before)
-        self.assertLess(m.scale, before * 1.2)
+        self.assertAlmostEqual(m.scale, 0.30 + 0.5 * (observed - 0.30), places=9)
+
+    def test_a_poor_day_is_believed_slowly(self):
+        # Et lavt udbytte kan lige saa godt vaere en fuld tank som en graa dag.
+        m = model(scale=0.50, days=20.0)
+
+        m.learn(10.0, 50.0, MIDSUMMER)
+        observed = 10.0 / (50.0 * m.geometric_ratio(MIDSUMMER))
+
+        self.assertAlmostEqual(m.scale, 0.50 + 0.05 * (observed - 0.50), places=9)
+
+    def test_the_two_august_days_from_the_real_plant(self):
+        # 24. august koerte frit: PV 60,9 kWh, solvarme 29 kWh, top 5,4 kW.
+        # 27. august var reguleret: PV faldt kun 9 %, solvarmen 34 %, og
+        # toppen naaede kun 3,6 kW paa et anlaeg der kan 5,4.
+        #
+        # Symmetrisk laering ville have trukket tallet ned mod den regulerede
+        # dag. Asymmetrien holder det taet paa den frie.
+        free = model()
+        free.learn(29.0, 60.9, 236)
+        truth = free.scale
+
+        both = model()
+        both.learn(29.0, 60.9, 236)
+        both.learn(19.0, 55.4, 239)
+
+        self.assertAlmostEqual(truth, 0.428, places=2)
+        self.assertGreater(both.scale, 0.42)
+        self.assertLess(abs(both.scale - truth), 0.01)
 
 
 class ExpectTest(unittest.TestCase):
