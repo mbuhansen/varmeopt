@@ -378,7 +378,7 @@ class WebUI:
                 # Hvorfor den kilde - det er dét der aendrede sig.
                 why = row.note
             elif row.target:
-                why = "dyreste time - planlaeggeren regner herimod"
+                why = "dyreste time — planlæggeren regner herimod"
             else:
                 why = _basis(row.reason)
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")

@@ -89,7 +89,7 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.60 * 0.90, places=9)
-        self.assertIn("vaerdisat mod eksport", price.reason)
+        self.assertIn("værdisat mod eksport", price.reason)
 
     def test_a_cheap_charge_soon_frees_the_battery(self):
         p = plan(row(), row(state="chrg", import_rate=40), battery_average=1.0)
@@ -139,7 +139,7 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertIn("vaerdisat mod eksport", price.reason)
+        self.assertIn("værdisat mod eksport", price.reason)
 
     def test_an_export_that_pays_less_than_the_battery_is_not_worth_saving_for(self):
         p = plan(row(), row(state="exp", export_rate=60), battery_average=1.20)

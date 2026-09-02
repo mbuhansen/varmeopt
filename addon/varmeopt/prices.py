@@ -268,7 +268,7 @@ class Plan:
                 minutes = next_export.minutes_ahead - slot.minutes_ahead
                 return Price(
                     next_export.export_price * EXPORT_DISCOUNT,
-                    f"batteri: vaerdisat mod eksport om {minutes} min "
+                    f"batteri: værdisat mod eksport om {minutes} min "
                     f"(SOC {soc:.0f} %)",
                 )
 

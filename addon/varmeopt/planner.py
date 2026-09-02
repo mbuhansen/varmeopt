@@ -102,12 +102,12 @@ def source_now(
     for at valget ikke vipper frem og tilbage på nogle ører.
     """
     if heat_price is None:
-        return "varmepumpe", "ingen COP - antager varmepumpe"
+        return "varmepumpe", "ingen COP — antager varmepumpe"
     if heat_price > pellet_price + hysteresis:
         return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
     if heat_price < pellet_price - hysteresis:
         return "varmepumpe", f"VP {heat_price:.2f} < pille {pellet_price:.2f}"
-    return "varmepumpe", "taet loeb - varmepumpen foretraekkes"
+    return "varmepumpe", "tæt løb — varmepumpen foretrækkes"
 
 
 class Planner:
@@ -206,7 +206,7 @@ class Planner:
                 decision,
                 reason=(
                     f"{why}; {margin:.2f} kr/kWh at hente om {best_when} min, "
-                    f"men kun {room:.1f} kWh plads - under minimumstraekket"
+                    f"men kun {room:.1f} kWh plads — under minimumstrækket"
                 ),
             )
 

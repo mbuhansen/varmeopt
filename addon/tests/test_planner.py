@@ -42,7 +42,7 @@ class SourceTest(unittest.TestCase):
         source, why = source_now(PELLET + 0.02, PELLET, 0.05)
 
         self.assertEqual(source, "varmepumpe")
-        self.assertIn("taet", why)
+        self.assertIn("tæt", why)
 
     def test_without_a_cop_we_assume_the_heat_pump(self):
         source, why = source_now(None, PELLET, 0.05)
@@ -116,7 +116,7 @@ class DecideTest(unittest.TestCase):
         )
 
         self.assertFalse(decision.charge)
-        self.assertIn("under minimumstraekket", decision.reason)
+        self.assertIn("under minimumstrækket", decision.reason)
 
     def test_a_full_store_cannot_be_charged(self):
         decision = planner().decide(plan(40, 240), cop_now=4.0, headroom_kwh=0.0)
