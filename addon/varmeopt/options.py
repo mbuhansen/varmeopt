@@ -92,6 +92,10 @@ _DEFAULTS: dict[str, object] = {
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
+    # Taender varmepumpen for brugsvandet? En kendsgerning, i modsaetning
+    # til at gaette det ud af at setpunktet ligger paa 56. Sammen med
+    # spaets egen kan de to ogsaa skelnes fra hinanden.
+    "entity_dhw_active": "binary_sensor.node_1_output_7",
     # Spabadet kalder med samme setpunkt som brugsvandet, så dets tilstand
     # forklarer hvorfor varmekurven pludselig springer til 56 °C.
     "entity_spa_temp": "sensor.tub_temperature",
@@ -203,6 +207,7 @@ class Options:
         return self.hp_charge_kw * self.hp_min_runtime_minutes / 60
     entity_vvb_top: str
     entity_vvb_bottom: str
+    entity_dhw_active: str
     entity_spa_temp: str
     entity_spa_target: str
     entity_spa_heater: str

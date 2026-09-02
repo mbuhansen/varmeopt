@@ -106,15 +106,18 @@ class Varmeopt:
         solar = await self._read_solar(ha, buffer)
 
         # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
-        # med et fast setpunkt. Den slags målinger siger intet om kurven, og
-        # de skal heller ikke forveksles med varmedrift senere.
-        mode = curve_note = None
-        if flow_temp is not None:
-            mode = "varmt vand / spa" if self.curve.is_dhw(flow_temp) else "varme"
-            if outdoor_temp is not None:
-                curve_note = self.curve.learn(outdoor_temp, flow_temp)
-                if not curve_note.startswith("ignoreret"):
-                    self._dirty = True
+        # med et fast setpunkt, og de maalinger hoerer ikke til i kurven.
+        # Udgangene siger det som en kendsgerning; setpunktet ville kun
+        # vaere et gaet.
+        dhw_active = await self._binary(ha, self.options.entity_dhw_active) if ha else None
+        mode, is_dhw = _mode(
+            dhw_active, vessels.get("spa_heating"), flow_temp, self.curve
+        )
+        curve_note = None
+        if flow_temp is not None and outdoor_temp is not None:
+            curve_note = self.curve.learn(outdoor_temp, flow_temp, is_dhw)
+            if not curve_note.startswith("ignoreret"):
+                self._dirty = True
 
         learn_note = "—"
         if flow_temp is not None and outdoor_temp is not None:
@@ -162,6 +165,7 @@ class Varmeopt:
             # ikke laver noget, uanset hvad COP-føleren måtte påstå.
             hp_lift=_difference(hp_flow, hp_return),
             mode=mode,
+            dhw_active=dhw_active,
             curve_note=curve_note,
             predicted_setpoint=(
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
@@ -328,6 +332,7 @@ class Varmeopt:
             "spa_temp": self.status.get("spa_temp"),
             "spa_maal": self.status.get("spa_target"),
             "spa_varmer": self.status.get("spa_heating"),
+            "varmtvand_koerer": self.status.get("dhw_active"),
         }
         for tank in buffer.measured:
             key = tank.name.lower()
@@ -766,6 +771,31 @@ async def _self_update_on_start(
     if await selfupdate.download(session) is not None:
         selfupdate.mark_boot()
         selfupdate.restart()
+
+
+def _mode(
+    dhw: bool | None, spa: bool | None, setpoint: float | None, curve: HeatCurve
+) -> tuple[str | None, bool | None]:
+    """Hvad varmepumpen laver, og om det hører til i varmekurven.
+
+    Udgangene fra anlægget er kendsgerninger, og de slår setpunktet: står
+    varmtvandsudgangen tændt, *er* det varmt vand, uanset hvad setpunktet
+    tilfældigvis viser. Kun når ingen af dem svarer, falder vi tilbage på at
+    genkende varmtvandssetpunktet på tallet — og så siger tilstanden selv at
+    den er gættet.
+
+    Returnerer også om målingen skal holdes ude af kurven. ``None`` betyder
+    "afgør det selv ud fra setpunktet".
+    """
+    if dhw or spa:
+        names = [n for n, on in (("varmt vand", dhw), ("spa", spa)) if on]
+        return " + ".join(names), True
+    if dhw is not None or spa is not None:
+        return "varme", False
+    if setpoint is None:
+        return None, None
+    guessed = "varmt vand / spa (gættet)" if curve.is_dhw(setpoint) else "varme"
+    return guessed, None
 
 
 def _round(value: float | None, digits: int) -> float | None:

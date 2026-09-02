@@ -63,9 +63,12 @@ Hvad der virker nu:
   Kurven udledes af de 17.176 migrerede målinger og behøver derfor ikke læres
   forfra over uger. Sammen med COP-tabellen oversætter den en vejrudsigt til en
   forventet virkningsgrad — byggestenen under blokplanlægning.
-- Holder varmtvand og spa udenfor kurven. De kalder med et fast setpunkt på
-  56 °C uafhængigt af vejret, og de står for **7.857 af de 17.176 målinger** —
-  næsten halvdelen af varmepumpens drift, og den halvdel med lavest COP.
+- Holder varmtvand og spa udenfor kurven, og **skelner de to fra hinanden**.
+  Anlæggets egne udgange siger det som en kendsgerning — setpunktet på 56 °C
+  ville kun være et gæt, og et gæt der fejlede den dag setpunktet blev ændret.
+  Tilsammen står de for **7.857 af de 17.176 målinger** — næsten halvdelen af
+  varmepumpens drift, og den halvdel med lavest COP. Hvor stor en del der er
+  spa frem for brugsvand, viser sig nu i data.
 - Læser varmepumpens egne følere, BT12 kondensatorafgang og BT3 retur, og fører
   løftet over kondensatoren med. Et løft nær nul betyder at pumpen ikke laver
   noget, uanset hvad den beregnede COP måtte påstå.
@@ -235,6 +238,7 @@ røres ikke — der læses kun.
 | `entity_solcast_*` | Solcast-integrationen | Prognose for resten af i dag og for i morgen |
 | `latitude`, `solar_thermal_*`, `pv_a_*`, `pv_b_*` | Fyn, 45° syd, 6,4 kW syd/20° + 4 kW vest/15° | Anlæggets geometri. Årstidsvariationen regnes heraf i stedet for at læres |
 | `solar_scale` | 0,43 | Startværdi for skalafaktoren, kalibreret på 24. august 2026. Modellen retter den selv |
+| `entity_dhw_active` | `binary_sensor.node_1_output_7` | Kører varmepumpen for brugsvandet? En kendsgerning frem for et gæt ud fra setpunktet |
 | `entity_spa_*` | `sensor.tub_temperature` m.fl. | Spabadets tilstand. Det kalder med samme setpunkt som brugsvandet og forklarer hvorfor kurven springer til 56 °C |
 | `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |

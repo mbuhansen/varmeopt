@@ -70,11 +70,20 @@ class HeatCurve:
 
     # --------------------------------------------------------------- læring
 
-    def learn(self, outdoor: float, setpoint: float) -> str:
-        """Indarbejd en observation. Returnerer en status der kan logges."""
+    def learn(
+        self, outdoor: float, setpoint: float, dhw: bool | None = None
+    ) -> str:
+        """Indarbejd en observation. Returnerer en status der kan logges.
+
+        ``dhw`` er en kendsgerning fra anlægget, når den findes: står
+        varmtvandsudgangen tændt, hører målingen ikke til i kurven,
+        uanset hvad setpunktet tilfældigvis står på. Uden den falder vi
+        tilbage på at genkende varmtvandssetpunktet på tallet — men det
+        er et gæt, og et gæt der ville fejle den dag setpunktet ændres.
+        """
         if not _finite(outdoor) or not _finite(setpoint):
             return "ignoreret: mangler data"
-        if self.is_dhw(setpoint):
+        if self.is_dhw(setpoint) if dhw is None else dhw:
             return f"ignoreret: varmtvand ({setpoint:.0f} °C)"
 
         key = round(outdoor)
