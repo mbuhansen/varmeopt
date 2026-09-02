@@ -29,8 +29,18 @@ Hvad der virker nu:
   `count: 0` på alt interpoleret, hvorfor blandingsgrenene aldrig udløste og
   opslaget faldt tilbage på fabrikkens TA-kurve overalt undtagen ved eksakte
   celletræf. Her føres et effektivt målingsantal med gennem interpolationen.
-- Web-UI gennem HA's ingress: aktuel COP med hele begrundelseskæden, og et
-  varmekort over den indlærte tabel hvor huller i dækningen er synlige.
+- Læser de otte tankfølere og regner lageret om til **kWh brugbar varme** over
+  radiatorkredsens fremløb, samt hvor meget plads der er tilbage op til loftet.
+  Tre dybdefølere pr. tank gør lagdelingen synlig — en tank med 58 °C i toppen
+  og 31 °C i bunden rummer noget helt andet end en der er 58 °C hele vejen ned,
+  og en enkelt temperatur kan ikke skelne. Falder en føler ud, dækker de
+  resterende lag tanken i stedet for at tælle som iskolde.
+- Fører forskellen mellem de to tankes middeltemperatur med. To parallelle
+  tanke bør lagdele ens; gør de ikke det, er det flowfordelingen der er skæv,
+  ikke varmen.
+- Web-UI gennem HA's ingress: aktuel COP med hele begrundelseskæden, et
+  varmekort over den indlærte tabel hvor huller i dækningen er synlige, og en
+  lagerside der tegner begge tanke lag for lag.
 
 ## Installation
 

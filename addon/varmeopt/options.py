@@ -21,6 +21,22 @@ _DEFAULTS: dict[str, object] = {
     "entity_flow_temp": "sensor.node_1_analog_logging_13",
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     "entity_outdoor_temp": "",
+    # Tre dybdefølere pr. tank plus én på hvert afgangsrør. Rækkefølgen top /
+    # midt / bund bærer betydning: lagdelingen kan ikke regnes uden at vide
+    # hvilken føler der sidder hvor.
+    "entity_tank_a_top": "sensor.node_1_input_4",
+    "entity_tank_a_mid": "sensor.node_1_input_5",
+    "entity_tank_a_bottom": "sensor.node_1_input_6",
+    "entity_tank_a_outlet": "sensor.node_1_input_9",
+    "entity_tank_b_top": "sensor.my_pv_ac_thor_9s_temperature_1",
+    "entity_tank_b_mid": "sensor.my_pv_ac_thor_9s_temperature_2",
+    "entity_tank_b_bottom": "sensor.my_pv_ac_thor_9s_temperature_3",
+    "entity_tank_b_outlet": "sensor.node_1_input_10",
+    "tank_liters": 1000,
+    # Under referencen er varmen ikke til nogen nytte — radiatorkredsen kører
+    # på godt 31 °C fremløb. Loftet er hvad varmepumpen realistisk når.
+    "tank_reference_temp": 30,
+    "tank_max_temp": 60,
 }
 
 
@@ -32,6 +48,37 @@ class Options:
     entity_flow_temp: str
     entity_cop_measured: str
     entity_outdoor_temp: str
+    entity_tank_a_top: str
+    entity_tank_a_mid: str
+    entity_tank_a_bottom: str
+    entity_tank_a_outlet: str
+    entity_tank_b_top: str
+    entity_tank_b_mid: str
+    entity_tank_b_bottom: str
+    entity_tank_b_outlet: str
+    tank_liters: int
+    tank_reference_temp: float
+    tank_max_temp: float
+
+    @property
+    def tanks(self) -> tuple[tuple[str, str, str, str, str], ...]:
+        """Pr. tank: navn, top, midt, bund, afgang."""
+        return (
+            (
+                "A",
+                self.entity_tank_a_top,
+                self.entity_tank_a_mid,
+                self.entity_tank_a_bottom,
+                self.entity_tank_a_outlet,
+            ),
+            (
+                "B",
+                self.entity_tank_b_top,
+                self.entity_tank_b_mid,
+                self.entity_tank_b_bottom,
+                self.entity_tank_b_outlet,
+            ),
+        )
 
     @classmethod
     def load(cls, path: Path | None = None) -> Options:
@@ -55,7 +102,10 @@ class Options:
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
             nodered_url=str(values["nodered_url"]).rstrip("/"),
-            entity_flow_temp=str(values["entity_flow_temp"]),
-            entity_cop_measured=str(values["entity_cop_measured"]),
-            entity_outdoor_temp=str(values["entity_outdoor_temp"]),
+            tank_liters=int(values["tank_liters"]),
+            tank_reference_temp=float(values["tank_reference_temp"]),
+            tank_max_temp=float(values["tank_max_temp"]),
+            # Alle entity_*-felter er strenge, så de kan tages under ét i
+            # stedet for at gentage den samme linje tolv gange.
+            **{k: str(values[k]) for k in _DEFAULTS if k.startswith("entity_")},
         )

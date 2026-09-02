@@ -1,6 +1,7 @@
 import asyncio
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from varmeopt.__main__ import Varmeopt
@@ -14,16 +15,16 @@ COP = "sensor.cop"
 
 
 def options(**over):
-    values = dict(
-        log_level="info",
-        cycle_seconds=60,
-        nodered_url="http://x:1880",
+    # Tag defaults fra Options selv i stedet for at ramse felterne op her.
+    # Ellers vælter hele denne fil hver gang der kommer en ny indstilling.
+    base = Options.load(Path("findes-ikke.json"))
+    return replace(
+        base,
         entity_flow_temp=FLOW,
         entity_cop_measured=COP,
         entity_outdoor_temp="",
+        **over,
     )
-    values.update(over)
-    return Options(**values)
 
 
 class FakeHa:
@@ -123,6 +124,28 @@ class CycleTest(unittest.TestCase):
         entity_id, value = self.ha.published[0]
         self.assertEqual(entity_id, "sensor.varmeopt_cop")
         self.assertIsInstance(value, float)
+
+    def test_tank_is_published_when_the_sensors_answer(self):
+        o = self.app.options
+        for eid, temp in (
+            (o.entity_tank_a_top, 60),
+            (o.entity_tank_a_mid, 45),
+            (o.entity_tank_a_bottom, 30),
+            (o.entity_tank_a_outlet, 58),
+        ):
+            self.ha._states[eid] = State(eid, str(temp), {}, "tank-1")
+        self.cycle()
+
+        published = dict(self.ha.published)
+        self.assertIn("sensor.varmeopt_lager", published)
+        self.assertGreater(published["sensor.varmeopt_lager"], 0)
+
+    def test_tank_is_skipped_when_no_sensor_answers(self):
+        # Standardopsætningen i denne test har ingen tankfølere i FakeHa.
+        self.cycle()
+
+        self.assertIsNone(self.app.status["tank"])
+        self.assertNotIn("sensor.varmeopt_lager", dict(self.ha.published))
 
     def test_outdoor_temp_falls_back_to_nodered(self):
         self.cycle()

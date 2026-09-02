@@ -25,6 +25,7 @@ from .migrate import COP_TABLE_FILE, load_cop_table
 from .nodered import NodeRed
 from .options import Options
 from .store import Store
+from .tank import Buffer, Tank
 from .web import WebUI
 
 log = logging.getLogger("varmeopt")
@@ -34,6 +35,7 @@ log = logging.getLogger("varmeopt")
 VERSION = os.environ.get("VARMEOPT_VERSION", "ukendt")
 
 SENSOR = "sensor.varmeopt_cop"
+SENSOR_TANK = "sensor.varmeopt_lager"
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
@@ -73,6 +75,8 @@ class Varmeopt:
             if flow_temp is None:
                 flow_temp = _as_number(context.get("flowTemp"))
 
+        buffer = await self._read_tank(ha)
+
         learn_note = "—"
         if flow_temp is not None and outdoor_temp is not None:
             if measured_cop is not None:
@@ -89,6 +93,7 @@ class Varmeopt:
             outdoor_temp=outdoor_temp,
             measured_cop=measured_cop,
             lookup=lookup,
+            tank=buffer,
             learn_note=learn_note,
             last_run=datetime.now(timezone.utc)
             .astimezone()
@@ -109,6 +114,16 @@ class Varmeopt:
                 await self._publish(ha, lookup)
         else:
             log.warning("springer cyklus over: %s", learn_note)
+
+        if buffer is not None and ha is not None:
+            log.info(
+                "lager %.1f kWh (%.0f %% fuldt), plads til %.1f kWh | %s",
+                buffer.stored_kwh,
+                buffer.charge_percent or 0.0,
+                buffer.headroom_kwh,
+                _tank_summary(buffer),
+            )
+            await self._publish_tank(ha, buffer)
 
         self._maybe_save()
 
@@ -132,6 +147,57 @@ class Varmeopt:
                 "maalinger": round(self.table.sample_count),
             },
         )
+
+    # -------------------------------------------------------------- varmelager
+
+    async def _read_tank(self, ha: HomeAssistant | None) -> Buffer | None:
+        """Læs de otte tankfølere. None hvis ingen af dem svarer."""
+        if ha is None:
+            return None
+
+        share = self.options.tank_liters / max(1, len(self.options.tanks))
+        tanks = [
+            Tank(
+                name=name,
+                liters=share,
+                top=await self._number(ha, top),
+                mid=await self._number(ha, mid),
+                bottom=await self._number(ha, bottom),
+                outlet=await self._number(ha, outlet),
+            )
+            for name, top, mid, bottom, outlet in self.options.tanks
+        ]
+        buffer = Buffer(
+            tuple(tanks),
+            self.options.tank_reference_temp,
+            self.options.tank_max_temp,
+        )
+        return buffer if buffer.covered else None
+
+    async def _publish_tank(self, ha: HomeAssistant, buffer: Buffer) -> None:
+        attributes: dict[str, Any] = {
+            "friendly_name": "Varmeopt lager",
+            "unit_of_measurement": "kWh",
+            "state_class": "measurement",
+            "icon": "mdi:water-boiler",
+            "plads_kwh": round(buffer.headroom_kwh, 2),
+            "fyldning_pct": _round(buffer.charge_percent, 1),
+            "middel_temp": _round(buffer.mean_temp, 1),
+            "leverer_op_til": _round(buffer.deliverable, 1),
+            "ubalance_k": _round(buffer.imbalance, 1),
+            "foelere": buffer.sensor_count,
+            "reference_temp": buffer.reference,
+            "loft_temp": buffer.ceiling,
+        }
+        for tank in buffer.measured:
+            key = tank.name.lower()
+            attributes[f"tank_{key}_top"] = tank.top
+            attributes[f"tank_{key}_midt"] = tank.mid
+            attributes[f"tank_{key}_bund"] = tank.bottom
+            attributes[f"tank_{key}_afgang"] = tank.outlet
+            attributes[f"tank_{key}_lagdeling"] = _round(tank.spread, 1)
+
+        await ha.set_state(SENSOR_TANK, round(buffer.stored_kwh, 2), attributes)
 
     def _learn(
         self,
@@ -249,6 +315,20 @@ async def run() -> None:
             log.info("stopper, gemmer COP-tabellen")
             app.save()
             await web.stop()
+
+
+def _round(value: float | None, digits: int) -> float | None:
+    return None if value is None else round(value, digits)
+
+
+def _tank_summary(buffer: Buffer) -> str:
+    """Kompakt linje til loggen: "A 58/44/31° afg 57  B 55/43/30° afg 54"."""
+    parts = []
+    for tank in buffer.measured:
+        temps = "/".join(f"{t:.0f}" for t in tank.layers)
+        outlet = f" afg {tank.outlet:.0f}" if tank.outlet is not None else ""
+        parts.append(f"{tank.name} {temps}°{outlet}")
+    return "  ".join(parts)
 
 
 def _as_number(value: Any) -> float | None:

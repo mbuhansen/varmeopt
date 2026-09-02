@@ -66,6 +66,22 @@ tbody th { left:0; z-index:1; }
 code { font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;
        background:#8881; padding:1px 5px; border-radius:4px; }
 .warn { color:var(--accent); }
+.tanks { display:flex; gap:16px; flex-wrap:wrap; align-items:flex-start; }
+.tank { flex:1 1 220px; min-width:200px; }
+.tank h3 { font-size:13px; margin:0 0 8px; letter-spacing:.03em; }
+.vessel { border:1px solid var(--line); border-radius:10px; overflow:hidden;
+          box-shadow:0 1px 2px #0001; }
+.layer { padding:15px 13px; color:#fff; display:flex;
+         justify-content:space-between; align-items:baseline;
+         font-weight:600; font-variant-numeric:tabular-nums; }
+.layer span { font-size:12px; letter-spacing:.05em; text-transform:uppercase;
+              opacity:.9; font-weight:500; }
+.layer b { font-size:17px; font-weight:600; }
+.layer.none { background:#8883; color:var(--muted); }
+.foot { display:grid; grid-template-columns:auto 1fr; gap:5px 14px;
+        margin:10px 2px 0; font-size:12px; }
+.foot dt { color:var(--muted); }
+.foot dd { margin:0; font-variant-numeric:tabular-nums; }
 """
 
 _SOURCE_LABEL = {
@@ -85,6 +101,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
         f'<a href="{href}" class="{"on" if key == active else ""}">{label}</a>'
         for key, href, label in (
             ("now", "./", "Nu"),
+            ("tank", "./tank", "Lager"),
             ("cop", "./cop", "COP-tabel"),
         )
     )
@@ -95,6 +112,15 @@ def _page(title: str, active: str, body: str) -> web.Response:
         f"<main><nav>{nav}</nav>{body}</main></html>"
     )
     return web.Response(text=doc, content_type="text/html", charset="utf-8")
+
+
+def _temp_colour(temp: float) -> str:
+    """Blå ved 25 °C, rød ved 65 °C. Lagdelingen skal kunne ses på farven alene."""
+    t = max(0.0, min(1.0, (temp - 25.0) / 40.0))
+    r = int(56 + (196 - 56) * t)
+    g = int(108 + (76 - 108) * t)
+    b = int(166 + (56 - 166) * t)
+    return f"rgb({r},{g},{b})"
 
 
 def _cop_colour(cop: float) -> str:
@@ -125,6 +151,7 @@ class WebUI:
     async def start(self) -> None:
         app = web.Application()
         app.router.add_get("/", self.now)
+        app.router.add_get("/tank", self.tank)
         app.router.add_get("/cop", self.cop)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
@@ -176,6 +203,75 @@ class WebUI:
         )
         return _page("Nu", "now", body)
 
+    async def tank(self, _request: web.Request) -> web.Response:
+        buffer = self._status().get("tank")
+
+        if buffer is None:
+            return _page(
+                "Lager",
+                "tank",
+                "<h1>Varmelager</h1><p class='sub'>Ingen af tankfølerne svarer "
+                "endnu. Tjek entity-id'erne i add-on-konfigurationen.</p>",
+            )
+
+        cards = []
+        for t in buffer.tanks:
+            bands = []
+            for label, temp in (("Top", t.top), ("Midt", t.mid), ("Bund", t.bottom)):
+                if temp is None:
+                    bands.append(f'<div class="layer none"><span>{label}</span><b>—</b></div>')
+                else:
+                    bands.append(
+                        f'<div class="layer" style="background:{_temp_colour(temp)}">'
+                        f"<span>{label}</span><b>{temp:.1f}°</b></div>"
+                    )
+            foot = [
+                ("Afgang", _fmt(t.outlet, "°C", 1)),
+                ("Lagdeling", _fmt(t.spread, "K", 1)),
+                ("Middel", _fmt(t.mean_temp, "°C", 1)),
+                ("Lagret", f"{t.stored_kwh(buffer.reference):.1f} kWh" if t.covered else "—"),
+            ]
+            cards.append(
+                f'<div class="tank"><h3>Tank {_esc(t.name)}</h3>'
+                f'<div class="vessel">{"".join(bands)}</div>'
+                f'<dl class="foot">'
+                + "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in foot)
+                + "</dl></div>"
+            )
+
+        rows = [
+            ("Plads til", f"{buffer.headroom_kwh:.1f} kWh"),
+            ("Fyldning", _fmt(buffer.charge_percent, "%", 0)),
+            ("Middeltemperatur", _fmt(buffer.mean_temp, "°C", 1)),
+            ("Leverer op til", _fmt(buffer.deliverable, "°C", 1)),
+            ("Ubalance mellem tanke", _fmt(buffer.imbalance, "K", 1)),
+            ("Følere der svarer", f"{buffer.sensor_count} af {3 * len(buffer.tanks)} i dybden"),
+            ("Regnet over", f"{buffer.reference:.0f}–{buffer.ceiling:.0f} °C"),
+        ]
+        dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+
+        # Ubalance over 5 K mellem to parallelle tanke er ikke et varmeproblem
+        # men et flowproblem, og det er værd at sige højt.
+        warn = ""
+        if buffer.imbalance is not None and buffer.imbalance > 5:
+            warn = (
+                f'<p class="legend warn">Tankene står {buffer.imbalance:.1f} K fra '
+                "hinanden. To parallelle tanke bør lagdele ens — så stor en forskel "
+                "peger på skæv flowfordeling, ikke på varmen.</p>"
+            )
+
+        body = (
+            "<h1>Varmelager</h1>"
+            f'<p class="sub">{buffer.sensor_count} dybdefølere i {len(buffer.tanks)} tanke · '
+            f"{sum(t.liters for t in buffer.tanks):.0f} liter</p>"
+            f'<div class="card"><div class="big">{buffer.stored_kwh:.1f} kWh</div>'
+            '<div class="sub" style="margin:0">brugbar varme over '
+            f'{buffer.reference:.0f} °C</div></div>'
+            f'<div class="tanks">{"".join(cards)}</div>'
+            f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
+        )
+        return _page("Lager", "tank", body)
+
     async def cop(self, _request: web.Request) -> web.Response:
         table = self._table()
         flows = table.flow_temps
@@ -222,9 +318,9 @@ class WebUI:
         return _page("COP-tabel", "cop", body)
 
 
-def _fmt(value: Any, unit: str = "") -> str:
+def _fmt(value: Any, unit: str = "", digits: int = 2) -> str:
     if value is None:
         return "—"
     if isinstance(value, float):
-        return f"{value:.2f}{' ' + unit if unit else ''}"
+        return f"{value:.{digits}f}{' ' + unit if unit else ''}"
     return f"{_esc(value)}{' ' + unit if unit else ''}"
