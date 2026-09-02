@@ -352,7 +352,16 @@ class WebUI:
             )
 
         top = max(r.electricity for r in rows) or 1.0
-        start = datetime.now().astimezone()
+
+        # Predbats rækker følger urets hele og halve timer, og den første er
+        # den vi står midt i — den er altså kortere end en halv time. Derfor
+        # rundes der ned til slottets begyndelse i stedet for at regne fra nu,
+        # ellers ville tabellen vise 14:17, 14:47, 15:17.
+        clock_now = datetime.now().astimezone()
+        start = clock_now.replace(
+            minute=0 if clock_now.minute < 30 else 30, second=0, microsecond=0
+        )
+        left = 30 - (clock_now.minute % 30)
 
         cells = []
         for row in rows:
@@ -362,7 +371,9 @@ class WebUI:
 
             mark = ""
             if row.now:
-                mark = '<span class="tag">nu</span>'
+                # Hvor længe der er tilbage af den halvtime vi står i — altså
+                # hvor længe prisen holder.
+                mark = f'<span class="tag">nu · {left} min</span>'
             elif row.target:
                 mark = '<span class="tag target">hertil</span>'
 
