@@ -42,7 +42,7 @@ Hvad der virker nu:
   ACthor kan presse tankene til 90. «Plads til varmepumpe» og «plads i alt» er
   derfor to forskellige tal, og er tankene allerede over 60, er en
   blokopladning ikke bare unødvendig — den er umulig.
-- Regner **marginalprisen** paa strøm — nu og i hver halvtime fremad — af
+- Regner **marginalprisen** på strøm — nu og i hver halvtime fremad — af
   Predbats plan, læst direkte fra HA. Spotprisen er ikke svaret: strøm fra
   nettet, strøm fra et batteri der alligevel lades billigt om to timer, og
   strøm man kunne have solgt er tre forskellige tal i det samme minut. Node-REDs
