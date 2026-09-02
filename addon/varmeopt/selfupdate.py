@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 import tarfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -218,6 +219,12 @@ async def download(session: aiohttp.ClientSession) -> Revision | None:
 
 _BOOT_MARKER = ".starter"
 
+# Hvor længe mærket må stå, før vi konkluderer at opstarten aldrig lykkedes.
+# Mærket sættes lige før genstarten, så den nye proces finder *sit eget*
+# mærke et sekund senere — uden det her ville den altid tro at den fejlede og
+# rulle den kode tilbage den lige selv hentede.
+BOOT_GRACE_SECONDS = 180
+
 
 def mark_boot() -> None:
     try:
@@ -227,8 +234,18 @@ def mark_boot() -> None:
         log.warning("kunne ikke sætte boot-mærke: %s", exc)
 
 
+def boot_marker_age() -> float | None:
+    """Mærkets alder i sekunder, eller None hvis der ikke er et."""
+    try:
+        return time.time() - (code_dir() / _BOOT_MARKER).stat().st_mtime
+    except OSError:
+        return None
+
+
 def boot_failed() -> bool:
-    return (code_dir() / _BOOT_MARKER).exists()
+    """Har en opstart vitterligt hængt, eller er det bare vores egen genstart?"""
+    age = boot_marker_age()
+    return age is not None and age > BOOT_GRACE_SECONDS
 
 
 def clear_boot() -> None:
@@ -260,8 +277,15 @@ def restart() -> None:
 
     execv beholder container og PID, så Supervisor ser ikke add-on'en falde —
     den bemærker slet ingenting, hvilket er hele pointen.
+
+    Der startes gennem startskallen når den findes, så dens genopretning også
+    kører ved en selvopdateret genstart og ikke kun ved en containerstart.
     """
     log.info("genstarter for at køre den hentede kode")
     sys.stdout.flush()
     sys.stderr.flush()
+
+    bootstrap = os.environ.get("VARMEOPT_BOOTSTRAP")
+    if bootstrap and Path(bootstrap).is_file():
+        os.execv(sys.executable, [sys.executable, bootstrap])
     os.execv(sys.executable, [sys.executable, "-m", PACKAGE])

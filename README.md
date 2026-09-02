@@ -99,11 +99,19 @@ udgave vinder over den indbyggede. Siden viser hvilken af de to der kører.
 i `requirements.txt` og ændringer i Dockerfilen hører til imaget og kræver
 stadig en almindelig opdatering gennem butikken.
 
-To sikkerhedsnet: den hentede kode oversættes før der skiftes til den, så en
-halv commit aldrig bliver det der starter, og der sættes et mærke før
-genstarten som først ryddes når web-UI'et er oppe. Findes mærket ved opstart,
-nåede sidste forsøg aldrig frem, og forrige udgave rulles tilbage automatisk —
-ellers ville en ImportError sende add-on'en i genstartsløkke.
+Tre sikkerhedsnet, fordi en fejl her ellers kun kan rettes fra en terminal:
+
+1. **Koden oversættes før der skiftes til den**, så en halv commit aldrig
+   bliver det der starter. Arkivets stier filtreres også — det kommer fra vores
+   eget repo, men et tar-arkiv er stadig fremmed input.
+2. **Et mærke sættes før genstarten** og ryddes når web-UI'et er oppe. Står det
+   der stadig efter tre minutter, er opstarten aldrig lykkedes, og forrige
+   udgave hentes frem igen. Henstanden er nødvendig: mærket sættes lige før
+   genstarten, så den nye proces finder sit *eget* mærke et sekund senere.
+3. **Startskallen `bootstrap.py` ligger i imaget** og hentes aldrig ned. Den
+   kører før pakken importeres, så den kan rydde op selv når den hentede kode
+   ikke engang kan importeres — det er det tilfælde app'ens egen genopretning
+   ikke kan nå at gribe.
 
 `auto_update` gør det samme ved hver opstart. Den er slået fra som
 udgangspunkt: det kører kode fra internettet uden et menneske imellem, og den
@@ -138,6 +146,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
+| `bootstrap.py` | Startskal i imaget; rydder op efter en mislykket selvopdatering |
 | `store.py` | Atomisk JSON-lager i `/data` |
 | `nodered.py` | Read-only klient mod Node-REDs admin-API |
 | `migrate.py` | Engangsflytning af COP-tabellen |

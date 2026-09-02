@@ -2,6 +2,7 @@ import io
 import os
 import tarfile
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -66,14 +67,34 @@ class CompileGateTest(CodeDirTest):
 
 
 class BootMarkerTest(CodeDirTest):
-    def test_marker_survives_until_it_is_cleared(self):
+    def _age_marker(self, seconds: float) -> None:
+        path = self.tmp / selfupdate._BOOT_MARKER
+        stamp = time.time() - seconds
+        os.utime(path, (stamp, stamp))
+
+    def test_a_marker_we_just_set_is_not_a_failure(self):
+        # Kernen i fejlen: maerket saettes lige foer genstarten, saa den nye
+        # proces finder sit eget maerke et sekund senere. Uden henstand ville
+        # den rulle den kode tilbage som den lige selv hentede.
+        selfupdate.mark_boot()
+
         self.assertFalse(selfupdate.boot_failed())
 
+    def test_a_marker_that_has_stood_too_long_is_a_failure(self):
         selfupdate.mark_boot()
+        self._age_marker(selfupdate.BOOT_GRACE_SECONDS + 60)
+
         self.assertTrue(selfupdate.boot_failed())
 
-        selfupdate.clear_boot()
+    def test_no_marker_is_never_a_failure(self):
         self.assertFalse(selfupdate.boot_failed())
+        self.assertIsNone(selfupdate.boot_marker_age())
+
+    def test_marker_is_gone_after_clearing(self):
+        selfupdate.mark_boot()
+        selfupdate.clear_boot()
+
+        self.assertIsNone(selfupdate.boot_marker_age())
 
     def test_clearing_a_marker_that_is_not_there_is_harmless(self):
         selfupdate.clear_boot()  # må ikke rejse
