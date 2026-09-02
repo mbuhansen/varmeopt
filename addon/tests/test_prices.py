@@ -100,6 +100,47 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 1.0, places=9)
         self.assertIn("lades om", price.reason)
 
+    def test_a_low_battery_is_priced_at_its_own_average(self):
+        # Er der ikke energi nok til baade at varme og saelge, er eksporten
+        # ikke et reelt alternativ. Betingelsen fandtes i Node-RED som
+        # currentSOC > 40 og faldt paa gulvet ved portningen.
+        p = plan(
+            row(soc=25),
+            row(),
+            row(state="exp", export_rate=160),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.0, places=9)
+        self.assertIn("frit", price.reason)
+
+    def test_a_full_battery_can_afford_to_be_valued_against_export(self):
+        p = plan(
+            row(soc=75),
+            row(),
+            row(state="exp", export_rate=160),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.60 * 0.90, places=9)
+        self.assertIn("SOC 75 %", price.reason)
+
+    def test_an_unknown_soc_is_assumed_to_be_enough(self):
+        p = plan(
+            {"state": "", "import_rate": 200, "export_rate": 80},
+            row(),
+            row(state="exp", export_rate=160),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertIn("vaerdisat mod eksport", price.reason)
+
     def test_an_export_that_pays_less_than_the_battery_is_not_worth_saving_for(self):
         p = plan(row(), row(state="exp", export_rate=60), battery_average=1.20)
 

@@ -40,6 +40,15 @@ EXPORT_SOON_MINUTES = 180
 # Node-RED bruger.
 EXPORT_DISCOUNT = 0.90
 
+# Under denne ladetilstand vaerdisaettes batteriet ikke mod en kommende
+# eksport. Er der ikke energi nok til baade at varme og saelge, er eksporten
+# ikke et reelt alternativ, og saa er batteriets egen pris den rigtige.
+# Node-RED har samme graense; den faldt paa gulvet ved portningen.
+MIN_SOC_FOR_EXPORT = 40.0
+
+# Kender vi ikke ladetilstanden, antages den samme vaerdi som Node-RED bruger.
+ASSUMED_SOC = 50.0
+
 SLOT_MINUTES = 30
 
 
@@ -247,14 +256,20 @@ class Plan:
         # kan varmepumpen lave varme til under pillefyrets pris af den, er
         # det bedre at bruge den end at saelge den, og saa bliver den brugt.
         if next_export is not None and next_export.export_price is not None:
+            soc = slot.soc_percent if slot.soc_percent is not None else ASSUMED_SOC
             soon = next_export.minutes_ahead - slot.minutes_ahead <= EXPORT_SOON_MINUTES
             no_charge_first = next_charge is None or next_charge.index > next_export.index
             worth_it = next_export.export_price > self.battery_average
-            if soon and no_charge_first and worth_it:
+            # Er batteriet lavt, raekker energien ikke til baade at varme og
+            # saelge. Saa er eksporten ikke et reelt alternativ, og batteriets
+            # egen pris er den rigtige.
+            enough = soc > MIN_SOC_FOR_EXPORT
+            if soon and no_charge_first and worth_it and enough:
                 minutes = next_export.minutes_ahead - slot.minutes_ahead
                 return Price(
                     next_export.export_price * EXPORT_DISCOUNT,
-                    f"batteri: vaerdisat mod eksport om {minutes} min",
+                    f"batteri: vaerdisat mod eksport om {minutes} min "
+                    f"(SOC {soc:.0f} %)",
                 )
 
         # Fyldes batteriet billigt snart, kan det bruges frit - det bliver
