@@ -68,6 +68,47 @@ Hvad der virker nu:
   varmekort over den indlærte tabel hvor huller i dækningen er synlige, og en
   lagerside der tegner begge tanke lag for lag.
 
+## Strategi: de to bånd
+
+Varmepumpen kan kun løfte tankene til omkring 60 °C. Solvarmen og ACthor når
+90. Det deler lageret i to bånd på hver ca. 34,5 kWh, og det er **ikke** ligegyldigt
+hvem der tager hvilket.
+
+Lader solen 30–60-båndet først, står varmepumpen tilbage uden plads og kan
+ikke bidrage. Lader varmepumpen derimod sit eget bånd mens strømmen er billig,
+har solen stadig 60–90 tilbage — som kun den kan nå. To kilder i hvert sit
+bånd giver reelt 69 kWh lager i stedet for 34,5.
+
+**Men det står og falder med lagdelingen.** Solvarmens virkningsgrad falder med
+kollektortemperaturen, og den arbejder mod tankens bund. Fylder varmepumpen
+hele tanken til 60 °C, ser solen 60 °C i bunden i stedet for godt 30, og dens
+ydelse kollapser.
+
+Derfor: **lad varmepumpen fylde oppefra, og stop mens bunden stadig er kold.**
+Det er den regel de seks dybdefølere er nødvendige for — uden dem kan man ikke
+skelne «tanken er 50 °C» fra «toppen er 60, bunden er 35», og det er præcis den
+forskel der afgør om solen har noget at arbejde med.
+
+**Hvor meget** varmepumpen må tage, afhænger så af hvor meget sol der kommer.
+Er dagen overskyet, laver solvarmen ikke nok til at fylde noget bånd, og
+varmepumpen kan tage hele 30–60 uden at fortrænge en kilowatt-time. Bliver det
+en dag som i går, hvor solvarmen lavede 20 kWh, skal der stå plads tilbage.
+
+Reglen findes derfor i to udgaver, og kun den første kan bruges i dag:
+
+1. **Uden prognose:** fyld oppefra og stop før bunden varmes. Det beskytter
+   solvarmens virkningsgrad uanset vejret, men siger intet om hvor meget der
+   bør lades.
+2. **Med prognose:** dimensionér opladningen efter dagens forventede
+   solvarmeudbytte. Det kræver et tal vi ikke har endnu — se nedenfor.
+
+Predbat kører i forvejen på en PV-prognose, og solvarme og solceller drives af
+den samme indstråling. Sammenhængen mellem de to kan læres af data på samme
+måde som varmekurven blev det, men i modsætning til varmekurven ligger den ikke
+allerede i noget vi har migreret: den skal opsamles over nogle uger, og
+opsamlingen begynder først nu, hvor `sensor.solvarme_produktion` bliver læst
+hvert minut.
+
 ## Installation
 
 Add-on'en installeres som et eget add-on-repository:
