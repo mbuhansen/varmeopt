@@ -18,9 +18,22 @@ _DEFAULTS: dict[str, object] = {
     "log_level": "info",
     "cycle_seconds": 60,
     "nodered_url": "http://192.168.1.159:1880",
+    # UVR'ens beregnede setpunkt, ikke en måling: det er kurven anlægget
+    # styrer efter, og den akse COP-tabellen er indekseret på.
     "entity_flow_temp": "sensor.node_1_analog_logging_13",
+    # Det faktisk målte fremløb på centralvarmen. Forskellen til setpunktet
+    # siger om anlægget kan følge med.
+    "entity_flow_measured": "sensor.node_1_dl_bus_1",
+    # Varmepumpens egne følere. BT12 er kondensatorafgangen — den fysisk
+    # rigtige temperatur for COP, målt før hydraulikken blander noget — og
+    # BT12 minus BT3 er løftet over kondensatoren, altså hvor hårdt den kører.
+    "entity_hp_flow": "sensor.nibe_eb101_ep14_bt12_condensor_out",
+    "entity_hp_return": "sensor.nibe_eb101_ep14_bt3_return_temp",
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     "entity_outdoor_temp": "",
+    # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
+    # dette setpunkt. De målinger hører ikke til i kurven.
+    "dhw_setpoint": 56,
     # Tre dybdefølere pr. tank plus én på hvert afgangsrør. Rækkefølgen top /
     # midt / bund bærer betydning: lagdelingen kan ikke regnes uden at vide
     # hvilken føler der sidder hvor.
@@ -56,8 +69,12 @@ class Options:
     cycle_seconds: int
     nodered_url: str
     entity_flow_temp: str
+    entity_flow_measured: str
+    entity_hp_flow: str
+    entity_hp_return: str
     entity_cop_measured: str
     entity_outdoor_temp: str
+    dhw_setpoint: float
     entity_tank_a_top: str
     entity_tank_a_mid: str
     entity_tank_a_bottom: str
@@ -114,6 +131,7 @@ class Options:
             cycle_seconds=int(values["cycle_seconds"]),
             nodered_url=str(values["nodered_url"]).rstrip("/"),
             auto_update=_as_bool(values["auto_update"]),
+            dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),
             tank_reference_temp=float(values["tank_reference_temp"]),
             tank_max_temp=float(values["tank_max_temp"]),

@@ -12,12 +12,14 @@ Alpine-container skal ikke slaebe rundt paa den afhaengighed.
 from __future__ import annotations
 
 import html
+import math
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
 from . import VERSION, selfupdate
 from .cop import CopTable
+from .curve import HeatCurve
 
 PORT = 8099
 
@@ -95,6 +97,11 @@ button:focus-visible, a:focus-visible { outline:2px solid var(--accent);
         margin:0 0 16px; }
 """
 
+# Kurvens egen farve. Fast frem for currentColor, fordi linjen er det ene
+# element på siden der bærer betydning — valgt så den holder på både lys og
+# mørk bund.
+_CURVE_INK = "#4a90c2"
+
 _SOURCE_LABEL = {
     "exact": ("Indlært", "#1f7a4d"),
     "interp": ("Interpoleret", "#2f6ea8"),
@@ -113,6 +120,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
         for key, href, label in (
             ("now", "./", "Nu"),
             ("tank", "./tank", "Lager"),
+            ("curve", "./curve", "Varmekurve"),
             ("cop", "./cop", "COP-tabel"),
             ("system", "./system", "System"),
         )
@@ -152,12 +160,14 @@ class WebUI:
         port: int = PORT,
         check: Callable[[], Awaitable[Any]] | None = None,
         update: Callable[[], Awaitable[str]] | None = None,
+        curve: Callable[[], HeatCurve] | None = None,
     ) -> None:
         self._status = status
         self._table = table
         self._port = port
         self._check = check
         self._update = update
+        self._curve = curve
         self._runner: web.AppRunner | None = None
 
     @property
@@ -169,6 +179,7 @@ class WebUI:
         app.router.add_get("/", self.now)
         app.router.add_get("/tank", self.tank)
         app.router.add_get("/cop", self.cop)
+        app.router.add_get("/curve", self.curve)
         app.router.add_get("/system", self.system)
         app.router.add_post("/system", self.system)
         self._runner = web.AppRunner(app)
@@ -289,6 +300,132 @@ class WebUI:
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
         )
         return _page("Lager", "tank", body)
+
+    async def curve(self, _request: web.Request) -> web.Response:
+        curve = self._curve() if self._curve is not None else None
+
+        if curve is None or curve.point_count < 2:
+            return _page(
+                "Varmekurve",
+                "curve",
+                "<h1>Varmekurve</h1><p class='sub'>For få punkter til at tegne "
+                "en kurve endnu.</p>",
+            )
+
+        temps = curve.outdoor_temps
+        lo, hi = temps[0], temps[-1]
+        setpoints = [curve.point(u).setpoint for u in temps]
+        ymin = math.floor(min(setpoints)) - 2
+        ymax = math.ceil(max(setpoints)) + 2
+
+        width, height = 720, 300
+        left, right, top, bottom = 46, 14, 14, 34
+
+        def sx(outdoor: float) -> float:
+            return left + (outdoor - lo) / (hi - lo) * (width - left - right)
+
+        def sy(temp: float) -> float:
+            return top + (ymax - temp) / (ymax - ymin) * (height - top - bottom)
+
+        grid = []
+        for value in range(ymin, ymax + 1):
+            if value % 5:
+                continue
+            y = sy(value)
+            grid.append(
+                f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" '
+                'stroke="currentColor" stroke-opacity=".13"/>'
+                f'<text x="{left - 7}" y="{y + 3.5:.1f}" text-anchor="end" '
+                'font-size="10" fill="currentColor" opacity=".55">'
+                f"{value}</text>"
+            )
+
+        ticks = []
+        for outdoor in temps:
+            if outdoor % 5:
+                continue
+            ticks.append(
+                f'<text x="{sx(outdoor):.1f}" y="{height - bottom + 17}" '
+                'text-anchor="middle" font-size="10" fill="currentColor" '
+                f'opacity=".55">{outdoor}</text>'
+            )
+
+        line = " ".join(f"{sx(u):.1f},{sy(curve.point(u).setpoint):.1f}" for u in temps)
+        dots = []
+        for outdoor in temps:
+            point = curve.point(outdoor)
+            # Punkter med få målinger tegnes svagt, så tynde steder ses.
+            alpha = min(1.0, 0.28 + point.count / 300)
+            dots.append(
+                f'<circle cx="{sx(outdoor):.1f}" cy="{sy(point.setpoint):.1f}" r="3.2" '
+                f'fill="{_CURVE_INK}" opacity="{alpha:.2f}">'
+                f"<title>Ude {outdoor} °C: setpunkt {point.setpoint:.1f} °C, "
+                f"n={point.count:.0f}</title></circle>"
+            )
+
+        chart = (
+            f'<svg viewBox="0 0 {width} {height}" role="img" '
+            'aria-label="UVR-ens varmekurve: fremloebssetpunkt som funktion af '
+            'udetemperatur, med antal maalinger bag hvert punkt">'
+            f'{"".join(grid)}'
+            f'<polyline points="{line}" fill="none" stroke="{_CURVE_INK}" '
+            'stroke-width="2" stroke-linejoin="round"/>'
+            f'{"".join(dots)}{"".join(ticks)}'
+            f'<text x="{left}" y="{height - 4}" font-size="10" fill="currentColor" '
+            'opacity=".55">udetemperatur °C</text></svg>'
+        )
+
+        # Selve pointen: kurven plus COP-tabellen giver et gæt på COP ved en
+        # udetemperatur vi endnu ikke har haft — det en vejrudsigt skal bruge.
+        table = self._table()
+        rows = []
+        for outdoor in range(lo, hi + 1):
+            if outdoor % 5:
+                continue
+            setpoint = curve.predict(outdoor)
+            if setpoint is None:
+                continue
+            lookup = table.lookup(setpoint, outdoor)
+            label, colour = _SOURCE_LABEL.get(lookup.source, (lookup.source, "#888"))
+            rows.append(
+                f"<tr><td>{outdoor} °C</td><td>{setpoint:.1f} °C</td>"
+                f"<td>{lookup.cop:.2f}</td>"
+                f'<td style="color:{colour}">{_esc(label)}</td>'
+                f"<td>{curve.confidence(outdoor):.0f}</td></tr>"
+            )
+
+        status = self._status()
+        now_rows = [
+            ("Udetemperatur nu", _fmt(status.get("outdoor_temp"), "°C", 1)),
+            ("Setpunkt nu", _fmt(status.get("flow_temp"), "°C", 1)),
+            ("Kurven forudsiger", _fmt(status.get("predicted_setpoint"), "°C", 1)),
+            ("Målt fremløb, centralvarme", _fmt(status.get("flow_measured"), "°C", 1)),
+            ("Varmepumpe frem, BT12", _fmt(status.get("hp_flow"), "°C", 1)),
+            ("Varmepumpe retur, BT3", _fmt(status.get("hp_return"), "°C", 1)),
+            ("Løft over kondensator", _fmt(status.get("hp_lift"), "K", 1)),
+            ("Tilstand", _esc(status.get("mode") or "—")),
+            ("Sidste kurvelæring", _esc(status.get("curve_note") or "—")),
+        ]
+        dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in now_rows)
+
+        body = (
+            "<h1>Varmekurve</h1>"
+            f'<p class="sub">{curve.point_count} punkter fra {lo} til {hi} °C ude · '
+            f"{curve.sample_count:.0f} målinger bag · varmtvand ved "
+            f"{curve.dhw_setpoint:.0f} °C er holdt udenfor</p>"
+            f'<div class="card">{chart}</div>'
+            f'<h2>Nu</h2><div class="card"><dl>{dl}</dl></div>'
+            "<h2>Forudsagt COP</h2>"
+            '<div class="scroll"><table style="font-size:13px">'
+            "<thead><tr><th>Ude</th><th>Setpunkt</th><th>COP</th>"
+            "<th>Kilde</th><th>n</th></tr></thead>"
+            f"<tbody>{''.join(rows)}</tbody></table></div>"
+            '<p class="legend">Kurven oversætter en vejrudsigt til et fremløb, og '
+            "COP-tabellen oversætter fremløbet til en virkningsgrad. Sammen er de "
+            "det, en blokplan skal bruge for at vide hvad varmen kommer til at koste "
+            "i morgen.</p>"
+        )
+        return _page("Varmekurve", "curve", body)
 
     async def system(self, request: web.Request) -> web.Response:
         note = ""

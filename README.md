@@ -29,6 +29,19 @@ Hvad der virker nu:
   `count: 0` på alt interpoleret, hvorfor blandingsgrenene aldrig udløste og
   opslaget faldt tilbage på fabrikkens TA-kurve overalt undtagen ved eksakte
   celletræf. Her føres et effektivt målingsantal med gennem interpolationen.
+- Modellerer **UVR'ens varmekurve**: udetemperatur ind, fremløbssetpunkt ud.
+  `sensor.node_1_analog_logging_13` er ikke en måling, men det setpunkt UVR'en
+  regner sig frem til — det kan ses direkte i de indlærte data, hvor det falder
+  glat fra 49 °C ved −5 °C ude til 24 °C ved +24 °C og så lægger sig fladt.
+  Kurven udledes af de 17.176 migrerede målinger og behøver derfor ikke læres
+  forfra over uger. Sammen med COP-tabellen oversætter den en vejrudsigt til en
+  forventet virkningsgrad — byggestenen under blokplanlægning.
+- Holder varmtvand og spa udenfor kurven. De kalder med et fast setpunkt på
+  56 °C uafhængigt af vejret, og de står for **7.857 af de 17.176 målinger** —
+  næsten halvdelen af varmepumpens drift, og den halvdel med lavest COP.
+- Læser varmepumpens egne følere, BT12 kondensatorafgang og BT3 retur, og fører
+  løftet over kondensatoren med. Et løft nær nul betyder at pumpen ikke laver
+  noget, uanset hvad den beregnede COP måtte påstå.
 - Læser de otte tankfølere og regner lageret om til **kWh brugbar varme** over
   radiatorkredsens fremløb, samt hvor meget plads der er tilbage op til loftet.
   Tre dybdefølere pr. tank gør lagdelingen synlig — en tank med 58 °C i toppen
@@ -59,8 +72,12 @@ røres ikke — der læses kun.
 |-------|----------|-----------|
 | `cycle_seconds` | 60 | Hvor ofte der læres og slås op |
 | `nodered_url` | `http://192.168.1.159:1880` | Node-REDs admin-API |
-| `entity_flow_temp` | `sensor.node_1_analog_logging_13` | Fremløbstemperatur |
-| `entity_cop_measured` | `sensor.node_1_analog_logging_12` | Målt COP fra UVR'en |
+| `entity_flow_temp` | `sensor.node_1_analog_logging_13` | UVR'ens **beregnede** fremløbssetpunkt. Det er den akse COP-tabellen er indekseret på |
+| `entity_flow_measured` | `sensor.node_1_dl_bus_1` | Målt fremløb på centralvarmen. Afvigelsen fra setpunktet siger om anlægget kan følge med |
+| `entity_hp_flow` | `sensor.nibe_eb101_ep14_bt12_condensor_out` | Varmepumpens kondensatorafgang |
+| `entity_hp_return` | `sensor.nibe_eb101_ep14_bt3_return_temp` | Varmepumpens retur |
+| `entity_cop_measured` | `sensor.node_1_analog_logging_12` | COP beregnet i UVR'en af to følere og en flowmåler |
+| `dhw_setpoint` | 56 | Setpunktet varmtvandsbeholder og spabad kalder med. Målinger derpå holdes ude af varmekurven |
 | `entity_outdoor_temp` | *(tom)* | Udetemperatur. Er den tom, læses `udeTemp` fra Node-REDs flow-context, hvor MQTT-værdien fra Nibe lander i dag |
 | `entity_tank_a_*` / `entity_tank_b_*` | *(udfyldt)* | Tre dybdefølere pr. tank — `top`, `mid`, `bottom` — plus `outlet` på afgangsrøret. Rækkefølgen bærer betydning: lagdelingen kan ikke regnes uden at vide hvilken føler der sidder hvor |
 | `tank_liters` | 1000 | Samlet volumen, fordelt ligeligt på tankene |
@@ -118,6 +135,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | Fil | Ansvar |
 |-----|--------|
 | `cop.py` | COP-tabel, læring, 2D-interpolation. Ren, testet |
+| `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
 | `store.py` | Atomisk JSON-lager i `/data` |

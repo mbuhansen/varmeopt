@@ -20,8 +20,9 @@ import aiohttp
 
 from . import VERSION, selfupdate
 from .cop import CopTable
+from .curve import HeatCurve
 from .ha import HaError, HomeAssistant, State
-from .migrate import COP_TABLE_FILE, load_cop_table
+from .migrate import COP_TABLE_FILE, CURVE_FILE, load_cop_table, load_heat_curve
 from .nodered import NodeRed
 from .options import Options
 from .store import Store
@@ -43,6 +44,7 @@ class Varmeopt:
         self.options = options
         self.store = store
         self.table = CopTable()
+        self.curve = HeatCurve(dhw_setpoint=options.dhw_setpoint)
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         self._dirty = False
         self._last_save = 0.0
@@ -52,9 +54,13 @@ class Varmeopt:
 
     async def cycle(self, ha: HomeAssistant | None, nodered: NodeRed) -> None:
         flow_temp = outdoor_temp = measured_cop = measured_stamp = None
+        flow_measured = hp_flow = hp_return = None
 
         if ha is not None:
             flow_temp = await self._number(ha, self.options.entity_flow_temp)
+            flow_measured = await self._number(ha, self.options.entity_flow_measured)
+            hp_flow = await self._number(ha, self.options.entity_hp_flow)
+            hp_return = await self._number(ha, self.options.entity_hp_return)
             outdoor_temp = await self._number(ha, self.options.entity_outdoor_temp)
             measured = await self._state(ha, self.options.entity_cop_measured)
             if measured is not None:
@@ -73,6 +79,17 @@ class Varmeopt:
 
         buffer = await self._read_tank(ha)
 
+        # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
+        # med et fast setpunkt. Den slags målinger siger intet om kurven, og
+        # de skal heller ikke forveksles med varmedrift senere.
+        mode = curve_note = None
+        if flow_temp is not None:
+            mode = "varmt vand / spa" if self.curve.is_dhw(flow_temp) else "varme"
+            if outdoor_temp is not None:
+                curve_note = self.curve.learn(outdoor_temp, flow_temp)
+                if not curve_note.startswith("ignoreret"):
+                    self._dirty = True
+
         learn_note = "—"
         if flow_temp is not None and outdoor_temp is not None:
             if measured_cop is not None:
@@ -90,6 +107,17 @@ class Varmeopt:
             measured_cop=measured_cop,
             lookup=lookup,
             tank=buffer,
+            flow_measured=flow_measured,
+            hp_flow=hp_flow,
+            hp_return=hp_return,
+            # Løftet over kondensatoren. Et løft nær nul betyder at pumpen
+            # ikke laver noget, uanset hvad COP-føleren måtte påstå.
+            hp_lift=_difference(hp_flow, hp_return),
+            mode=mode,
+            curve_note=curve_note,
+            predicted_setpoint=(
+                self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
+            ),
             learn_note=learn_note,
             last_run=datetime.now(timezone.utc)
             .astimezone()
@@ -98,11 +126,13 @@ class Varmeopt:
 
         if lookup is not None:
             log.info(
-                "COP %.2f (%s: %s) | fremloeb %.1f, ude %.1f | laering: %s",
+                "COP %.2f (%s: %s) | %s: setpunkt %.1f, maalt %s, ude %.1f | laering: %s",
                 lookup.cop,
                 lookup.source,
                 lookup.detail,
+                mode or "?",
                 flow_temp,
+                f"{flow_measured:.1f}" if flow_measured is not None else "-",
                 outdoor_temp,
                 learn_note,
             )
@@ -136,7 +166,18 @@ class Varmeopt:
                 "metode": lookup.detail,
                 "laert_cop": lookup.learned_cop,
                 "laert_antal": round(lookup.learned_count, 1),
-                "fremloeb": self.status.get("flow_temp"),
+                # "fremloeb" hed det, men det er UVR'ens setpunkt, ikke en
+                # måling. Nu står begge, så de ikke kan forveksles.
+                "setpunkt": self.status.get("flow_temp"),
+                "freml_maalt": self.status.get("flow_measured"),
+                "afvigelse": _round(_difference(
+                    self.status.get("flow_measured"), self.status.get("flow_temp")
+                ), 1),
+                "tilstand": self.status.get("mode"),
+                "vp_frem_bt12": self.status.get("hp_flow"),
+                "vp_retur_bt3": self.status.get("hp_return"),
+                "vp_loeft": _round(self.status.get("hp_lift"), 1),
+                "setpunkt_forudsagt": _round(self.status.get("predicted_setpoint"), 1),
                 "ude": self.status.get("outdoor_temp"),
                 "maalt_cop": self.status.get("measured_cop"),
                 "celler": self.table.cell_count,
@@ -253,8 +294,13 @@ class Varmeopt:
     def save(self) -> None:
         try:
             self.store.save(COP_TABLE_FILE, self.table.to_raw())
+            self.store.save(CURVE_FILE, self.curve.to_raw())
             self._dirty = False
-            log.debug("COP-tabel gemt: %d celler", self.table.cell_count)
+            log.debug(
+                "gemt: %d COP-celler, %d kurvepunkter",
+                self.table.cell_count,
+                self.curve.point_count,
+            )
         except OSError as exc:
             log.error("kunne ikke gemme COP-tabellen: %s", exc)
 
@@ -294,6 +340,9 @@ async def run() -> None:
         app.status["note"] = note
         log.info(note)
 
+        app.curve, curve_note = load_heat_curve(store, app.table, options.dhw_setpoint)
+        log.info(curve_note)
+
         loop = asyncio.get_running_loop()
 
         async def update() -> str:
@@ -311,6 +360,7 @@ async def run() -> None:
             lambda: app.table,
             check=lambda: selfupdate.latest(session),
             update=update,
+            curve=lambda: app.curve,
         )
         await web.start()
         log.info("web-UI lytter paa port %d (ingress)", web.port)
@@ -360,6 +410,10 @@ async def _self_update_on_start(
 
 def _round(value: float | None, digits: int) -> float | None:
     return None if value is None else round(value, digits)
+
+
+def _difference(a: float | None, b: float | None) -> float | None:
+    return None if a is None or b is None else a - b
 
 
 def _tank_summary(buffer: Buffer) -> str:
