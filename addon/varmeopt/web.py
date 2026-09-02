@@ -256,6 +256,7 @@ class WebUI:
             f'<div class="sub" style="margin:0">{_esc(label)} · {_esc(lookup.detail)}</div></div>'
             f'<h2>Detaljer</h2><div class="card"><dl>{dl}</dl></div>'
             + _price_section(s)
+            + _tally_section(s.get("tally"))
         )
         return _page("Nu", "now", body)
 
@@ -658,6 +659,34 @@ def _basis(reason: str) -> str:
     ville få en helt almindelig time til at se ud som en beslutning.
     """
     return reason.split(":")[0].strip() or reason
+
+
+def _tally_section(tally: Any) -> str:
+    """Hvor tit vi er uenige med Node-RED, og hvad der stod på spil."""
+    if tally is None or tally.compared <= 0:
+        return ""
+
+    rows = [
+        ("Enige", f"{tally.agreement_percent:.0f} % af {tally.compared:.0f} cyklusser"),
+        ("Uenige", f"{tally.disagreed:.0f}"),
+        ("… hvor vi ville køre varmepumpe", f"{tally.ours_heatpump:.0f}"),
+        ("… hvor vi ville fyre med piller", f"{tally.ours_boiler:.0f}"),
+        ("Varme leveret imens", f"{tally.heat_kwh:.1f} kWh"),
+        ("På spil", f"{tally.stake_kr:.2f} kr"),
+    ]
+    if tally.since:
+        rows.append(("Målt siden", _esc(tally.since)))
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    return (
+        '<h2>Mod Node-RED</h2><div class="card">'
+        f"<dl>{dl}</dl></div>"
+        '<p class="legend">«På spil» er ikke en bevist besparelse. Det er hvad '
+        "<em>vores egne tal</em> siger der er forskel på de to valg — og de tal er "
+        "netop det der er til debat. Det er indsatsen i væddemålet, ikke gevinsten. "
+        "Men det afgør om det er værd at lade add-on'en styre: står der to kroner om "
+        "måneden på spil, er svaret nej.</p>"
+    )
 
 
 def _decision_banner(decision: Any) -> str:

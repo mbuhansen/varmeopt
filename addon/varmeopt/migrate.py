@@ -20,6 +20,7 @@ log = logging.getLogger(__name__)
 COP_TABLE_FILE = "cop_table.json"
 CURVE_FILE = "heat_curve.json"
 SOLAR_FILE = "solar.json"
+COMPARE_FILE = "compare.json"
 
 
 def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]:

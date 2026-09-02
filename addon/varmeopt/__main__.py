@@ -19,6 +19,7 @@ from typing import Any
 import aiohttp
 
 from . import VERSION, selfupdate
+from .compare import Tally, normalise
 from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
@@ -26,6 +27,7 @@ from .ha import HaError, HomeAssistant, State
 from .migrate import (
     COP_TABLE_FILE,
     CURVE_FILE,
+    COMPARE_FILE,
     SOLAR_FILE,
     load_cop_table,
     load_heat_curve,
@@ -61,6 +63,7 @@ class Varmeopt:
         self.curve = HeatCurve(dhw_setpoint=options.dhw_setpoint)
         self.solar = SolarModel(options.geometry)
         self.solar_day = DayTracker()
+        self.tally = Tally()
         self.planner = Planner(
             pellet_price=options.pellet_kwh_price,
             hysteresis=options.source_hysteresis,
@@ -157,6 +160,7 @@ class Varmeopt:
             **solar,
             **prices,
             decision=decision,
+            tally=self.tally,
             projection=projection,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
@@ -240,6 +244,7 @@ class Varmeopt:
 
         if ha is not None:
             log.info("beslutning: %s | %s", decision.source, decision.reason)
+            await self._compare(ha, decision, balance)
             await self._publish_decision(ha, decision)
 
         self._maybe_save()
@@ -499,6 +504,41 @@ class Varmeopt:
 
         await ha.set_state(SENSOR_PRICE, round(price.kr_per_kwh, 3), attributes)
 
+    async def _compare(
+        self, ha: HomeAssistant, decision: Any, balance: Balance | None
+    ) -> None:
+        """Foer regnskab over hvor tit vi er uenige med Node-RED.
+
+        Uden tallet kan man kun *se* uenighederne. Og det er taellingen der
+        afgoer om det naeste skridt er vaerd at tage: staar der to kroner om
+        maaneden paa spil, er det ikke vaerd at lade add-on'en styre.
+        """
+        state = await self._state(ha, self.options.entity_nodered_decision)
+        theirs = normalise(state.state) if state is not None else None
+        if theirs is None:
+            return
+
+        demand_kw = balance.load.kw if balance is not None else None
+        before = self.tally.disagreed
+        self.tally.observe(
+            ours=decision.source,
+            theirs=theirs,
+            heat_price=decision.heat_price,
+            pellet_price=decision.pellet_price,
+            demand_kw=demand_kw,
+            minutes=self.options.cycle_seconds / 60,
+            today=datetime.now().astimezone().strftime("%Y-%m-%d"),
+        )
+        self._dirty = True
+
+        if self.tally.disagreed > before:
+            log.info(
+                "uenig med Node-RED: vi siger %s, den siger %s | %s",
+                decision.source,
+                theirs,
+                self.tally.summary(),
+            )
+
     async def _publish_decision(self, ha: HomeAssistant, decision: Any) -> None:
         await ha.set_state(
             SENSOR_DECISION,
@@ -513,6 +553,11 @@ class Varmeopt:
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
                 "vindue_min": decision.window_minutes,
+                "enighed_pct": _round(self.tally.agreement_percent, 1),
+                "sammenlignet": round(self.tally.compared),
+                "uenige": round(self.tally.disagreed),
+                "paa_spil_kr": round(self.tally.stake_kr, 2),
+                "maalt_siden": self.tally.since,
             },
         )
 
@@ -655,6 +700,7 @@ class Varmeopt:
                 SOLAR_FILE,
                 {"model": self.solar.to_raw(), "day": self.solar_day.to_raw()},
             )
+            self.store.save(COMPARE_FILE, self.tally.to_raw())
             self._dirty = False
             log.debug(
                 "gemt: %d COP-celler, %d kurvepunkter",
@@ -707,6 +753,9 @@ async def run() -> None:
             store, options.geometry, options.solar_scale
         )
         log.info(solar_note)
+
+        app.tally = Tally.from_raw(store.load(COMPARE_FILE, {}))
+        log.info("mod Node-RED: %s", app.tally.summary())
 
         loop = asyncio.get_running_loop()
 

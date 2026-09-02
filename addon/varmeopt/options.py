@@ -53,6 +53,9 @@ _DEFAULTS: dict[str, object] = {
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
     # Predbats plan, laest direkte fra HA. Vi bruger raw.rows, den
     # strukturerede udgave - ikke HTML-tabellen, som ville vaere skroebelig.
+    # Node-REDs egen beslutning, saa de to kan sammenlignes. Sensoren
+    # hedder "Varme Styring" i Node-REDs ha-entity-config.
+    "entity_nodered_decision": "sensor.varme_styring",
     "entity_predbat_plan": "predbat.plan_html",
     "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
     "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
@@ -164,6 +167,7 @@ class Options:
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
+    entity_nodered_decision: str
     entity_predbat_plan: str
     entity_battery_power: str
     entity_grid_power: str

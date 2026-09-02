@@ -11,10 +11,26 @@ Node-RED er protokol-gateway mellem UVR'en, varmepumpen og Home Assistant.
 tankene op i ét sammenhængende blok når prisen er lav, så den lagrede varme
 dækker de dyre timer og aftenens varme vand.
 
-## Status: fase 0
+## Status: skyggedrift
 
-Add-on'en **styrer intet endnu.** Den har overtaget COP-læringen og gør den
-efterprøvelig. Node-RED træffer fortsat alle beslutninger indtil fase 4.
+Add-on'en **styrer intet.** Den regner det samme valg som Node-RED hvert minut,
+på rettet COP, og fører regnskab over hvor tit de to er uenige. Node-RED træffer
+alle beslutninger.
+
+Køreplanen frem herfra er fire skridt, i den rækkefølge:
+
+1. **Tæl uenighederne.** Uden et tal kan man kun se dem. Regnskabet står på
+   Nu-siden: hvor tit, i hvilken retning, og hvad forskellen var værd. Det er dét
+   tal der afgør om resten er værd at bygge. ✔ bygget
+2. **`guard.py`** — hvad sker der når planen er forældet, HA ikke svarer, en føler
+   lyver, eller add-on'en falder. Plus en sessionslås, så to ting ikke kan styre
+   samtidig. Skal ligge inden noget som helst overtages.
+3. **Én udgang, ikke alle.** Pillefyr/varmepumpe-valget er UVR'ens kanal 1 — én
+   digital udgang, som Node-RED allerede skriver. Den kan overtages alene, mens
+   Node-RED beholder resten. Går det galt, er det ét signal at rulle tilbage.
+4. **Blokopladning.** Den nye evne, og den farligste: at starte varmepumpen når
+   ingen har bedt om varme. Bør vente til ståtabet er målt — med to kroners
+   margin kan det led vende fortegnet.
 
 Hvad der virker nu:
 
@@ -240,6 +256,7 @@ røres ikke — der læses kun.
 | `solar_scale` | 0,43 | Startværdi for skalafaktoren, kalibreret på 24. august 2026. Modellen retter den selv |
 | `entity_dhw_active` | `binary_sensor.node_1_output_7` | Kører varmepumpen for brugsvandet? En kendsgerning frem for et gæt ud fra setpunktet |
 | `entity_spa_*` | `sensor.tub_temperature` m.fl. | Spabadets tilstand. Det kalder med samme setpunkt som brugsvandet og forklarer hvorfor kurven springer til 56 °C |
+| `entity_nodered_decision` | `sensor.varme_styring` | Node-REDs egen beslutning, så de to kan sammenlignes |
 | `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
@@ -308,6 +325,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
 | `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
+| `compare.py` | Regnskab over uenigheder med Node-RED. Ren, testet |
 | `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
