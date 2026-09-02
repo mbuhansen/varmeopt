@@ -124,6 +124,57 @@ solvarme med en top på 5,4 kW. Tre dage senere gav 55,4 kWh PV — kun 9 % mind
 kollektoren fik ikke lov. Symmetrisk læring ville have givet k = 0,397 af de to
 dage. Asymmetrisk giver 0,422, mod den frie dags 0,428.
 
+## Sådan skal styringen tænke
+
+Anlægget skal to ting: skifte mellem pillefyr og varmepumpe, og regne ud om det
+betaler sig at lade tankene op på forhånd. Det er fristende at bygge dem som to
+styringer. Det ville være forkert.
+
+**Kilde-valget er blokplanen med horisonten sat til nul.** «Hvad er billigst lige
+nu» er det samme spørgsmål som «hvad skal der ske i det næste minut» — bare uden
+fremsyn. To adskilte styringer kan blive uenige (planen siger lad op, øjebliks-
+reglen siger pillefyr), og så skal noget tredje afgøre hvem der vinder. Én
+planlægger, hvis output også indeholder «kør det her nu», kan ikke komme i
+konflikt med sig selv.
+
+Node-REDs `INTELLIGENT VARMESTYRING 2D` *er* allerede den planlægger. Den har
+bare nul timers horisont.
+
+### Ligningen for at lade op på forhånd
+
+```
+gevinst = E × ( P_aften / COP_aften  −  P_nu / COP_nu )  −  ståtab  −  slid
+```
+
+`P_aften` er ikke importprisen, men **eksportprisen**: de kilowatt-timer
+varmepumpen bruger om aftenen, er kilowatt-timer der ellers var gået ud gennem
+inverteren.
+
+Tre ting gør ligningen mindre skræmmende end den ser ud:
+
+**Brugsvand vender COP-leddet om.** Skal der bades kl. 18, kører varmepumpen
+56 °C om aftenen alligevel. Så sammenlignes 56 mod 56, ikke 56 mod varmekurvens
+setpunkt — og der er intet tab ved at gemme. Målt på anlæggets egen tabel er
+COP'en ved 56 °C endda 4,07 midt på dagen mod 3,86 om aftenen, fordi det er
+varmere ude. For-opladning af brugsvand er 5 % *bedre*, ikke 19 % værre.
+
+**Pillefyret sætter et loft.** Varmepumpen om aftenen koster
+`eksportpris ÷ COP` pr. kWh varme; pillefyret koster 0,706 kr. Pillefyret vinder
+først når eksportprisen passerer **2,72 kr/kWh** — og over det er svaret «brænd
+piller og eksportér alt», ikke «lad hurtigere op». Planen skal aldrig jagte
+ekstreme priser.
+
+**Men marginen er lille.** Bufferen fra 44 til 56 °C er 13,8 kWh varme, altså
+3,4 kWh strøm ved COP 4,07, og den frigør 3,6 kWh inverterkapacitet om aftenen.
+Ved 0,50 kr/kWh ind og 1,00 kr/kWh eksport er det knap to kroner. Kommer
+middagsstrømmen derimod fra batteriet til dets gennemsnitspris, er det et
+nulsumsspil. Derfor er `P_nu` ikke en pris man slår op, men en man udleder af
+Predbats plan.
+
+Og derfor er **ståtabet ikke en detalje.** Med to kroners margin kan seks timers
+tab fra en 56-graders buffer vende fortegnet. Det er det ene led der endnu ikke
+er målt.
+
 ## Installation
 
 Add-on'en installeres som et eget add-on-repository:
