@@ -96,9 +96,51 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        # max(1,00 batterisnit, 0,40 x 1,10) = 1,00
-        self.assertAlmostEqual(price.kr_per_kwh, 1.0, places=9)
+        # Genanskaffelsesprisen: 0,40 x 1,10. Hvad energien i batteriet
+        # kostede engang, er sunk cost - bruger vi en kWh nu og fylder den
+        # paa om en halv time, koster den hvad paafyldningen koster.
+        self.assertAlmostEqual(price.kr_per_kwh, 0.44, places=9)
         self.assertIn("lades om", price.reason)
+
+    def test_a_planned_discharge_is_not_read_as_a_charge(self):
+        # "dischrg" indeholder "chrg". Uden afladningstesten foerst blev hver
+        # eneste planlagte afladning laest som en opladning - halvtimen blev
+        # prissat som om batteriet var bundet.
+        p = plan(row(state="dischrg", import_rate=300), battery_average=1.0)
+
+        self.assertFalse(p.slots[0].charging)
+        self.assertTrue(p.slots[0].discharging)
+        self.assertFalse(p.slots[0].locked)
+
+    def test_an_almost_empty_battery_is_priced_as_grid(self):
+        # Uanset hvad de sidste par procent kostede engang, kan de ikke
+        # levere den naeste kWh til en varmepumpe paa 16 kW.
+        p = plan(row(soc=4, import_rate=300), battery_average=0.80)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 3.00, places=9)
+        self.assertIn("tom", price.reason)
+
+    def test_the_grid_wins_when_the_inverter_is_already_maxed(self):
+        # Baade "batteriet aflader" og "vi importerer" kan vaere sande paa
+        # en gang: saa staar inverteren paa sit loft, og ekstra forbrug kan
+        # kun komme fra nettet. 12 kW inverter mod 16 kW varmepumpe.
+        p = plan(row(import_rate=300), battery_average=0.80)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000, grid_power=4000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 3.00, places=9)
+        self.assertIn("import", price.reason)
+
+    def test_export_valuation_never_makes_energy_cheaper(self):
+        # I baandet snit < eksport < snit/0,90 vendte grenen sit formaal paa
+        # hovedet: snit 1,00 og eksport 1,05 gav 0,945.
+        p = plan(row(), row(state="exp", export_rate=105), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertGreaterEqual(price.kr_per_kwh, 1.0)
 
     def test_a_low_battery_is_priced_at_its_own_average(self):
         # Er der ikke energi nok til baade at varme og saelge, er eksporten

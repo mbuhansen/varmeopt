@@ -36,7 +36,7 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
                             "state": "",
                             "import_rate": 350,
                             "export_rate": 60,
-                            "soc_percent": 4,
+                            "soc_percent": 50,
                         }
                     ]
                 }

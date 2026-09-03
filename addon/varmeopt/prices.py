@@ -46,6 +46,15 @@ EXPORT_DISCOUNT = 0.90
 # Node-RED har samme graense; den faldt paa gulvet ved portningen.
 MIN_SOC_FOR_EXPORT = 40.0
 
+# Under denne ladetilstand er batteriet ikke en reel kilde til den naeste
+# kWh. Predbats reserve ligger typisk omkring 5-10 %, saa 12 % er lige over
+# det punkt hvor der reelt ikke er noget at tage af.
+MIN_SOC_FOR_BATTERY = 12.0
+
+# Tillaeg paa genanskaffelsesprisen: tab ved at koere en kWh ind og ud af
+# batteriet igen. Samme tal som Node-RED bruger.
+CHARGE_LOSS_MARKUP = 1.10
+
 # Kender vi ikke ladetilstanden, antages den samme vaerdi som Node-RED bruger.
 ASSUMED_SOC = 50.0
 
@@ -77,7 +86,21 @@ class Slot:
         return self.index * SLOT_MINUTES
 
     @property
+    def discharging(self) -> bool:
+        return "dischrg" in self.state or "discharge" in self.state
+
+    @property
     def charging(self) -> bool:
+        """Bemærk rækkefølgen: «dischrg» indeholder «chrg».
+
+        Uden afladningstesten først blev hver eneste planlagte afladning læst
+        som en opladning. Det gik to steder galt på én gang: halvtimen blev
+        prissat til importprisen, som om batteriet var bundet, og
+        ``no_charge_first`` troede at batteriet ville blive fyldt inden en
+        kommende eksport — netop når det modsatte var planlagt.
+        """
+        if self.discharging:
+            return False
         return "chrg" in self.state or "charge" in self.state
 
     @property
@@ -242,15 +265,22 @@ class Plan:
             if slot.import_price is not None:
                 return Price(slot.import_price, "net: batteriet er bundet")
 
-        # 3. Batteriet er frit. Hvad er dets energi vaerd?
+        # 3. Koeber vi allerede fra nettet, kommer den naeste kWh derfra.
+        #
+        #    Det her stod foer efter batterigrenen, og det var forkert naar
+        #    begge var sande. Baade "batteriet aflader" og "vi importerer"
+        #    kan gaelde samtidig, og saa betyder det at inverteren staar paa
+        #    sit loft: batteriet giver alt hvad det kan, og *ekstra* forbrug
+        #    kan kun komme fra nettet. Med 12 kW inverter mod en varmepumpe
+        #    paa 16 kW er det ikke et hjoerne, det er en almindelig tirsdag.
+        if physical_import and slot.import_price is not None:
+            return Price(slot.import_price, "net: import")
+
+        # 4. Batteriet er frit. Hvad er dets energi vaerd?
         if battery_free or (grid is None and not slot.locked):
             price = self._battery_price(slot)
             if price is not None:
                 return price
-
-        # 4. Vi koeber fra nettet.
-        if physical_import and slot.import_price is not None:
-            return Price(slot.import_price, "net: import")
 
         # 5. Hverken det ene eller det andet - solen daekker. Den billigste af
         #    de to muligheder gaelder.
@@ -277,7 +307,12 @@ class Plan:
             soc = slot.soc_percent if slot.soc_percent is not None else ASSUMED_SOC
             soon = next_export.minutes_ahead - slot.minutes_ahead <= EXPORT_SOON_MINUTES
             no_charge_first = next_charge is None or next_charge.index > next_export.index
-            worth_it = next_export.export_price > self.battery_average
+            # Sammenligningen skal ske paa det tal der faktisk returneres.
+            # Stod den paa den urabatterede pris, vendte grenen sit formaal
+            # paa hovedet i baandet snit < eksport < snit/0,90: snit 1,00 og
+            # eksport 1,05 gav 0,945 - energien blev *billigere* af at have
+            # et salg i vente.
+            worth_it = next_export.export_price * EXPORT_DISCOUNT > self.battery_average
             # Er batteriet lavt, raekker energien ikke til baade at varme og
             # saelge. Saa er eksporten ikke et reelt alternativ, og batteriets
             # egen pris er den rigtige.
@@ -295,9 +330,28 @@ class Plan:
         if next_charge is not None and next_charge.import_price is not None:
             soon = next_charge.minutes_ahead - slot.minutes_ahead <= CHARGE_SOON_MINUTES
             if soon:
+                # Genanskaffelsesprisen, ikke gennemsnittet. Bruger vi en kWh
+                # nu og fylder den paa igen om en time, koster den hvad
+                # paafyldningen koster - hvad den energi der ligger der i
+                # forvejen kostede engang, er sunk cost.
+                #
+                # Der stod ``max(gennemsnit, ...)``, og da Predbat netop
+                # vaelger de billige timer til ladning, vandt gennemsnittet
+                # naesten altid. Grenen var i praksis doed.
                 return Price(
-                    max(self.battery_average, next_charge.import_price * 1.10),
+                    next_charge.import_price * CHARGE_LOSS_MARKUP,
                     f"batteri: lades om {next_charge.minutes_ahead - slot.minutes_ahead} min",
+                )
+
+        # Et naesten tomt batteri kan ikke levere den naeste kWh, uanset hvad
+        # den energi der er tilbage, kostede. Saa kommer den fra nettet.
+        # ``soc_percent`` blev foer kun brugt i eksportgrenen, og et tomt
+        # batteri blev prissat praecis som et fuldt.
+        if slot.soc_percent is not None and slot.soc_percent <= MIN_SOC_FOR_BATTERY:
+            if slot.import_price is not None:
+                return Price(
+                    slot.import_price,
+                    f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)",
                 )
 
         return Price(self.battery_average, "batteri: frit")
