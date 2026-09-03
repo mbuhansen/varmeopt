@@ -103,10 +103,13 @@ def source_now(
     """
     if heat_price is None:
         return "varmepumpe", "ingen COP — antager varmepumpe"
+    # Slitagen staar med i tallet, men ikke i teksten. At varmepumpevarme
+    # koster det den koster, er en egenskab ved prisen - ikke en oplysning der
+    # hoerer hjemme i hver eneste linje.
     if heat_price > pellet_price + hysteresis:
-        return "pillefyr", f"VP {heat_price:.2f} m. slid > pille {pellet_price:.2f}"
+        return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
     if heat_price < pellet_price - hysteresis:
-        return "varmepumpe", f"VP {heat_price:.2f} m. slid < pille {pellet_price:.2f}"
+        return "varmepumpe", f"VP {heat_price:.2f} < pille {pellet_price:.2f}"
     return "varmepumpe", "tæt løb — varmepumpen foretrækkes"
 
 

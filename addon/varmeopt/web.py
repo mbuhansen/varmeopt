@@ -396,16 +396,33 @@ class WebUI:
         # noget. Den fulde begrundelse hoerer hjemme hvor noget aendrer sig:
         # naar kilden skifter, naar vi staar i raekken, eller naar den er den
         # planlaeggeren regner imod.
+        # Hvorfor der lades, er ikke det samme som hvornaar. Er den dyre time
+        # dyr fordi stroemmen koster mere, eller fordi vi *eksporterer* der og
+        # dermed giver afkald paa en indtaegt? De to foerer til samme
+        # handling nu, men de er ikke samme historie, og forskellen er den
+        # brugeren skal kunne se uden at laese hele tabellen.
+        target = next((r for r in rows if r.target), None)
         cells = []
         previous_source = None
         for row in rows:
             changed = previous_source is not None and row.source != previous_source
             previous_source = row.source
-            if changed or row.now:
+            if row.now and decision is not None and decision.charge:
+                # Opladningen er den eneste raekke hvor planlaeggeren goer
+                # noget aktivt. Den stod kun i banneret over tabellen, og saa
+                # skal man laese to steder for at se hvad der sker hvornaar.
+                # Kolonnen siger *hvad* der goeres og hvorfor, ikke hvor
+                # meget. Tallene staar i detaljerne ovenfor, og gentaget her
+                # goer de raekken svaerere at skimme uden at tilfoeje noget.
+                why = f"{_basis(row.reason)} · {_charge_because(target)}"
+            elif changed or row.now:
                 # Hvorfor den kilde - det er dét der aendrede sig.
                 why = row.note
             elif row.target:
-                why = "dyreste time — planlæggeren regner herimod"
+                # Grundlaget med, saa hele kolonnen kan skimmes efter hvor
+                # prisen kommer fra - ogsaa paa den raekke der forklarer
+                # hvorfor der lades.
+                why = f"{_basis(row.reason)} · dyreste time, der regnes herimod"
             else:
                 why = _basis(row.reason)
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
@@ -431,7 +448,7 @@ class WebUI:
                 f"<td>{_fmt(row.heat_price, '', 2)}</td>"
                 f'<td style="color:{colour};font-weight:600">'
                 f"{_esc(row.source)}</td>"
-                f'<td class="why">{_esc(why)}</td></tr>'
+                f'<td class="why">{_highlight_basis(why)}</td></tr>'
             )
 
         head = (
@@ -834,6 +851,40 @@ def _basis(reason: str) -> str:
     ville få en helt almindelig time til at se ud som en beslutning.
     """
     return reason.split(":")[0].strip() or reason
+
+
+# Nettet er den dyre vej: der er hverken batteri eller sol til at daekke, og
+# hver kilowatt-time koeber vi til fuld importpris. Den skal kunne ses paa
+# een gang henover en tabel med fireogtyve raekker.
+_NET_INK = "#c0392b"
+
+
+def _charge_because(target: Any) -> str:
+    """Hvorfor den dyre time er dyr — det er grunden til at der lades nu.
+
+    Prisen kan vaere hoej af to helt forskellige grunde, og de foerer til
+    samme handling men ikke samme historie: enten koster stroemmen mere, eller
+    ogsaa saelger vi paa det tidspunkt, og saa er varmen dyr fordi den koster
+    en indtaegt vi ellers ville have haft.
+    """
+    if target is None:
+        return "lader op mod dyrere varme"
+    basis = _basis(target.reason).lower()
+    if basis.startswith("eksport"):
+        return "lader op mod eksport senere"
+    if basis.startswith("batteri"):
+        return "lader op mod dyrere batteri"
+    return "lader op mod dyrere strøm"
+
+
+def _highlight_basis(why: str) -> str:
+    """Saet «net» i roedt. Resten staar som det er."""
+    text = _esc(why)
+    lowered = text.lower()
+    if not lowered.startswith("net"):
+        return text
+    head = text[:3]
+    return f'<span style="color:{_NET_INK};font-weight:600">{head}</span>{text[3:]}'
 
 
 def _tally_section(tally: Any) -> str:
