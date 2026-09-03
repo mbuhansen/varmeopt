@@ -55,8 +55,12 @@ MIN_SOC_FOR_EXPORT = 40.0
 MIN_SOC_FOR_BATTERY = 12.0
 
 # Tillaeg paa genanskaffelsesprisen: tab ved at koere en kWh ind og ud af
-# batteriet igen. Samme tal som Node-RED bruger.
-CHARGE_LOSS_MARKUP = 1.10
+# batteriet igen. Anlaeggets inverter taber omkring 15 % hele vejen rundt,
+# saa 1 kWh koebt fra nettet giver 0,85 kWh tilbage til varmepumpen - og en
+# kWh taget fra batteriet nu koster derfor 1/0,85 gange hvad paafyldningen
+# koster. Node-RED brugte 1,10, hvilket var et skoen; det her er anlaeggets.
+BATTERY_ROUND_TRIP = 0.85
+CHARGE_LOSS_MARKUP = 1 / BATTERY_ROUND_TRIP
 
 # Kender vi ikke ladetilstanden, antages den samme vaerdi som Node-RED bruger.
 ASSUMED_SOC = 50.0

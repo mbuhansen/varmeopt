@@ -96,10 +96,11 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        # Genanskaffelsesprisen: 0,40 x 1,10. Hvad energien i batteriet
-        # kostede engang, er sunk cost - bruger vi en kWh nu og fylder den
-        # paa om en halv time, koster den hvad paafyldningen koster.
-        self.assertAlmostEqual(price.kr_per_kwh, 0.44, places=9)
+        # Genanskaffelsesprisen plus tabet hele vejen rundt: 0,40 / 0,85.
+        # Hvad energien i batteriet kostede engang, er sunk cost - bruger vi
+        # en kWh nu og fylder den paa om en halv time, koster den hvad
+        # paafyldningen koster, og der skal koebes 1/0,85 for at faa 1 igen.
+        self.assertAlmostEqual(price.kr_per_kwh, 0.40 / 0.85, places=9)
         self.assertIn("lades om", price.reason)
 
     def test_a_planned_discharge_is_not_read_as_a_charge(self):
