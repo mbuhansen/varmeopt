@@ -154,3 +154,79 @@ class DecisionShapeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class WaitForTheCheapestTest(unittest.TestCase):
+    """Prisen falder foer den stiger. Saa er nu ikke tidspunktet."""
+
+    def setUp(self):
+        # 1,00 -> 0,30 -> 0,30 -> 3,00 kr/kWh. COP 3 hele vejen.
+        self.plan = plan(100, 30, 30, 300)
+        self.planner = planner()
+
+    def test_it_waits_for_the_cheap_slot_instead_of_charging_now(self):
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("venter", d.reason)
+
+    def test_and_charges_once_the_cheap_slot_is_the_one_it_stands_in(self):
+        # Samme raekke set et kvarter senere: nu *er* 0,30 den billigste.
+        d = self.planner.decide(
+            plan(30, 30, 300), cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertTrue(d.charge)
+
+    def test_a_cheaper_slot_too_late_to_use_is_not_worth_waiting_for(self):
+        # Naar den billige halvtime foerst kommer lige inden toppen, er der
+        # ikke tid til mindstetraekket, og saa er den uden vaerdi.
+        d = planner(charge_kw=2.0).decide(
+            plan(100, 30, 300), cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertNotIn("venter", d.reason)
+
+
+class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
+    """Gevinsten gaelder den fortraengte varme, ikke hele lagerpladsen."""
+
+    def setUp(self):
+        # Een dyr halvtime forude. Huset bruger 3 kW.
+        self.plan = plan(30, 300, 30)
+        self.planner = planner()
+
+    def test_the_saving_counts_only_the_dear_half_hour(self):
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, demand_kw=3.0
+        )
+
+        self.assertTrue(d.charge)
+        # 3 kW i en halv time er 1,5 kWh fortraengt - ikke de 24 der er plads
+        # til. Marginen er den samme; det er gangefaktoren der var forkert.
+        self.assertLess(d.saving_kr, d.charge_kwh * 0.35)
+
+    def test_two_dear_half_hours_displace_twice_as_much(self):
+        one = self.planner.decide(
+            plan(30, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, demand_kw=3.0,
+        )
+        two = self.planner.decide(
+            plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, demand_kw=3.0,
+        )
+
+        self.assertAlmostEqual(two.saving_kr, 2 * one.saving_kr, places=6)
+
+    def test_without_a_demand_it_says_so_by_not_pretending(self):
+        # Uden et behov kan spoergsmaalet ikke besvares. Saa staar det gamle
+        # tal - men det er nu det eneste tilfaelde, ikke reglen.
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, demand_kw=None
+        )
+
+        self.assertTrue(d.charge)
+        self.assertGreater(d.saving_kr, 0.0)
+

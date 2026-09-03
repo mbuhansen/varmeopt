@@ -171,6 +171,7 @@ class Varmeopt:
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
+            demand_kw=balance.load.kw if balance is not None else None,
         )
         # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
         # det. Siger den nej, staar beslutningen der stadig, og Node-RED

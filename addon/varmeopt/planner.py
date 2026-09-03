@@ -172,6 +172,7 @@ class Planner:
         headroom_kwh: float | None = None,
         solar_expected_kwh: float | None = None,
         grid: Any = None,
+        demand_kw: float | None = None,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
@@ -213,6 +214,27 @@ class Planner:
         if best_when is None or margin <= 0:
             return _with(decision, reason=f"{why}; intet at hente ved at gemme")
 
+        # Spoergsmaal 2b: er *nu* overhovedet det rigtige tidspunkt?
+        #
+        # Her stod intet, og det var en dyr tavshed. Loekken ovenfor finder
+        # den dyreste time forude, men spurgte aldrig om der laa en billigere
+        # halvtime imellem. Med priserne 1,00 -> 0,30 -> 0,30 -> 3,00 lader
+        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter paa 0,30 -
+        # 4,20 kr smidt vaek paa ét traek, og lageret er fuldt naar den
+        # billige time kommer.
+        cheaper = self._cheaper_moment_before(plan, best_when, vp_now, cop_now, cop_later)
+        if cheaper is not None:
+            when, price = cheaper
+            return _with(
+                decision,
+                window_minutes=best_when,
+                reason=(
+                    f"{why}; venter - om {when} min koster varmen {price:.2f} "
+                    f"mod {vp_now:.2f} nu, og der er stadig tid inden toppen "
+                    f"om {best_when} min"
+                ),
+            )
+
         # Spoergsmaal 3: hvor meget maa der lades?
         room = headroom_kwh if _finite(headroom_kwh) else 0.0
         if _finite(solar_expected_kwh):
@@ -230,17 +252,82 @@ class Planner:
                 ),
             )
 
+        # Gevinsten gaelder kun den varme der faktisk bliver fortraengt mens
+        # prisen er hoej - ikke hele lagerpladsen. Her stod ``margin * room``,
+        # og det overdrev 2-3 gange: 24 kWh lagerplads mod en dyr halvtime
+        # hvor huset bruger 3 kW er 1,5 kWh fortraengt varme, ikke 24.
+        displaced = self._displaced_kwh(plan, best_when, vp_now, cop_now, cop_later, demand_kw)
+        saving = margin * min(room, displaced) if displaced is not None else margin * room
+
         return _with(
             decision,
             charge=True,
             charge_kwh=room,
-            saving_kr=margin * room,
+            saving_kr=saving,
             window_minutes=best_when,
             reason=(
-                f"{why}; lad {room:.1f} kWh nu og spar {margin * room:.2f} kr "
+                f"{why}; lad {room:.1f} kWh nu og spar {saving:.2f} kr "
                 f"mod om {best_when} min"
             ),
         )
+
+    # ------------------------------------------------------- hjaelp til valget
+
+    def _cheaper_moment_before(
+        self, plan: Any, best_when: int, vp_now: float, cop_now: Any, cop_later: Any
+    ) -> tuple[int, float] | None:
+        """Ligger der en billigere halvtime mellem nu og toppen?
+
+        Den skal ogsaa vaere til at naa: der skal vaere tid nok tilbage til at
+        lade mindstetraekket inden prisen stiger. Ellers er en billigere
+        halvtime uden vaerdi - man naar ikke at bruge den.
+        """
+        best: tuple[int, float] | None = None
+        for minutes in range(SLOT_MINUTES, best_when, SLOT_MINUTES):
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            heat = self.heat_price(price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later))
+            if heat is None or heat >= vp_now - self.hysteresis:
+                continue
+            if self.charge_kw * (best_when - minutes) / 60 < self.min_charge_kwh:
+                continue
+            if best is None or heat < best[1]:
+                best = (minutes, heat)
+        return best
+
+    def _displaced_kwh(
+        self,
+        plan: Any,
+        best_when: int,
+        vp_now: float,
+        cop_now: Any,
+        cop_later: Any,
+        demand_kw: float | None,
+    ) -> float | None:
+        """Hvor meget varme der faktisk bliver hentet fra lageret i det dyre.
+
+        Uden et behov at regne med kan spoergsmaalet ikke besvares, og saa
+        siger vi det i stedet for at gaette.
+        """
+        if not _finite(demand_kw) or demand_kw <= 0:
+            return None
+
+        threshold = vp_now + self.wear
+        minutes = best_when
+        span = 0
+        while minutes <= self.horizon_minutes:
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            heat = self.cheapest_heat(
+                price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
+            )
+            if heat <= threshold:
+                break
+            span += SLOT_MINUTES
+            minutes += SLOT_MINUTES
+        return demand_kw * span / 60
 
 
     # ------------------------------------------------------------ fremskrivning
