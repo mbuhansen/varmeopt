@@ -211,7 +211,11 @@ class CycleTest(unittest.TestCase):
         )
         self.cycle()
 
-        self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 1.35, places=3)
+        # 1,35 er hvad energien kostede pr. lagret kWh; leveret igen koster
+        # den 1/0,85 af det, for inverteren taber 15 % hele vejen rundt.
+        self.assertAlmostEqual(
+            self.app.status["price_now"].kr_per_kwh, 1.35 / 0.85, places=3
+        )
         self.assertIn("batteri", self.app.status["price_now"].reason)
 
     def test_a_balanced_plant_takes_the_cheaper_of_grid_and_battery(self):

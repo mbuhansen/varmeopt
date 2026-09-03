@@ -149,6 +149,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
             ("plan", "./plan", "Plan"),
             ("curve", "./curve", "Varmekurve"),
             ("cop", "./cop", "COP-tabel"),
+            ("standby", "./standby", "Ståtab"),
             ("system", "./system", "System"),
         )
     )
@@ -190,6 +191,8 @@ class WebUI:
         curve: Callable[[], HeatCurve] | None = None,
         journal: Any = None,
         options: Any = None,
+        standby: Callable[[], Any] | None = None,
+        on_standby: Callable[[bool], str] | None = None,
     ) -> None:
         self._status = status
         self._table = table
@@ -197,6 +200,8 @@ class WebUI:
         self._check = check
         self._update = update
         self._curve = curve
+        self._standby = standby
+        self._on_standby = on_standby
         self._journal = journal
         self._options = options
         self._runner: web.AppRunner | None = None
@@ -215,6 +220,8 @@ class WebUI:
         app.router.add_get("/system", self.system)
         app.router.add_get("/debug.json", self.debug)
         app.router.add_post("/system", self.system)
+        app.router.add_get("/standby", self.standby)
+        app.router.add_post("/standby", self.standby)
         self._runner = web.AppRunner(app)
         await self._runner.setup()
         site = web.TCPSite(self._runner, "0.0.0.0", self._port)
@@ -593,6 +600,83 @@ class WebUI:
                 "Content-Disposition": f'attachment; filename="varmeopt-{stamp}.json"'
             },
         )
+
+    async def standby(self, request: web.Request) -> web.Response:
+        """Ståtabsmålingen: forklaring, knap og de målinger der er taget."""
+        note = ""
+        if request.method == "POST" and self._on_standby is not None:
+            form = await request.post()
+            note = self._on_standby(form.get("action") == "start")
+
+        test = self._standby() if self._standby is not None else None
+        if test is None:
+            return _page("Ståtab", "standby", "<h1>Ståtab</h1><p>Ikke tilgængelig.</p>")
+
+        s = self._status()
+        buffer = s.get("tank")
+        running = test.armed
+        button = (
+            '<button name="action" value="stop">Stop målingen</button>'
+            if running
+            else '<button name="action" value="start">Start målingen</button>'
+        )
+
+        rows = [
+            ("Tilstand", "<b>måler</b>" if running else "står stille"),
+            ("Status", _esc(s.get("standby") or test.note)),
+            (
+                "Middeltemperatur",
+                _fmt(buffer.mean_temp, "°C") if buffer is not None else "—",
+            ),
+            ("Rumtemperatur", _fmt(s.get("room_temp"), "°C")),
+            (
+                "Tabskoefficient",
+                _fmt(test.ua_w_per_k, " W/K", 1) if test.ua_w_per_k is not None else "—",
+            ),
+            (
+                "Ståtab lige nu",
+                _fmt(s.get("standby_loss_kw"), " kW", 3)
+                if s.get("standby_loss_kw") is not None
+                else "—",
+            ),
+        ]
+        dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+
+        if test.windows:
+            body_rows = "".join(
+                f"<tr><td>{_esc(w.date)}</td><td>{w.hours:.1f} t</td>"
+                f"<td>{w.delta_k:.1f} K</td><td>{w.loss_kw * 1000:.0f} W</td>"
+                f"<td>{w.ua_w_per_k:.1f} W/K</td></tr>"
+                for w in test.windows
+            )
+            table = (
+                "<h2>Målinger</h2><table><thead><tr><th>Dato</th><th>Længde</th>"
+                "<th>Over rummet</th><th>Tab</th><th>Koefficient</th></tr></thead>"
+                f"<tbody>{body_rows}</tbody></table>"
+            )
+        else:
+            table = "<h2>Målinger</h2><p class=sub>Ingen endnu.</p>"
+
+        body = (
+            "<h1>Ståtab</h1>"
+            "<p class=sub>Lageret taber varme til rummet hele tiden, og det tal "
+            "er det ene led der kan vende fortegnet på en for-opladning: varme "
+            "der lades ind klokken fire og bruges klokken ni, har fem timer til "
+            "at sive ud.</p>"
+            "<p class=sub><b>Sådan måles det.</b> Sluk cirkulationspumpen til "
+            "huset, så du selv ved at der hverken går noget ind eller ud — "
+            "flowmåleren kan vise nul ved strømme op mod 100 l/h, så dens nul "
+            "er ikke et bevis. Tryk så start. Tryk stop om morgenen. Kører en "
+            "varmekilde undervejs, begynder vinduet forfra af sig selv.</p>"
+            "<p class=sub>Én nat er nok: tabet er proportionalt med forskellen "
+            "til rummet, så et enkelt vindue giver koefficienten i W/K direkte. "
+            "Flere nætter ved forskellig tanktemperatur gør den bedre.</p>"
+            + (f'<p class="sub"><b>{_esc(note)}</b></p>' if note else "")
+            + f"<dl>{dl}</dl>"
+            + f'<form method="post">{button}</form>'
+            + table
+        )
+        return _page("Ståtab", "standby", body)
 
     async def system(self, request: web.Request) -> web.Response:
         note = ""

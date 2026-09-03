@@ -76,7 +76,9 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 1.15, places=9)
+        # Snitprisen er hvad energien kostede pr. kWh der landede i
+        # batteriet. Leveret til varmepumpen igen koster den 1/0,85 af det.
+        self.assertAlmostEqual(price.kr_per_kwh, 1.15 / 0.85, places=9)
         self.assertIn("frit", price.reason)
 
     def test_energy_is_valued_against_a_coming_export(self):
@@ -156,7 +158,7 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 1.0, places=9)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.0 / 0.85, places=9)
         self.assertIn("frit", price.reason)
 
     def test_a_full_battery_can_afford_to_be_valued_against_export(self):
@@ -303,4 +305,35 @@ class VocabularyTest(unittest.TestCase):
 
         self.assertEqual(len(caught.records), 1)
         self.assertIn("turboladning", caught.output[0].lower())
+
+
+class RoundTripTest(unittest.TestCase):
+    """Batteriets energi koster mere leveret end den kostede koebt."""
+
+    def test_the_average_is_the_delivered_cost_not_the_purchase_price(self):
+        # Node-RED vejer importprisen med den SOC-stigning den gav, altsaa
+        # pr. kWh der landede i batteriet - uden lade- eller afladetab.
+        p = plan(row(), battery_average=1.00)
+
+        self.assertAlmostEqual(p.battery_average, 1.00 / 0.85, places=9)
+
+    def test_it_makes_charging_the_tanks_during_a_battery_charge_pay(self):
+        # Predbat lader batteriet til 1,00. Koerer varmepumpen paa nettet i
+        # den samme halvtime, koster stroemmen 1,00 - gaar den samme energi
+        # gennem batteriet foerst, koster den 1,176.
+        during = plan(row(state="chrg", import_rate=100), battery_average=1.00)
+        later = plan(row(), battery_average=1.00)
+
+        now = during.marginal(0, grid=Grid(grid_power=5000))
+        via_battery = later.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(now.kr_per_kwh, 1.00, places=9)
+        self.assertGreater(via_battery.kr_per_kwh, now.kr_per_kwh)
+        self.assertAlmostEqual(via_battery.kr_per_kwh / now.kr_per_kwh, 1 / 0.85, places=6)
+
+    def test_the_export_floor_still_holds_the_bottom(self):
+        # Selv gratis energi er mindst det vaerd man kan saelge den for.
+        p = plan(row(), battery_average=0.10)
+
+        self.assertAlmostEqual(p.battery_average, 0.80, places=9)
 

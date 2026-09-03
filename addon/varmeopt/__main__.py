@@ -34,6 +34,7 @@ from .migrate import (
     COMPARE_FILE,
     GUARD_FILE,
     SOLAR_FILE,
+    STANDBY_FILE,
     load_cop_table,
     load_heat_curve,
     load_solar,
@@ -44,6 +45,7 @@ from .planner import Planner
 from .prices import Grid, Plan
 from .solar import DayTracker, SolarModel
 from .store import Store
+from .standby import StandbyTest
 from .tank import Buffer, Tank
 from .web import WebUI
 
@@ -86,6 +88,9 @@ class Varmeopt:
             horizon_minutes=int(options.planner_horizon_hours * 60),
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
+        # Staatabsmaalingen. Den maaler kun naar brugeren selv har aabnet et
+        # vindue - se standby.py for hvorfor den ikke bare kan aflaese det.
+        self.standby = StandbyTest()
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
@@ -219,6 +224,17 @@ class Varmeopt:
             mode=mode,
             dhw_active=dhw_active,
             room_temp=room_temp,
+            standby=self.standby.observe(
+                time.time(),
+                buffer.mean_temp if buffer is not None else None,
+                room_temp,
+                sum(t.liters for t in buffer.measured) if buffer is not None else 0.0,
+                balance.sources if balance is not None else None,
+            ),
+            standby_ua=self.standby.ua_w_per_k,
+            standby_loss_kw=self.standby.loss_kw_at(
+                buffer.mean_temp if buffer is not None else None, room_temp
+            ),
             curve_note=curve_note,
             predicted_setpoint=(
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
@@ -932,6 +948,7 @@ class Varmeopt:
                 SOLAR_FILE,
                 {"model": self.solar.to_raw(), "day": self.solar_day.to_raw()},
             )
+            self.store.save(STANDBY_FILE, self.standby.to_raw())
             self.store.save(
                 COMPARE_FILE,
                 {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
@@ -993,6 +1010,7 @@ async def run() -> None:
         log.info(solar_note)
 
         app.guard.restore(store.load(GUARD_FILE, {}))
+        app.standby = StandbyTest.from_raw(store.load(STANDBY_FILE, {}))
         if app.guard.committed:
             log.info("vagten genoptager binding: %s", app.guard.committed)
 
@@ -1022,6 +1040,8 @@ async def run() -> None:
             curve=lambda: app.curve,
             journal=journal,
             options=options,
+            standby=lambda: app.standby,
+            on_standby=lambda arm: _toggle_standby(app, arm),
         )
         await web.start()
         log.info("web-UI lytter paa port %d (ingress)", web.port)
@@ -1134,3 +1154,19 @@ if __name__ == "__main__":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(run())
+
+
+def _toggle_standby(app: Any, arm: bool) -> str:
+    """Aabn eller luk et staatabsvindue, og gem resultatet med det samme.
+
+    Gemmes der ikke her, ville en maaling der lige er afsluttet kunne gaa
+    tabt ved en genstart inden naeste automatiske gemning - og den maaling
+    kostede en nat uden cirkulation.
+    """
+    now = time.time()
+    note = app.standby.arm(now) if arm else app.standby.disarm(now)
+    log.info("staatabsmaaling: %s", note)
+    if not arm:
+        app._dirty = True
+        app.save()
+    return note

@@ -194,7 +194,19 @@ class Plan:
         self.slots = slots
         # Batteriets gennemsnitspris, men aldrig under eksportgulvet: der er
         # altid muligheden for at sælge i stedet for at bruge.
-        self.battery_average = max(battery_average, export_floor)
+        # Batteriets snitpris er hvad energien kostede *ved elmåleren*, pr.
+        # kWh der landede i batteriet — Node-REDs node vejer importprisen med
+        # den SOC-stigning den gav, og regner hverken lade- eller afladetab
+        # med. Skal den kWh ud til varmepumpen igen, koster den derfor
+        # 1/virkningsgraden af det tal.
+        #
+        # Det er ikke en detalje. Det er præcis grunden til at det kan betale
+        # sig at lade *tankene* op mens Predbat lader batteriet: varme lagret
+        # i vand taber en brøkdel over en aften, hvor den samme kWh gennem
+        # batteriet taber 15 % hver eneste gang.
+        self.battery_average = max(
+            battery_average / BATTERY_ROUND_TRIP, export_floor
+        )
         self.export_floor = export_floor
 
     def __len__(self) -> int:
