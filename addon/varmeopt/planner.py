@@ -171,9 +171,16 @@ class Planner:
         cop_later: Any = None,
         headroom_kwh: float | None = None,
         solar_expected_kwh: float | None = None,
+        grid: Any = None,
     ) -> Decision:
-        """Hele svaret: kilde nu, og om der skal lades ud over behovet."""
-        price_now = plan.marginal(0) if plan is not None else None
+        """Hele svaret: kilde nu, og om der skal lades ud over behovet.
+
+        ``grid`` er den fysiske strømretning. Den gælder kun indeværende
+        halvtime, og den *skal* med: uden den falder prissætningen af nu-timen
+        tilbage på batteriets gennemsnit, og beslutningen ville så bruge en
+        anden pris end den sensoren viser.
+        """
+        price_now = plan.marginal(0, grid=grid) if plan is not None else None
         now = price_now.kr_per_kwh if price_now is not None else None
 
         vp_now = self.heat_price(now, cop_now)
@@ -244,6 +251,7 @@ class Planner:
         cop_now: float | None,
         cop_later: Any = None,
         target_minutes: int | None = None,
+        grid: Any = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
 
@@ -257,7 +265,9 @@ class Planner:
 
         rows: list[Projection] = []
         for minutes in range(0, self.horizon_minutes + 1, SLOT_MINUTES):
-            price = plan.marginal(minutes)
+            # Maaleren gaelder kun nu-timen; marginal() ser selv bort fra den
+            # for alt andet, men vi sender den kun hvor den hoerer hjemme.
+            price = plan.marginal(minutes, grid=grid if minutes == 0 else None)
             if price is None:
                 break
             slot = plan.at(minutes)

@@ -19,6 +19,14 @@ log = logging.getLogger(__name__)
 
 SUPERVISOR_URL = "http://supervisor/core"
 
+# En cyklus laver ~30 sekventielle opslag. Uden en grænse gælder aiohttps
+# standard på fem minutter, og ét hængende kald ville så blokere hele
+# cyklussen — hvorefter beslutningssensoren står uopdateret med sit flag.
+REQUEST_TIMEOUT = 20.0
+
+# Et servicekald må gerne tage længere: vejrudsigten skal hentes og samles.
+SERVICE_TIMEOUT = 45.0
+
 
 class HaError(RuntimeError):
     pass
@@ -72,13 +80,19 @@ class HomeAssistant:
             return None
         url = f"{self._url}/api/states/{entity_id}"
         try:
-            async with self._session.get(url, headers=self._headers) as res:
+            async with self._session.get(
+                url,
+                headers=self._headers,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
+            ) as res:
                 if res.status == 404:
                     return None
                 if res.status >= 400:
                     raise HaError(f"GET {entity_id} -> HTTP {res.status}")
                 body = await res.json()
-        except aiohttp.ClientError as exc:
+        # TimeoutError er ikke en ClientError. Uden den her slap en timeout
+        # forbi og vaeltede hele cyklussen i stedet for det ene opslag.
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise HaError(f"GET {entity_id}: {exc}") from exc
 
         return State(
@@ -99,11 +113,16 @@ class HomeAssistant:
         """
         url = f"{self._url}/api/services/{domain}/{service}?return_response"
         try:
-            async with self._session.post(url, headers=self._headers, json=data) as res:
+            async with self._session.post(
+                url,
+                headers=self._headers,
+                json=data,
+                timeout=aiohttp.ClientTimeout(total=SERVICE_TIMEOUT),
+            ) as res:
                 if res.status >= 400:
                     raise HaError(f"POST {domain}.{service} -> HTTP {res.status}")
                 return await res.json()
-        except (aiohttp.ClientError, ValueError) as exc:
+        except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise HaError(f"POST {domain}.{service}: {exc}") from exc
 
     async def set_state(
@@ -113,9 +132,12 @@ class HomeAssistant:
         payload = {"state": state, "attributes": attributes or {}}
         try:
             async with self._session.post(
-                url, headers=self._headers, json=payload
+                url,
+                headers=self._headers,
+                json=payload,
+                timeout=aiohttp.ClientTimeout(total=REQUEST_TIMEOUT),
             ) as res:
                 if res.status >= 400:
                     raise HaError(f"POST {entity_id} -> HTTP {res.status}")
-        except aiohttp.ClientError as exc:
+        except (aiohttp.ClientError, TimeoutError) as exc:
             raise HaError(f"POST {entity_id}: {exc}") from exc

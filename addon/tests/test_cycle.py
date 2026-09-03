@@ -33,6 +33,7 @@ class FakeHa:
     def __init__(self, states: dict[str, State]) -> None:
         self._states = states
         self.published: list[tuple[str, object]] = []
+        self.attributes: dict[str, dict] = {}
         # Vejrudsigten hentes med et service-kald, ikke som en tilstand.
         self.forecast_response: dict = {}
         self.services: list[tuple[str, str]] = []
@@ -45,6 +46,7 @@ class FakeHa:
 
     async def set_state(self, entity_id, state, attributes=None) -> None:
         self.published.append((entity_id, state))
+        self.attributes[entity_id] = attributes or {}
 
     async def call_service(self, domain, service, data):
         self.services.append((domain, service))

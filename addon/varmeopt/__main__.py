@@ -168,6 +168,7 @@ class Varmeopt:
             cop_later=self._cop_at,
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
+            grid=prices.get("grid"),
         )
         # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
         # det. Siger den nej, staar beslutningen der stadig, og Node-RED
@@ -180,6 +181,7 @@ class Varmeopt:
             lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
             target_minutes=decision.window_minutes,
+            grid=prices.get("grid"),
         )
 
         self.status.update(
@@ -635,6 +637,37 @@ class Varmeopt:
                 self.tally.summary(),
             )
 
+    async def release_control(self, ha: HomeAssistant) -> None:
+        """Saet flaget falsk, saa Node-RED tager over igen.
+
+        Kaldes ved nedlukning. Fejler skrivningen, er der ikke mere vi kan
+        goere — men saa skal det staa i loggen, for saa *er* der en frossen
+        kommando derude.
+        """
+        self.guard.release()
+        try:
+            await ha.set_state(
+                SENSOR_DECISION,
+                self.status.get("decision").source
+                if self.status.get("decision") is not None
+                else "ukendt",
+                {
+                    "friendly_name": "Varmeopt beslutning",
+                    "icon": "mdi:scale-balance",
+                    "styrer": False,
+                    "styr_til": None,
+                    "styring_grund": "add-on'en er stoppet",
+                    "begrundelse": "add-on'en er stoppet",
+                },
+            )
+            log.info("gav slip paa styringen")
+        except HaError as exc:
+            log.error(
+                "KUNNE IKKE give slip paa styringen: %s - "
+                "sensor.varmeopt_beslutning kan staa med styrer=true",
+                exc,
+            )
+
     async def _publish_decision(
         self, ha: HomeAssistant, decision: Any, command: Any
     ) -> None:
@@ -919,6 +952,11 @@ async def run() -> None:
         finally:
             log.info("stopper, gemmer COP-tabellen")
             app.save()
+            # Giv slip foer vi doer. En HA-tilstand forsvinder ikke af sig
+            # selv, saa uden det her ville Node-RED foelge en frossen
+            # kommando indtil nogen opdagede det.
+            if ha is not None:
+                await app.release_control(ha)
             await web.stop()
 
 
