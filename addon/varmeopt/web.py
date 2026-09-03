@@ -407,17 +407,13 @@ class WebUI:
         for row in rows:
             changed = previous_source is not None and row.source != previous_source
             previous_source = row.source
-            if row.now and decision is not None and decision.charge:
-                # Opladningen er den eneste raekke hvor planlaeggeren goer
-                # noget aktivt. Den stod kun i banneret over tabellen, og saa
-                # skal man laese to steder for at se hvad der sker hvornaar.
-                # Kolonnen siger *hvad* der goeres og hvorfor, ikke hvor
-                # meget. Tallene staar i detaljerne ovenfor, og gentaget her
-                # goer de raekken svaerere at skimme uden at tilfoeje noget.
-                why = f"{_basis(row.reason)} · {_charge_because(target)}"
-            elif changed or row.now:
-                # Hvorfor den kilde - det er dét der aendrede sig.
-                why = row.note
+            if row.now:
+                why = f"{_basis(row.reason)} · {_now_note(decision, target)}"
+            elif changed:
+                # Kilden skifter. Det er det eneste sted i tabellen hvor der
+                # sker noget, og saa skal der staa hvad - ikke hvilke to tal
+                # der blev sammenlignet.
+                why = f"{_basis(row.reason)} · {_switch_note(row)}"
             elif row.target:
                 # Grundlaget med, saa hele kolonnen kan skimmes efter hvor
                 # prisen kommer fra - ogsaa paa den raekke der forklarer
@@ -857,6 +853,34 @@ def _basis(reason: str) -> str:
 # hver kilowatt-time koeber vi til fuld importpris. Den skal kunne ses paa
 # een gang henover en tabel med fireogtyve raekker.
 _NET_INK = "#c0392b"
+
+
+def _now_note(decision: Any, target: Any) -> str:
+    """Hvad der sker lige nu — det er den eneste raekke hvor noget besluttes."""
+    if decision is None:
+        return "afventer"
+    if decision.charge:
+        return _charge_because(target)
+    return "ingen grund til at lade op nu"
+
+
+def _switch_note(row: Any) -> str:
+    """Hvad skiftet betyder, og hvad der driver det.
+
+    Prisen bag skiftet staar i varmekolonnen ved siden af. Her hoerer
+    handlingen hjemme: hvilken kilde der overtager, og hvad der gjorde den
+    anden for dyr — for de tre grunde er ikke ens. At stroemmen koster meget
+    er noget andet end at den kunne saelges, og noget andet end at batteriet
+    er tomt for billig energi.
+    """
+    basis = _basis(row.reason).lower()
+    if row.source != "pillefyr":
+        return "tilbage på varmepumpen"
+    if basis.startswith("eksport"):
+        return "skifter til pillefyr, strømmen sælges hellere"
+    if basis.startswith("batteri"):
+        return "skifter til pillefyr, batteriet er for dyrt"
+    return "skifter til pillefyr, strømmen er for dyr"
 
 
 def _charge_because(target: Any) -> str:
