@@ -157,6 +157,11 @@ _DEFAULTS: dict[str, object] = {
     # varmepumpens raekkevidde. Det er anlaeggets fysiske top, ikke
     # varmepumpens.
     "tank_peak_temp": 90,
+    # Afspaerringsventilen til tank 2 aabner naar tank 1 er over det her paa
+    # topfoeleren. Indtil da er tankene *ment* at staa skaevt: solvarmen lader
+    # fra bunden af tank 1, og ved kun at varme de foerste 500 L naar lageret
+    # hurtigere en brugbar temperatur. Nul slaar kaskaden fra.
+    "tank_cascade_temp": 55,
     # Hent nyeste kode fra master ved opstart. Slaaet fra som udgangspunkt:
     # det koerer kode fra internettet uden et menneske imellem.
     # Pillefyret. Braendvaerdi og virkningsgrad som Node-RED regner med.
@@ -290,6 +295,7 @@ class Options:
     tank_reference_temp: float
     tank_max_temp: float
     tank_peak_temp: float
+    tank_cascade_temp: float
 
     @property
     def tanks(self) -> tuple[tuple[str, str, str, str, str], ...]:
@@ -355,6 +361,7 @@ class Options:
             tank_reference_temp=float(values["tank_reference_temp"]),
             tank_max_temp=float(values["tank_max_temp"]),
             tank_peak_temp=float(values["tank_peak_temp"]),
+            tank_cascade_temp=float(values["tank_cascade_temp"]),
             # Geometri og skalafaktor er alle tal, saa de kan tages under ét.
             # Solvarmens *entiteter* hedder entity_solar_* og fanges af
             # entity-linjen nedenfor, ikke af denne.

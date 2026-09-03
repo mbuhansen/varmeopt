@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.30.0"
+version: "0.31.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -77,6 +77,7 @@ options:
   tank_reference_temp: 30
   tank_max_temp: 60
   tank_peak_temp: 90
+  tank_cascade_temp: 55
   pellet_price_per_kg: 2.88
   pellet_kwh_per_kg: 4.8
   pellet_efficiency: 0.85
@@ -148,6 +149,7 @@ schema:
   tank_reference_temp: float(0,80)
   tank_max_temp: float(20,95)
   tank_peak_temp: float(20,120)
+  tank_cascade_temp: float(0,120)?
   pellet_price_per_kg: float(0,100)
   pellet_kwh_per_kg: float(1,20)
   pellet_efficiency: float(0.1,1)

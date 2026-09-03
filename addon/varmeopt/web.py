@@ -328,15 +328,27 @@ class WebUI:
         ]
         dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
 
-        # Ubalance over 5 K mellem to parallelle tanke er ikke et varmeproblem
-        # men et flowproblem, og det er værd at sige højt.
+        # En stor forskel mellem tankene er kun et flowproblem hvis de var
+        # ment til at lades samtidig. Lades de i raekkefoelge, er forskellen
+        # netop det ventilen er sat til at lave, og en advarsel der altid
+        # lyser er en advarsel man holder op med at laese.
         warn = ""
         if buffer.imbalance is not None and buffer.imbalance > 5:
-            warn = (
-                f'<p class="legend warn">Tankene står {buffer.imbalance:.1f} K fra '
-                "hinanden. To parallelle tanke bør lagdele ens — så stor en forskel "
-                "peger på skæv flowfordeling, ikke på varmen.</p>"
-            )
+            if buffer.imbalance_is_by_design:
+                warn = (
+                    f'<p class="legend">Tankene står {buffer.imbalance:.1f} K fra '
+                    "hinanden, og det er meningen: tankene lades i rækkefølge. "
+                    f"Ventilen til tank 2 åbner først når tank 1 er over "
+                    f"{buffer.cascade_temp:.0f} °C i toppen, så de første "
+                    "liter når en brugbar temperatur hurtigt.</p>"
+                )
+            else:
+                warn = (
+                    f'<p class="legend warn">Tankene står {buffer.imbalance:.1f} K fra '
+                    "hinanden, og tank 1 er ladet så langt varmepumpen kan tage "
+                    "den. Rækkefølgen er altså kørt til ende uden at forskellen "
+                    "rettede sig — det peger på flowet, ikke på varmen.</p>"
+                )
 
         body = (
             "<h1>Varmelager</h1>"

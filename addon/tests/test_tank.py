@@ -221,3 +221,70 @@ class ChargePercentTest(unittest.TestCase):
 
         self.assertEqual(b.sensors_lost, 3)
 
+
+class CascadeTest(unittest.TestCase):
+    """Anlaegget lader tankene i raekkefoelge, ikke parallelt.
+
+    Afspaerringsventilen til tank 2 aabner foerst naar tank 1 er over 55 paa
+    topfoeleren. Det er med vilje: solvarmen lader fra bunden af tank 1, saa
+    ved kun at varme de foerste 500 L naar lageret hurtigere en brugbar
+    temperatur.
+    """
+
+    def store(self, a_top, b_top, cascade=55.0):
+        return Buffer(
+            tanks=(tank(top=a_top, mid=a_top - 11, bottom=a_top - 23),
+                   tank(name="B", top=b_top, mid=b_top - 6, bottom=b_top - 12)),
+            reference=30.0, ceiling=60.0, cascade_temp=cascade,
+        )
+
+    def test_a_gap_while_the_first_tank_fills_is_by_design(self):
+        b = self.store(50.0, 38.0)
+
+        self.assertGreater(b.imbalance, 5.0)
+        self.assertTrue(b.cascade_filling)
+        self.assertTrue(b.imbalance_is_by_design)
+
+    def test_and_still_is_just_after_the_valve_opens(self):
+        # Anlaeggets egne tal 3. september: A 55,2/44,2/32,3, B 41,0/35,3/28,8.
+        # Ventilen er lige aabnet ved 55, og tank 2 er ved at hente ind. At
+        # kalde det en flowfejl ville vaere lige saa forkert som at kalde
+        # opfyldningen af tank 1 en fejl.
+        b = self.store(55.2, 41.0)
+
+        self.assertGreater(b.imbalance, 5.0)
+        self.assertFalse(b.cascade_filling)
+        self.assertTrue(b.imbalance_is_by_design)
+
+    def test_but_not_once_the_first_tank_is_as_full_as_the_pump_can_make_it(self):
+        # Raekkefoelgen er koert til ende uden at have rettet forskellen op.
+        # Saa er det flowet.
+        b = self.store(60.5, 41.0)
+
+        self.assertGreater(b.imbalance, 5.0)
+        self.assertFalse(b.imbalance_is_by_design)
+
+    def test_without_a_cascade_every_gap_is_a_flow_problem(self):
+        b = self.store(50.0, 41.0, cascade=0.0)
+
+        self.assertFalse(b.imbalance_is_by_design)
+
+    def test_the_store_still_delivers_from_the_warm_tank(self):
+        # Kaskaden aendrer ikke hvad lageret kan levere - det er den
+        # varmeste afgang, ikke gennemsnittet.
+        b = self.store(55.2, 41.0)
+
+        self.assertAlmostEqual(b.deliverable, 55.2, places=6)
+        self.assertTrue(b.can_deliver(54.0))
+
+    def test_the_energy_is_the_sum_regardless(self):
+        # Kaskaden er en raekkefoelge, ikke en opdeling: begge tanke lades,
+        # bare ikke samtidig. Energien og pladsen er summen som foer.
+        b = self.store(55.2, 41.0)
+
+        self.assertAlmostEqual(
+            b.stored_kwh,
+            sum(t.stored_kwh(30.0) for t in b.tanks),
+            places=9,
+        )
+

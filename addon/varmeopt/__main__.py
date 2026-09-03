@@ -378,6 +378,7 @@ class Varmeopt:
             self.options.tank_reference_temp,
             self.options.tank_max_temp,
             self.options.tank_peak_temp,
+            self.options.tank_cascade_temp,
         )
         return buffer if buffer.covered else None
 

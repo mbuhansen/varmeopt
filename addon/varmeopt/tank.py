@@ -163,6 +163,15 @@ class Buffer:
     # andet siger om der stadig er et sted at gøre af gratis eller overskydende
     # varme.
     peak_ceiling: float = 90.0
+    # Anlægget lader tankene i rækkefølge, ikke parallelt: en afspærringsventil
+    # på tank to åbner først når tank ét er over den her temperatur i toppen.
+    # Det er med vilje — solvarmen lader fra bunden af tank ét, og ved kun at
+    # varme de første 500 L når lageret hurtigere en brugbar temperatur.
+    #
+    # Konsekvensen for modellen er ikke energien, som er summen uanset, men
+    # hvordan en *ubalance* skal læses: så længe tank ét er under grænsen, er
+    # forskellen designet, ikke en fejl. Nul slår kaskaden fra.
+    cascade_temp: float = 0.0
 
     @property
     def measured(self) -> tuple[Tank, ...]:
@@ -253,13 +262,45 @@ class Buffer:
     def imbalance(self) -> float | None:
         """Største forskel i middeltemperatur mellem to tanke.
 
-        To parallelle tanke bør lagdele ens. Gør de det ikke, er det ikke
-        varmen der er skæv, men flowet — skæv fordeling eller en ventil der
-        ikke gør sit arbejde. Tallet er gratis at føre med, og det er den
-        slags fejl man ellers først opdager om vinteren.
+        Tallet er en kendsgerning; om det er et problem, afgør
+        ``imbalance_is_by_design``. På et anlæg med parallelle tanke betyder
+        en stor forskel skævt flow. På et anlæg der lader i rækkefølge
+        betyder den bare at første tank ikke er fyldt endnu.
         """
         means = [t.mean_temp for t in self.measured if t.mean_temp is not None]
         return max(means) - min(means) if len(means) > 1 else None
+
+    @property
+    def cascade_filling(self) -> bool:
+        """Er første tank stadig under den temperatur der åbner for de næste?"""
+        if self.cascade_temp <= 0 or not self.tanks:
+            return False
+        first = self.tanks[0]
+        return first.top is not None and first.top < self.cascade_temp
+
+    @property
+    def imbalance_is_by_design(self) -> bool:
+        """Skal forskellen mellem tankene læses som en fejl eller som drift?
+
+        På et anlæg der lader i rækkefølge er tankene *ment* at stå skævt —
+        ikke bare mens første tank fyldes, men også et stykke efter ventilen
+        har åbnet, mens den anden henter ind. Uden det her ville et anlæg der
+        virker som det skal, stå med en permanent advarsel, og en advarsel
+        der altid lyser er en advarsel man holder op med at læse.
+
+        Grænsen går ved at *første* tank er ladet så langt varmepumpen kan
+        tage den. Er den det, og står den anden stadig langt bagud, er
+        rækkefølgen kørt til ende uden at have rettet forskellen op — og så
+        er det flowet.
+
+        Det er ikke en tidsmåling, og det er med vilje: en tidsmåling ville
+        kræve historik, og den forskel den skulle afgøre er ikke stor nok til
+        at bære den kompleksitet.
+        """
+        if self.cascade_temp <= 0 or not self.tanks:
+            return False
+        first = self.tanks[0]
+        return first.top is None or first.top < self.ceiling
 
     def can_deliver(self, required: float) -> bool:
         """Kan mindst én tank levere den temperatur lige nu?"""
