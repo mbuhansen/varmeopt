@@ -18,9 +18,12 @@ tilstand det bedste vi har.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Under denne eksportpris regnes batteriets energi ikke for billigere end som
 # så: der er altid den mulighed at sælge den. Samme gulv som Node-RED bruger.
@@ -60,6 +63,23 @@ ASSUMED_SOC = 50.0
 
 SLOT_MINUTES = 30
 
+# Predbats ordforraad for hvad batteriet laver i en halvtime, som det staar i
+# planens raekker. Listen er ikke en filtrering - den er en kontrol, saa en
+# tilstand vi ikke kender bliver sagt hoejt i loggen i stedet for stiltiende
+# at blive laest som "batteriet er frit".
+_KNOWN_STATES = (
+    "chrg",     # ogsaa dischrg, frzchrg, holdchrg
+    "charge",
+    "exp",      # ogsaa frzexp
+    "export",
+    "hold",
+    "freeze",
+    "frz",
+    "idle",
+    "demand",
+    "ecoo",     # Predbats "Eco (no discharge)"
+)
+
 
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
@@ -88,6 +108,18 @@ class Slot:
     @property
     def discharging(self) -> bool:
         return "dischrg" in self.state or "discharge" in self.state
+
+    @property
+    def understood(self) -> bool:
+        """Kunne vi overhovedet tyde hvad Predbat har planlagt her?
+
+        En tom tilstand er «ingenting planlagt» og er helt i orden. Alt andet
+        vi ikke genkender, er ordforråd vi ikke kender — og så prissætter vi
+        halvtimen som om batteriet var frit, hvilket det måske ikke er.
+        """
+        return not self.state.strip() or any(
+            word in self.state for word in _KNOWN_STATES
+        )
 
     @property
     def charging(self) -> bool:
@@ -200,7 +232,16 @@ class Plan:
                     soc_percent=_number(row.get("soc_percent")),
                 )
             )
-        return cls(tuple(slots), battery_average, export_floor)
+        plan = cls(tuple(slots), battery_average, export_floor)
+        unknown = sorted({s.state for s in plan.slots if not s.understood})
+        if unknown:
+            # Sig det én gang pr. plan, ikke én gang pr. halvtime.
+            log.warning(
+                "ukendte Predbat-tilstande i planen: %s - de prissættes som "
+                "et frit batteri, hvilket de måske ikke er",
+                ", ".join(repr(u) for u in unknown),
+            )
+        return plan
 
     # ------------------------------------------------------------------ opslag
 

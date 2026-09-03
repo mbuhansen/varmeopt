@@ -54,7 +54,9 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
         decision = self.planner.decide(self.plan, cop_now=3.0, grid=grid)
 
         self.assertAlmostEqual(sensor_price, 3.50, places=9)
-        self.assertAlmostEqual(decision.heat_price, 3.50 / 3.0, places=9)
+        # Plus slitagen: varmepumpevarme koster 0,15 kr/kWh mere end
+        # elprisen alene siger.
+        self.assertAlmostEqual(decision.heat_price, 3.50 / 3.0 + 0.15, places=9)
 
     def test_and_therefore_picks_the_boiler_when_the_grid_is_dear(self):
         # 3,50/3 = 1,17 kr/kWh varme mod pillefyrets 0,71.

@@ -57,7 +57,26 @@ class CheapestHeatTest(unittest.TestCase):
         self.assertAlmostEqual(planner().cheapest_heat(20.0, 4.0), PELLET, places=9)
 
     def test_the_pump_wins_when_it_is_cheaper(self):
-        self.assertAlmostEqual(planner().cheapest_heat(1.20, 4.0), 0.30, places=9)
+        # 1,20/4 = 0,30 i stroem, plus 0,15 i slitage. Varmepumpevarme
+        # koster mere end elprisen alene siger.
+        self.assertAlmostEqual(planner().cheapest_heat(1.20, 4.0), 0.45, places=9)
+
+    def test_wear_belongs_to_the_pump_and_not_to_the_boiler(self):
+        # Pillefyret baerer ikke tallet - der er braendslet og
+        # virkningsgraden hele historien.
+        self.assertAlmostEqual(planner().cheapest_heat(20.0, 4.0), PELLET, places=9)
+
+    def test_wear_can_decide_the_source(self):
+        # 2,50/4 = 0,625 i ren stroem: klart under pillefyrets 0,706, og saa
+        # havde varmepumpen vundet. Med slitagen er varmen 0,775, og saa er
+        # pillefyret billigst. Det er hele pointen i at flytte tallet - de
+        # to regnestykker gav foer to forskellige svar.
+        p = planner()
+
+        self.assertLess(p.heat_price(2.50, 4.0) - 0.15, PELLET - p.hysteresis)
+        self.assertGreater(p.heat_price(2.50, 4.0), PELLET + p.hysteresis)
+
+        self.assertEqual(p.decide(plan(250), cop_now=4.0).source, "pillefyr")
 
     def test_no_cop_falls_back_to_the_boiler(self):
         self.assertAlmostEqual(planner().cheapest_heat(1.20, None), PELLET, places=9)
@@ -94,19 +113,36 @@ class DecideTest(unittest.TestCase):
         self.assertAlmostEqual(høj.saving_kr, højere.saving_kr, places=9)
 
     def test_below_the_cap_a_dearer_hour_is_worth_more(self):
-        # Under loftet slaar prisen stadig igennem.
-        mild = planner().decide(plan(40, 240), cop_now=4.0, headroom_kwh=20)
-        værre = planner().decide(plan(40, 280), cop_now=4.0, headroom_kwh=20)
+        # Under loftet slaar prisen stadig igennem. Loftet ligger nu ved
+        # 0,706 - 0,15 = 0,556 kr/kWh varme, altsaa 2,22 kr/kWh stroem ved
+        # COP 4; begge raekker her er under.
+        mild = planner().decide(plan(40, 180), cop_now=4.0, headroom_kwh=20)
+        værre = planner().decide(plan(40, 210), cop_now=4.0, headroom_kwh=20)
 
         self.assertGreater(værre.saving_kr, mild.saving_kr)
 
-    def test_wear_has_to_be_covered_first(self):
-        # 0,10 kr at hente pr. kWh, men slitagen er 0,15. Saa lad vaere.
+    def test_moving_pump_heat_in_time_costs_no_extra_wear(self):
+        # 0,40 -> 0,80 kr/kWh stroem ved COP 4. Slitagen er den samme om
+        # pumpen koerer nu eller om en halv time - den samme kWh gaar
+        # igennem den samme maskine - saa de 0,10 kr er en aegte gevinst.
+        #
+        # Foer blev slitagen trukket fra her *og* talt i varmeprisen, og saa
+        # blev det til -0,05 og ingen opladning.
         decision = planner(wear_kr_per_kwh=0.15).decide(
             plan(40, 80), cop_now=4.0, headroom_kwh=20
         )
 
-        self.assertFalse(decision.charge)
+        self.assertTrue(decision.charge)
+
+    def test_but_displacing_pellet_heat_does_pay_the_wear(self):
+        # Her er den senere varme pillefyrets, og saa staar slitagen
+        # tilbage i marginen: 0,706 - (0,40/4 + 0,15) = 0,456, ikke 0,606.
+        decision = planner(wear_kr_per_kwh=0.15).decide(
+            plan(40, 300), cop_now=4.0, cop_later=4.0, headroom_kwh=20, demand_kw=None
+        )
+
+        self.assertTrue(decision.charge)
+        self.assertAlmostEqual(decision.saving_kr / decision.charge_kwh, 0.456, places=6)
 
     def test_solar_gets_its_share_first(self):
         # 20 kWh plads, men solen venter med 18. Saa er der 2 tilbage, og det
@@ -134,8 +170,8 @@ class DecideTest(unittest.TestCase):
         same = planner().decide(plan(40, 100), cop_now=4.0, cop_later=4.0, headroom_kwh=20)
         worse = planner().decide(plan(40, 100), cop_now=4.0, cop_later=2.5, headroom_kwh=20)
 
-        self.assertFalse(same.charge)
         self.assertTrue(worse.charge)
+        self.assertGreater(worse.saving_kr, same.saving_kr)
 
     def test_the_reason_says_what_was_decided(self):
         decision = planner().decide(plan(40, 240), cop_now=4.0, headroom_kwh=20)

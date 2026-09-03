@@ -104,9 +104,9 @@ def source_now(
     if heat_price is None:
         return "varmepumpe", "ingen COP — antager varmepumpe"
     if heat_price > pellet_price + hysteresis:
-        return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
+        return "pillefyr", f"VP {heat_price:.2f} m. slid > pille {pellet_price:.2f}"
     if heat_price < pellet_price - hysteresis:
-        return "varmepumpe", f"VP {heat_price:.2f} < pille {pellet_price:.2f}"
+        return "varmepumpe", f"VP {heat_price:.2f} m. slid < pille {pellet_price:.2f}"
     return "varmepumpe", "tæt løb — varmepumpen foretrækkes"
 
 
@@ -148,9 +148,27 @@ class Planner:
         return cop_later if cop_later is not None else cop_now
 
     def heat_price(self, electricity_price: float | None, cop: float | None) -> float | None:
+        """Hvad en kWh varme fra varmepumpen koster — strøm plus slitage.
+
+        Slitagen hører med her og ikke kun i opladningen. At køre
+        varmepumpen koster noget ud over strømmen, og den omkostning følger
+        varmen: laver den en kWh, er den kWh dyrere end elprisen alene siger.
+        Pillefyret bærer ikke tallet — der er brændslet og virkningsgraden
+        hele historien.
+
+        Før stod slitagen kun i opladningen, hvor den blev trukket fra
+        marginen. Så blev den samme omkostning talt i det ene regnestykke og
+        ignoreret i det andet, og kildevalget kunne vælge varmepumpen på en
+        pris der ikke fandtes.
+
+        Til gengæld skal den *ikke* trækkes fra marginen længere: står den i
+        begge led, går den ud af sig selv når varmen alligevel skulle laves
+        af varmepumpen — og det skal den, for slitagen er den samme uanset
+        hvornår på aftenen pumpen kører.
+        """
         if not _finite(electricity_price) or not _finite(cop) or cop <= 0:
             return None
-        return electricity_price / cop
+        return electricity_price / cop + self.wear
 
     def cheapest_heat(self, electricity_price: float | None, cop: float | None) -> float:
         """Den billigste varme man kan lave i en given time.
@@ -208,9 +226,12 @@ class Planner:
             if gap > best_gap:
                 best_gap, best_when = gap, minutes
 
-        # Slitagen skal daekkes foer det er en gevinst. Ellers er man bare
-        # begyndt at slide paa varmepumpen for at flytte oerer.
-        margin = best_gap - self.wear
+        # Slitagen er allerede inde i begge led gennem ``heat_price``, saa
+        # den maa ikke traekkes fra igen. Skal varmen alligevel laves af
+        # varmepumpen, gaar den ud af sig selv - det er den samme slitage
+        # om pumpen koerer nu eller om tre timer. Skal den ellers laves af
+        # pillefyret, staar den tilbage i marginen, hvor den hoerer hjemme.
+        margin = best_gap
         if best_when is None or margin <= 0:
             return _with(decision, reason=f"{why}; intet at hente ved at gemme")
 
@@ -313,7 +334,7 @@ class Planner:
         if not _finite(demand_kw) or demand_kw <= 0:
             return None
 
-        threshold = vp_now + self.wear
+        threshold = vp_now
         minutes = best_when
         span = 0
         while minutes <= self.horizon_minutes:

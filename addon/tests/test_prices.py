@@ -277,3 +277,29 @@ class WindowTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class VocabularyTest(unittest.TestCase):
+    """Predbats tilstandsstrenge er ikke efterproevet mod anlaegget."""
+
+    def test_the_states_predbat_is_known_to_write_are_understood(self):
+        for state in ("Chrg", "Dischrg", "FrzChrg", "FrzDischrg", "HoldChrg",
+                      "Exp", "FrzExp", "Hold", "Idle", "Demand", ""):
+            with self.subTest(state=state):
+                p = plan(row(state=state))
+                self.assertTrue(p.slots[0].understood, state)
+
+    def test_a_state_we_cannot_read_is_flagged_not_swallowed(self):
+        # Kan vi ikke tyde den, prissaettes halvtimen som et frit batteri -
+        # hvilket den maaske ikke er. Saa skal det staa i loggen.
+        p = plan(row(state="Turboladning"))
+
+        self.assertFalse(p.slots[0].understood)
+
+    def test_reading_a_plan_with_an_unknown_state_warns_once(self):
+        with self.assertLogs("varmeopt.prices", level="WARNING") as caught:
+            plan(row(state="Turboladning"), row(state="Turboladning"))
+
+        self.assertEqual(len(caught.records), 1)
+        self.assertIn("turboladning", caught.output[0].lower())
+

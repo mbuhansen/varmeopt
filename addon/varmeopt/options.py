@@ -64,6 +64,10 @@ _DEFAULTS: dict[str, object] = {
     "forecast_refresh_minutes": 30,
     "entity_nodered_decision": "sensor.varme_styring",
     "entity_predbat_plan": "predbat.plan_html",
+    # Predbats nuvaerende tilstand. Planens raekker bruger samme ordforraad
+    # pr. halvtime, saa den her er den eneste maade at se hvad anlaeggets
+    # egen Predbat faktisk skriver - uden at gaette paa dokumentationen.
+    "entity_predbat_status": "predbat.status",
     # Er planen aeldre end det her, er priserne fra et andet tidspunkt.
     # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
     # og uden pris naegter vagten at styre.
@@ -190,6 +194,7 @@ class Options:
     forecast_refresh_minutes: float
     entity_nodered_decision: str
     entity_predbat_plan: str
+    entity_predbat_status: str
     plan_max_age_minutes: float
     entity_battery_power: str
     entity_grid_power: str

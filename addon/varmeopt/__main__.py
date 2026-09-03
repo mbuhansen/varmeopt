@@ -87,6 +87,8 @@ class Varmeopt:
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         self._dirty = False
+        # Sig det én gang pr. ny uenighed, ikke hvert minut.
+        self._last_status_warning: str | None = None
         self._last_save = 0.0
         self._last_learned_stamp: str | None = None
 
@@ -584,15 +586,50 @@ class Varmeopt:
         if now is None:
             return {}
 
+        # Predbats egen tilstand lige nu. Planens raekker bruger samme
+        # ordforraad pr. halvtime, saa den her er den eneste maade at se hvad
+        # *dette* anlaegs Predbat faktisk skriver - i stedet for at gaette paa
+        # dokumentationen. Siger de to noget forskelligt om den halvtime vi
+        # staar i, er det os der laeser planen forkert.
+        status = await self._state(ha, self.options.entity_predbat_status)
+        if status is not None and plan.slots:
+            self._check_predbat_status(status.state, plan.slots[0])
+
         return {
             "plan": plan,
             "price_now": now,
             "grid": grid,
+            "predbat_status": status.state if status is not None else None,
             "heat_price": self.planner.heat_price(
                 now.kr_per_kwh, lookup.cop if lookup is not None else None
             ),
             "pellet_price": self.options.pellet_kwh_price,
         }
+
+    def _check_predbat_status(self, status: str, slot: Any) -> None:
+        """Siger Predbat og vores laesning af planen det samme om nu?
+
+        Kun en kontrol - der styres ikke efter den. Men er de uenige om
+        indevaerende halvtime, laeser vi planens tilstandsstrenge forkert, og
+        saa er hver eneste pris i horisonten et gaet. Det skal staa i loggen,
+        ikke opdages en vinter senere.
+        """
+        text = (status or "").strip().lower()
+        if not text or text in ("unknown", "unavailable"):
+            return
+        theirs = ("dischrg" in text or "discharg" in text, "chrg" in text or "charg" in text)
+        theirs = (theirs[0], theirs[1] and not theirs[0])
+        ours = (slot.discharging, slot.charging)
+        if theirs != ours and text != self._last_status_warning:
+            log.warning(
+                "Predbat siger %r, men planens foerste raekke %r laeses som "
+                "lader=%s/aflader=%s - tjek tilstandsstrengene",
+                status,
+                slot.state,
+                ours[1],
+                ours[0],
+            )
+            self._last_status_warning = text
 
     async def _publish_price(self, ha: HomeAssistant, prices: dict[str, Any]) -> None:
         price = prices["price_now"]
@@ -607,6 +644,7 @@ class Varmeopt:
             "vp_varmepris": _round(prices.get("heat_price"), 3),
             "pille_varmepris": round(prices["pellet_price"], 3),
             "horisont_timer": round(plan.horizon_minutes / 60, 1),
+            "predbat_status": prices.get("predbat_status"),
         }
 
         for hours in (2, 4, 6):
