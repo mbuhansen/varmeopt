@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.16.1"
+version: "0.17.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -32,6 +32,7 @@ options:
   forecast_refresh_minutes: 30
   entity_nodered_decision: sensor.varme_styring
   entity_predbat_plan: predbat.plan_html
+  plan_max_age_minutes: 60
   entity_battery_power: sensor.hostname_scb_5313dd_battery_power
   entity_grid_power: sensor.hostname_scb_5313dd_grid_power
   entity_solar_today: sensor.solvarme_produktion_idag
@@ -99,6 +100,7 @@ schema:
   forecast_refresh_minutes: float(5,720)
   entity_nodered_decision: str?
   entity_predbat_plan: str?
+  plan_max_age_minutes: float(5,1440)
   entity_battery_power: str?
   entity_grid_power: str?
   entity_solar_today: str?

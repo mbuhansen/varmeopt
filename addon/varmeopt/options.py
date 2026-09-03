@@ -61,6 +61,10 @@ _DEFAULTS: dict[str, object] = {
     "forecast_refresh_minutes": 30,
     "entity_nodered_decision": "sensor.varme_styring",
     "entity_predbat_plan": "predbat.plan_html",
+    # Er planen aeldre end det her, er priserne fra et andet tidspunkt.
+    # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
+    # og uden pris naegter vagten at styre.
+    "plan_max_age_minutes": 60,
     "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
     "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
     # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
@@ -183,6 +187,7 @@ class Options:
     forecast_refresh_minutes: float
     entity_nodered_decision: str
     entity_predbat_plan: str
+    plan_max_age_minutes: float
     entity_battery_power: str
     entity_grid_power: str
     entity_solar_today: str
@@ -328,6 +333,7 @@ class Options:
                     "control_min_dwell_minutes",
                     "control_warmup_minutes",
                     "forecast_refresh_minutes",
+                    "plan_max_age_minutes",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i

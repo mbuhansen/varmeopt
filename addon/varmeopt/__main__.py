@@ -554,6 +554,16 @@ class Varmeopt:
         if state is None:
             return {}
 
+        # En foraeldet plan er farligere end ingen plan: priserne ser
+        # gyldige ud, saa vagten gaar igennem alle porte paa tal fra et
+        # andet tidspunkt.
+        age = state.age_seconds()
+        if age is not None and age > self.options.plan_max_age_minutes * 60:
+            log.warning(
+                "Predbats plan er %.0f min gammel - regner uden den", age / 60
+            )
+            return {}
+
         battery_average = _as_number(context.get("battery_avg_price")) or 0.0
         plan = Plan.from_predbat(state.attributes, battery_average=battery_average)
         if not len(plan):

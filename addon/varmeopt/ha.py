@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,6 +42,22 @@ class State:
     # den identificerer en måling. Det er sådan en poller kan kende en ny
     # aflæsning fra den samme aflæsning set igen.
     last_changed: str | None = None
+    # last_changed flytter sig kun naar *tilstanden* skifter vaerdi.
+    # Predbats plan ligger i attributterne, saa til foraeldelse skal
+    # last_updated bruges - den flytter sig ogsaa naar attributter gor.
+    last_updated: str | None = None
+
+    def age_seconds(self, now: datetime | None = None) -> float | None:
+        """Hvor gammel aflæsningen er. None hvis tidsstemplet mangler."""
+        stamp = self.last_updated or self.last_changed
+        if not isinstance(stamp, str):
+            return None
+        try:
+            when = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        reference = now or datetime.now(timezone.utc)
+        return (reference - when).total_seconds()
 
     def as_float(self) -> float | None:
         """Tilstanden som tal, eller None hvis den ikke er et.
@@ -100,6 +117,7 @@ class HomeAssistant:
             state=str(body.get("state", "")),
             attributes=body.get("attributes") or {},
             last_changed=body.get("last_changed"),
+            last_updated=body.get("last_updated"),
         )
 
     async def call_service(

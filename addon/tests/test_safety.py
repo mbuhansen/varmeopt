@@ -275,5 +275,71 @@ def _decision(source):
 
     return Decision(source=source, heat_price=0.30, pellet_price=PELLET)
 
+
+class StalePlanTest(unittest.TestCase):
+    """En forældet plan er farligere end ingen plan."""
+
+    def setUp(self):
+        from datetime import datetime, timedelta, timezone
+
+        self.now = datetime.now(timezone.utc)
+        self.timedelta = timedelta
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
+        self.nodered = FakeNodeRed({"udeTemp": 17.2})
+
+    def _ha_with_plan(self, age_minutes):
+        o = self.app.options
+        stamp = (self.now - self.timedelta(minutes=age_minutes)).isoformat()
+        return FakeHa(
+            {
+                FLOW: State(FLOW, "31.0", {}, "f"),
+                COP: State(COP, "4.4", {}, "m"),
+                o.entity_predbat_plan: State(
+                    o.entity_predbat_plan,
+                    "ok",
+                    {"raw": {"rows": [{"state": "holdchrg", "import_rate": 40,
+                                       "export_rate": 50}]}},
+                    stamp,
+                    stamp,
+                ),
+            }
+        )
+
+    def test_a_fresh_plan_is_used(self):
+        ha = self._ha_with_plan(age_minutes=5)
+        asyncio.run(self.app.cycle(ha, self.nodered))
+
+        self.assertIsNotNone(self.app.status.get("price_now"))
+
+    def test_a_stale_plan_is_dropped(self):
+        # Priserne ser gyldige ud, men de er fra et andet tidspunkt.
+        ha = self._ha_with_plan(age_minutes=180)
+        asyncio.run(self.app.cycle(ha, self.nodered))
+
+        self.assertIsNone(self.app.status.get("price_now"))
+
+    def test_and_then_the_guard_refuses_to_control(self):
+        self.app.guard.enabled = True
+        self.app.guard.warmup_minutes = 0.0
+        ha = self._ha_with_plan(age_minutes=180)
+        asyncio.run(self.app.cycle(ha, self.nodered))
+
+        self.assertFalse(self.app.status["command"].acting)
+
+    def test_age_uses_last_updated_not_last_changed(self):
+        # Predbats plan ligger i attributterne. last_changed staar stille naar
+        # kun de aendrer sig, saa den ville sige at planen var timer gammel.
+        old = (self.now - self.timedelta(hours=6)).isoformat()
+        fresh = (self.now - self.timedelta(minutes=2)).isoformat()
+        state = State("x", "ok", {}, last_changed=old, last_updated=fresh)
+
+        self.assertLess(state.age_seconds(self.now), 300)
+
+    def test_a_missing_timestamp_is_not_treated_as_stale(self):
+        self.assertIsNone(State("x", "ok", {}).age_seconds())
+
+
 if __name__ == "__main__":
     unittest.main()
