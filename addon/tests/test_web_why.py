@@ -103,5 +103,54 @@ class ChargeBecauseTest(unittest.TestCase):
         self.assertIn("dyrere varme", _charge_because(None))
 
 
+
+class VesselCardTest(unittest.TestCase):
+    """Brugsvand og spa: begge beholdere siger om de varmer lige nu."""
+
+    FULL = {
+        "vvb_top": 55.4, "vvb_bottom": 48.1, "spa_temp": 37.2,
+        "spa_target": 38.0, "dhw_active": True, "spa_heating": False,
+    }
+
+    def labels(self, status):
+        import re
+        from varmeopt.web import _vessel_section
+        return [k for k, _ in re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>",
+                                         _vessel_section(status))]
+
+    def value(self, status, label):
+        import re
+        from varmeopt.web import _vessel_section
+        pairs = dict(re.findall(r"<dt>(.*?)</dt><dd>(.*?)</dd>",
+                                _vessel_section(status)))
+        return re.sub("<[^>]+>", "", pairs[label])
+
+    def test_both_vessels_say_whether_they_are_heating(self):
+        self.assertEqual(self.value(self.FULL, "VVB varmer"), "ja")
+        self.assertEqual(self.value(self.FULL, "Spa varmer"), "nej")
+
+    def test_the_flag_sits_with_the_vessel_it_belongs_to(self):
+        # Ikke nederst i en samlet klump - man laeser beholderen, ikke listen.
+        labels = self.labels(self.FULL)
+
+        self.assertEqual(labels.index("VVB varmer"), labels.index("VVB bund") + 1)
+        self.assertEqual(labels.index("Spa varmer"), labels.index("Spa mål") + 1)
+
+    def test_a_vessel_that_does_not_answer_gets_no_row(self):
+        without = dict(self.FULL)
+        del without["dhw_active"]
+
+        self.assertNotIn("VVB varmer", self.labels(without))
+        self.assertIn("Spa varmer", self.labels(without))
+
+    def test_a_flag_alone_is_not_worth_a_card(self):
+        # Foer talte flagene med i tomhedstjekket, saa et enkelt spa-flag
+        # kunne holde et ellers tomt kort i live.
+        from varmeopt.web import _vessel_section
+
+        self.assertEqual(_vessel_section({"spa_heating": True}), "")
+        self.assertEqual(_vessel_section({"dhw_active": False}), "")
+
+
 if __name__ == "__main__":
     unittest.main()

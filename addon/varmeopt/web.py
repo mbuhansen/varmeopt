@@ -1111,20 +1111,39 @@ def _solar_section(status: dict[str, Any], buffer: Any) -> str:
     return f'<h2>Solprognose</h2><div class="card"><dl>{dl}</dl></div>{note}'
 
 
+def _heating_row(label: str, on: Any) -> list[tuple[str, str]]:
+    """Varmer den lige nu? Tom liste hvis anlægget ikke svarer på det."""
+    if on is None:
+        return []
+    ink = "#c0392b" if on else "var(--muted)"
+    text = "ja" if on else "nej"
+    return [(label, f'<b style="color:{ink}">{text}</b>')]
+
+
 def _vessel_section(status: dict[str, Any]) -> str:
     """Varmtvandsbeholder og spa: egne lagre, samme varmekilder."""
-    rows = [
+    temperatures = [
         ("VVB top", _fmt(status.get("vvb_top"), "°C", 1)),
         ("VVB bund", _fmt(status.get("vvb_bottom"), "°C", 1)),
         ("Spa", _fmt(status.get("spa_temp"), "°C", 1)),
         ("Spa mål", _fmt(status.get("spa_target"), "°C", 1)),
     ]
-    heating = status.get("spa_heating")
-    if heating is not None:
-        rows.append(("Spa varmer", "ja" if heating else "nej"))
-
-    if all(value == "—" for _, value in rows):
+    # Kortet er tomt hvis der ikke er en eneste temperatur. Et ja/nej alene
+    # er ikke et kort vaerd — og det taeller derfor ikke med her. Foer stod
+    # tjekket paa hele listen, saa et enkelt spa-flag kunne holde et ellers
+    # tomt kort i live.
+    if all(value == "—" for _, value in temperatures):
         return ""
+
+    rows: list[tuple[str, str]] = []
+    for label, value in temperatures:
+        rows.append((label, value))
+        # Varmer-flaget hoerer sammen med den beholder det gaelder, ikke
+        # nederst i en samlet klump.
+        if label == "VVB bund":
+            rows += _heating_row("VVB varmer", status.get("dhw_active"))
+        elif label == "Spa mål":
+            rows += _heating_row("Spa varmer", status.get("spa_heating"))
 
     dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
     return (
