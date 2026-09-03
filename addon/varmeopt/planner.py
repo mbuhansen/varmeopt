@@ -238,6 +238,28 @@ class Planner:
         if best_when is None or margin <= 0:
             return _with(decision, reason=f"{why}; intet at hente ved at gemme")
 
+        # Spoergsmaal 2a: er forskellen stor nok til at handle paa?
+        #
+        # Her stod intet, og saa var enhver positiv forskel nok. En margin
+        # paa 0,04 kr/kWh mod en halvtime ti timer ude satte 13 kWh i
+        # bevaegelse - og de 0,04 er mindre end usikkerheden paa de tal de er
+        # regnet af: batteriets snitpris, en COP fra en tabel og Predbats
+        # plan for i morgen tidlig.
+        #
+        # Snittet er det samme som kildevalget bruger. Under det kan tallene
+        # ikke skelne de to muligheder, og en plan der handler paa stoej,
+        # handler hele tiden - hver aften faar man flyttet en lagerfuld varme
+        # rundt for at hente en forskel der ikke er der.
+        if margin <= self.hysteresis:
+            return _with(
+                decision,
+                window_minutes=best_when,
+                reason=(
+                    f"{why}; kun {margin:.2f} kr/kWh at hente om {best_when} "
+                    "min — for tæt til at flytte varme på"
+                ),
+            )
+
         # Spoergsmaal 2b: er *nu* overhovedet det rigtige tidspunkt?
         #
         # Her stod intet, og det var en dyr tavshed. Loekken ovenfor finder

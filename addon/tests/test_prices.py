@@ -125,6 +125,80 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 3.00, places=9)
         self.assertIn("tom", price.reason)
 
+    def test_the_reserve_is_read_from_the_plan_not_from_a_constant(self):
+        # Reserven paa anlaegget er 14 %, ikke de 12 der stod i koden. Uden
+        # planens eget gulv blev en halvtime hvor batteriet ligger i bund,
+        # prissat som om der stadig var noget at tage af.
+        p = plan(
+            row(soc=14, import_rate=170),
+            row(soc=14, import_rate=160),
+            battery_average=0.80,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertEqual(p.reserve, 14)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.70, places=9)
+        self.assertIn("tom", price.reason)
+
+    def test_a_flat_plan_high_up_is_not_a_bottom(self):
+        # Staar ladetilstanden stille paa 70 %, er det solen der daekker
+        # huset. Det er ikke et tomt batteri, og energien koster sit snit.
+        p = plan(row(soc=70), row(soc=70), row(soc=70), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertIsNone(p.reserve)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.0 / 0.85, places=9)
+        self.assertIn("frit", price.reason)
+
+    def test_a_single_dip_is_not_a_bottom(self):
+        # Et dyk til 20 % er ikke en bund - batteriet kommer op igen af sig
+        # selv, og der er noget at tage af hele vejen.
+        p = plan(row(soc=30), row(soc=20), row(soc=30), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertIsNone(p.reserve)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.0 / 0.85, places=9)
+        self.assertIn("frit", price.reason)
+
+    def test_a_battery_that_runs_dry_costs_what_it_takes_to_buy_back(self):
+        # Batteriet daekker huset nu, men planen viser det i bund laenge foer
+        # det lades igen. Saa er den kWh vi bruger nu, praecis den kWh vi
+        # koeber til 1,73 naar batteriet staar tomt - ikke de 1,00 den
+        # kostede engang. Gennemsnittet er sunk cost.
+        p = plan(
+            row(soc=37, import_rate=190),
+            row(soc=20, import_rate=180),
+            row(soc=14, import_rate=173),
+            row(soc=14, import_rate=170),
+            row(soc=14, import_rate=150),
+            row(soc=15, import_rate=140),
+            row(state="chrg", soc=40, import_rate=85),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.73, places=9)
+        self.assertIn("købes tilbage om 60 min", price.reason)
+
+    def test_a_charge_before_the_bottom_leaves_the_average_alone(self):
+        # Fyldes batteriet inden det loeber toert, er energien ikke
+        # disponeret, og saa er gennemsnittet stadig det rigtige tal.
+        p = plan(
+            row(soc=40), row(soc=38), row(soc=36), row(soc=34), row(soc=32),
+            row(state="chrg", soc=60, import_rate=85),
+            row(soc=14), row(soc=14),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.0 / 0.85, places=9)
+        self.assertIn("frit", price.reason)
+
     def test_the_grid_wins_when_the_inverter_is_already_maxed(self):
         # Baade "batteriet aflader" og "vi importerer" kan vaere sande paa
         # en gang: saa staar inverteren paa sit loft, og ekstra forbrug kan

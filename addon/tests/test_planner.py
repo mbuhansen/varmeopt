@@ -96,6 +96,21 @@ class DecideTest(unittest.TestCase):
         self.assertFalse(decision.charge)
         self.assertIn("intet at hente", decision.reason)
 
+    def test_a_margin_inside_the_noise_is_not_worth_moving_heat_for(self):
+        # 1,00 -> 1,16 kr/kWh stroem ved COP 4 er 0,04 kr/kWh varme. Det er
+        # under hysteresen: de to halvtimer er ikke til at skelne med de tal
+        # vi har, og saa saettes 20 kWh ikke i bevaegelse paa forskellen.
+        decision = planner().decide(plan(100, 116), cop_now=4.0, headroom_kwh=20)
+
+        self.assertFalse(decision.charge)
+        self.assertIn("for tæt", decision.reason)
+
+    def test_a_margin_above_the_noise_still_charges(self):
+        # 0,06 kr/kWh varme er over snittet, og saa lades der.
+        decision = planner().decide(plan(100, 125), cop_now=4.0, headroom_kwh=20)
+
+        self.assertTrue(decision.charge)
+
     def test_a_dearer_hour_ahead_is_worth_charging_for(self):
         # 0,40 kr nu mod 2,40 senere ved COP 4: 0,10 mod 0,60 pr. kWh varme.
         decision = planner().decide(plan(40, 240), cop_now=4.0, headroom_kwh=20)

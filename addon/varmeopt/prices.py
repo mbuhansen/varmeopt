@@ -49,10 +49,26 @@ EXPORT_DISCOUNT = 0.90
 # Node-RED har samme graense; den faldt paa gulvet ved portningen.
 MIN_SOC_FOR_EXPORT = 40.0
 
-# Under denne ladetilstand er batteriet ikke en reel kilde til den naeste
-# kWh. Predbats reserve ligger typisk omkring 5-10 %, saa 12 % er lige over
-# det punkt hvor der reelt ikke er noget at tage af.
+# Kan planens egen bund ikke laeses, er det her graensen for hvornaar
+# batteriet ikke laengere er en reel kilde til den naeste kWh. Predbats
+# reserve ligger typisk omkring 5-10 %, saa 12 % er lige over det punkt hvor
+# der reelt ikke er noget at tage af. Staar reserven at laese i planen,
+# bruges den i stedet - paa det her anlaeg er den 14 %, og saa ramte de 12
+# aldrig.
 MIN_SOC_FOR_BATTERY = 12.0
+
+# Saa mange halvtimer skal planen ligge i bund, foer bunden er en reserve og
+# ikke bare et dyk. Et dyk er ikke en bund - der er stadig noget at tage af.
+RESERVE_SLOTS = 2
+
+# Predbats ladetilstande er hele procenter, saa en halv procent er rigeligt
+# til at afgoere om en halvtime ligger i bund.
+FLOOR_TOLERANCE = 0.5
+
+# Over den her ladetilstand er en flad kurve ikke en bund. Ligger planen
+# stille paa 70 %, er det fordi solen daekker huset - ikke fordi batteriet er
+# tomt. En reserve er altid et lavt tal.
+MAX_RESERVE = 25.0
 
 # Tillaeg paa genanskaffelsesprisen: tab ved at koere en kWh ind og ud af
 # batteriet igen. Anlaeggets inverter taber omkring 15 % hele vejen rundt,
@@ -208,6 +224,8 @@ class Plan:
             battery_average / BATTERY_ROUND_TRIP, export_floor
         )
         self.export_floor = export_floor
+        # Predbats reserve staar ikke i planen, men den kan laeses af den.
+        self.reserve = self._find_reserve()
 
     def __len__(self) -> int:
         return len(self.slots)
@@ -266,6 +284,7 @@ class Plan:
         return {
             "battery_average": self.battery_average,
             "export_floor": self.export_floor,
+            "reserve": self.reserve,
             "horizon_minutes": self.horizon_minutes,
             "slots": [
                 {
@@ -288,6 +307,50 @@ class Plan:
             if predicate(slot):
                 return slot
         return None
+
+    # -------------------------------------------------------------- reserven
+
+    def _find_reserve(self) -> float | None:
+        """Den ladetilstand planen falder ned til og bliver liggende på.
+
+        Predbats reserve står ikke i planen, men den kan læses af den: er
+        batteriet i bund, bliver ladetilstanden stående på det samme tal
+        halvtime efter halvtime, mens huset kører videre på nettet. Det er
+        forskellen mellem «her er der ikke mere at tage af» og «her er det
+        billigst at tage det fra», og den forskel afgør hvad den næste kWh
+        koster.
+
+        Tre krav, og de holder tre andre ting ude: bunden skal ligge lavt (en
+        flad kurve i 70 % er solen der dækker, ikke et tomt batteri), den
+        skal holde i mere end én halvtime (et dyk er ikke en bund), og
+        halvtimerne må ikke være bundne (står ladetilstanden stille fordi
+        Predbat holder batteriet, er det ikke fordi der ikke er noget i det).
+        """
+        levels = [s.soc_percent for s in self.slots if s.soc_percent is not None]
+        if not levels:
+            return None
+        floor = min(levels)
+        if floor > MAX_RESERVE:
+            return None
+        resting = [
+            s
+            for s in self.slots
+            if s.soc_percent is not None
+            and s.soc_percent <= floor + FLOOR_TOLERANCE
+            and not s.locked
+        ]
+        return floor if len(resting) >= RESERVE_SLOTS else None
+
+    def _at_reserve(self, slot: Slot) -> bool:
+        """Er batteriet i bund i den halvtime?
+
+        Planens egen bund, hvis den kan læses; ellers vores eget gulv.
+        """
+        if slot.soc_percent is None:
+            return False
+        if self.reserve is not None:
+            return slot.soc_percent <= self.reserve + FLOOR_TOLERANCE
+        return slot.soc_percent <= MIN_SOC_FOR_BATTERY
 
     # ---------------------------------------------------------- marginalpris
 
@@ -404,11 +467,30 @@ class Plan:
         # den energi der er tilbage, kostede. Saa kommer den fra nettet.
         # ``soc_percent`` blev foer kun brugt i eksportgrenen, og et tomt
         # batteri blev prissat praecis som et fuldt.
-        if slot.soc_percent is not None and slot.soc_percent <= MIN_SOC_FOR_BATTERY:
-            if slot.import_price is not None:
+        if self._at_reserve(slot) and slot.import_price is not None:
+            return Price(
+                slot.import_price,
+                f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)",
+            )
+
+        # Loeber batteriet toert inden det lades op igen, er dets energi fuldt
+        # disponeret: den kWh vi bruger nu, er praecis den kWh der mangler i
+        # den halvtime hvor batteriet staar i bund, og den koeber vi fra
+        # nettet til den halvtimes importpris.
+        #
+        # Gennemsnittet nedenfor er hvad energien kostede engang. Det tal maa
+        # kun bruges naar batteriet bliver fyldt igen inden det skal bruges -
+        # ellers betales den samme kWh to gange, og den billigste af de to
+        # priser bogfoeres. Det er den samme genanskaffelsestanke som i
+        # ladegrenen ovenfor; forskellen er kun hvor energien kommer tilbage
+        # fra, og her er svaret nettet.
+        empty = self._next_where(self._at_reserve, slot.index + 1)
+        if empty is not None and empty.import_price is not None:
+            if next_charge is None or next_charge.index > empty.index:
+                minutes = empty.minutes_ahead - slot.minutes_ahead
                 return Price(
-                    slot.import_price,
-                    f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)",
+                    empty.import_price,
+                    f"batteri: købes tilbage om {minutes} min",
                 )
 
         return Price(self.battery_average, "batteri: frit")
