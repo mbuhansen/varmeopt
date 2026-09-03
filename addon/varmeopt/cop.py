@@ -135,15 +135,27 @@ def ta_curve_cop(flow: float, outdoor: float) -> float:
 
 
 def _blend_count(c1: float, w1: float, c2: float, w2: float) -> float:
-    """Vægtet harmonisk middel af to målingsantal.
+    """Hvor meget evidens der står bag et vægtet gennemsnit af to celler.
 
-    Harmonisk og ikke aritmetisk, fordi en velbelagt nabo ikke skal kunne
-    redde en tynd: interpolerer man mellem n=100 og n=1, er resultatet kun
-    lige så troværdigt som det svageste led.
+    Et vægtet gennemsnit har variansen ``w1²σ²/n1 + w2²σ²/n2``, så det
+    tilsvarende antal målinger er ``1/(w1²/n1 + w2²/n2)``. Kvadratet er ikke
+    en detalje: der stod ``w/n``, og forskellen er hvor hurtigt et lille
+    islæt af en tynd celle æder troværdigheden.
+
+    Blander man 99 % af en celle med 100 målinger med 1 % af en med én, gav
+    den gamle form 50 — halveret af en hundrededel. Den rigtige giver 100.
+    Ved 90/10 mod n=100 og n=5 var det 34,5 mod 99.
+
+    Loftet er ``max(n1, n2)``. Rent variansmæssigt kan to uafhængige skøn
+    tilsammen bære mere end hver for sig, men her er de skøn over *hvert
+    sit* driftspunkt, og interpolationen har derfor også en bias som
+    variansregningen ikke ser. Vi påstår aldrig at vide mere om et punkt
+    imellem end vi ved om det bedst målte endepunkt.
     """
     if c1 <= 0 or c2 <= 0:
         return 0.0
-    return 1.0 / (w1 / c1 + w2 / c2)
+    variance_based = 1.0 / (w1 * w1 / c1 + w2 * w2 / c2)
+    return min(max(c1, c2), variance_based)
 
 
 class CopTable:

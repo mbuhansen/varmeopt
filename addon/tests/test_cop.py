@@ -102,12 +102,30 @@ class LookupTest(unittest.TestCase):
         self.assertAlmostEqual(got.cop, 3.5)
 
     def test_weak_neighbour_drags_confidence_down(self):
-        # Harmonisk middel: en stærk nabo må ikke redde en tynd.
+        # En staerk nabo maa ikke redde en tynd. Halv vaegt paa en enkelt
+        # maaling giver en fjerdedel af dens stoej, altsaa n_eff 4 - stadig
+        # langt fra fuld tillid, men ikke de 2 den gamle w/n-form gav.
         t = table(f40={0: (4.0, 100), 10: (5.0, 1)})
         got = t.lookup(40, 5)
 
-        self.assertLess(got.learned_count, 2.0)
+        self.assertLess(got.learned_count, 5.0)
         self.assertEqual(got.source, "blend")
+
+    def test_a_sliver_of_a_thin_cell_no_longer_halves_the_trust(self):
+        # 99 % af en celle med 100 maalinger, 1 % af en med een. Den gamle
+        # w/n-form gav 50 - halveret af en hundrededel.
+        t = table(f40={0: (4.0, 100), 100: (5.0, 1)})
+        got = t.lookup(40, 1)
+
+        self.assertGreater(got.learned_count, 90.0)
+
+    def test_confidence_never_exceeds_the_best_measured_endpoint(self):
+        # To uafhaengige skoen kan variansmaessigt baere mere end hver for
+        # sig, men de er skoen over hvert sit driftspunkt.
+        t = table(f40={0: (4.0, 100), 10: (4.0, 100)})
+        got = t.lookup(40, 5)
+
+        self.assertLessEqual(got.learned_count, 100.0)
 
     def test_thin_cell_blends_towards_curve(self):
         t = table(f40={5: (2.0, 1)})
