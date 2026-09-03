@@ -23,6 +23,11 @@ from dataclasses import dataclass
 WH_PER_LITER_K = 1.149
 
 
+def _finite(value: float | None) -> bool:
+    """NaN er ikke en måling. HA leverer den som en helt almindelig værdi."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+
+
 @dataclass(frozen=True)
 class Tank:
     """Én tank med tre dybdefølere og en føler på afgangsrøret."""
@@ -35,22 +40,71 @@ class Tank:
     outlet: float | None = None
 
     @property
+    def measured(self) -> tuple[tuple[int, float], ...]:
+        """De lag vi faktisk har målt, med deres dybde. 0 er toppen."""
+        return tuple(
+            (depth, t)
+            for depth, t in enumerate((self.top, self.mid, self.bottom))
+            if _finite(t)
+        )
+
+    @property
     def layers(self) -> tuple[float, ...]:
-        """De lagtemperaturer vi faktisk har, øverst først."""
-        return tuple(t for t in (self.top, self.mid, self.bottom) if t is not None)
+        """Alle tre lag, øverst først — et manglende yderlag følger gradienten.
+
+        Her stod tidligere kun de målte lag, og de dækkede så hele volumenet
+        ligeligt. Det er rigtigt når *midterste* føler falder ud: gennemsnittet
+        af top og bund er stadig et fair bud på tanken. Men falder en yderføler
+        ud, kommer begge de resterende fra samme ende, og at brede dem ud over
+        hele tanken flytter energien groft.
+
+        500 L med 60/50/30 °C over en reference på 30 rummer 9,57 kWh. Dør
+        bundføleren, blev de 60 og 50 til hele tanken: 14,36 kWh. Halvdelen
+        mere varme end der er, netop når der er mindst grund til at tro på
+        tallet.
+
+        I stedet forlænges den lagdeling vi kan se. Med 60 og 50 målt er
+        faldet 10 K pr. lag, og bunden bliver 40 — ikke sandheden, men i den
+        rigtige retning og i den rigtige størrelsesorden.
+        """
+        known = self.measured
+        if len(known) != 2:
+            return tuple(t for _, t in known)
+
+        (d1, t1), (d2, t2) = known
+        slope = (t2 - t1) / (d2 - d1)
+        missing = ({0, 1, 2} - {d1, d2}).pop()
+        filled = t1 + slope * (missing - d1)
+
+        # En tank er varmest foroven. Går forlængelsen den anden vej, er
+        # lagdelingen enten vendt om eller en føler er ude af kalibrering, og
+        # så er det tætteste målte lag et bedre bud end en fremskrivning.
+        nearest = t1 if abs(missing - d1) <= abs(missing - d2) else t2
+        if missing == 0:
+            filled = max(filled, max(t1, t2))
+        elif missing == 2:
+            filled = min(filled, min(t1, t2))
+        if not 0.0 <= filled <= 100.0:
+            filled = nearest
+
+        out = {d1: t1, d2: t2, missing: filled}
+        return (out[0], out[1], out[2])
 
     @property
     def covered(self) -> bool:
-        return bool(self.layers)
+        return bool(self.measured)
+
+    @property
+    def sensors_lost(self) -> int:
+        """Hvor mange af de tre dybdefølere der mangler."""
+        return 3 - len(self.measured)
 
     @property
     def _liters_per_layer(self) -> float:
-        """Tankens volumen fordelt på de lag vi har målt.
+        """Tankens volumen fordelt på de lag vi regner med.
 
         En føler der er faldet ud må ikke tælle med som 0 °C — det ville se ud
-        som om en tredjedel af tanken var iskold. I stedet lader vi de
-        resterende lag dække hele volumenet: estimatet bliver grovere, men det
-        peger ikke pludselig helt galt.
+        som om en tredjedel af tanken var iskold.
         """
         return self.liters / len(self.layers) if self.layers else 0.0
 
@@ -153,9 +207,30 @@ class Buffer:
 
     @property
     def charge_percent(self) -> float | None:
-        """Hvor fuldt lageret er, mellem reference og loft."""
-        total = self.stored_kwh + self.headroom_kwh
-        return 100 * self.stored_kwh / total if total > 0 else None
+        """Hvor fuldt lageret er i det bånd varmepumpen arbejder i.
+
+        Nævneren er båndets fulde rummelighed, og tælleren tæller kun med
+        indtil loftet. Der stod ``stored / (stored + headroom)``, og de to
+        tællere måler ikke det samme: energi *over* loftet talte med foroven
+        men gav ingen rummelighed forneden. En tank på 90/70/40 med reference
+        30 og loft 60 blev til 84,6 % fyldt, hvor det ærlige svar er 78.
+        """
+        span = self.ceiling - self.reference
+        if span <= 0:
+            return None
+        capacity = 0.0
+        usable = 0.0
+        for tank in self.measured:
+            per = tank.liters / len(tank.layers) if tank.layers else 0.0
+            for t in tank.layers:
+                capacity += per * span
+                usable += per * max(0.0, min(t, self.ceiling) - self.reference)
+        return 100 * usable / capacity if capacity > 0 else None
+
+    @property
+    def sensors_lost(self) -> int:
+        """Hvor mange dybdefølere der mangler på tværs af lageret."""
+        return sum(t.sensors_lost for t in self.measured)
 
     @property
     def mean_temp(self) -> float | None:

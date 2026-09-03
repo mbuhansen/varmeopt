@@ -76,7 +76,15 @@ class Load:
         Et negativt fald ville betyde at returen er varmere end fremløbet —
         det sker ved stilstand og småfejl på følerne, og det er ikke et
         forbrug. Så er svaret nul, ikke et negativt behov.
+
+        Løber der intet vand, er der heller ikke noget behov at måle, og
+        svaret er *ukendt* — ikke nul og ikke et lille tal. En flowmåler der
+        er hængt op på 5 l/h gav før 0,06 kW, som ser ud som et rigtigt
+        forbrug: 101 timers restlevetid på lageret, og en planlægger der
+        roligt lader være med at gøre noget.
         """
+        if not self.circulating:
+            return None
         power = thermal_kw(self.litres_per_hour, self.delta)
         return None if power is None else max(0.0, power)
 

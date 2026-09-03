@@ -8,9 +8,12 @@ på miljøvariabler og defaults, så koden kan køres uden en HA-instans.
 from __future__ import annotations
 
 import json
+import logging
 import os
 from dataclasses import dataclass
 from pathlib import Path
+
+log = logging.getLogger(__name__)
 
 DEFAULT_OPTIONS_PATH = Path("/data/options.json")
 
@@ -214,9 +217,25 @@ class Options:
 
     @property
     def pellet_kwh_price(self) -> float:
-        """Pillevarme i kr pr. kWh leveret varme."""
+        """Pillevarme i kr pr. kWh leveret varme.
+
+        Ved en umulig konfiguration falder vi tilbage paa standardvaerdierne
+        og siger det hoejt. Der stod 0,0, og gratis pillevarme vinder hver
+        eneste sammenligning: anlaegget ville staa og fyre med traepiller
+        doegnet rundt, tavst, fordi nogen havde skrevet et nul i et felt.
+        """
         if self.pellet_kwh_per_kg <= 0 or self.pellet_efficiency <= 0:
-            return 0.0
+            log.error(
+                "brændværdi %.3g kWh/kg og virkningsgrad %.3g giver ingen "
+                "meningsfuld pillepris - bruger standardværdierne i stedet",
+                self.pellet_kwh_per_kg,
+                self.pellet_efficiency,
+            )
+            return (
+                float(_DEFAULTS["pellet_price_per_kg"])
+                / float(_DEFAULTS["pellet_kwh_per_kg"])
+                / float(_DEFAULTS["pellet_efficiency"])
+            )
         return (self.pellet_price_per_kg / self.pellet_kwh_per_kg) / self.pellet_efficiency
 
     @property

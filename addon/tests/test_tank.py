@@ -34,7 +34,47 @@ class TankEnergyTest(unittest.TestCase):
         gap = tank(mid=None)
 
         self.assertAlmostEqual(gap.stored_kwh(30.0), whole.stored_kwh(30.0), places=4)
-        self.assertEqual(len(gap.layers), 2)
+        self.assertEqual(gap.sensors_lost, 1)
+        # Midt imellem 60 og 30 ligger 45 - praecis det der stod der.
+        self.assertEqual(gap.layers, (60.0, 45.0, 30.0))
+
+    def test_a_lost_bottom_sensor_does_not_inflate_the_store_by_half(self):
+        # 500 L med 60/50/30 over reference 30 rummer 9,57 kWh. Da de to
+        # maalte lag daekkede hele tanken, blev det til 14,36 - halvdelen
+        # mere varme end der var, netop naar der var mindst grund til at tro
+        # paa tallet.
+        whole = tank(top=60.0, mid=50.0, bottom=30.0)
+        lost = tank(top=60.0, mid=50.0, bottom=None)
+
+        truth = whole.stored_kwh(30.0)
+        self.assertAlmostEqual(truth, 9.57, places=2)
+        # Gradienten forlaenges: 60, 50 -> 40.
+        self.assertEqual(lost.layers, (60.0, 50.0, 40.0))
+
+        # Fejlen er 1,92 kWh mod de 4,79 den gamle udgave gav. Den er ikke
+        # vaek: en rigtig tank har en termoklin, saa bunden ligger koldere
+        # end en ret linje siger, og en fremskrivning overvurderer den
+        # altid lidt. Men den er mindre end det halve.
+        was = (500 / 2) * (30 + 20) * 1.149 / 1000
+        self.assertLess(abs(lost.stored_kwh(30.0) - truth), 0.5 * abs(was - truth))
+
+    def test_a_lost_top_sensor_extends_the_gradient_upward(self):
+        lost = tank(top=None, mid=50.0, bottom=30.0)
+
+        self.assertEqual(lost.layers, (70.0, 50.0, 30.0))
+
+    def test_an_inverted_profile_falls_back_on_the_nearest_layer(self):
+        # Bunden varmere end midten er enten omroert eller en foeler ude af
+        # kalibrering. Saa er en fremskrivning vaerre end det naermeste maal.
+        lost = tank(top=None, mid=40.0, bottom=60.0)
+
+        self.assertEqual(lost.layers[0], 60.0)
+
+    def test_a_nan_is_not_a_measurement(self):
+        t = tank(mid=float("nan"))
+
+        self.assertEqual(t.sensors_lost, 1)
+        self.assertEqual(t.layers, (60.0, 45.0, 30.0))
 
     def test_uncovered_tank_stores_nothing(self):
         t = tank(top=None, mid=None, bottom=None)
@@ -157,3 +197,27 @@ class BufferTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChargePercentTest(unittest.TestCase):
+    def test_energy_above_the_ceiling_does_not_inflate_the_percentage(self):
+        # 90/70/40 med reference 30 og loft 60. Der stod stored/(stored +
+        # headroom), og de to taellere maalte ikke det samme: energi over
+        # loftet talte med foroven men gav ingen rummelighed forneden.
+        b = Buffer(tanks=(tank(top=90.0, mid=70.0, bottom=40.0),),
+                   reference=30.0, ceiling=60.0)
+
+        self.assertAlmostEqual(b.charge_percent, 77.8, places=1)
+
+    def test_a_store_at_the_ceiling_is_full_and_no_more(self):
+        b = Buffer(tanks=(tank(top=60.0, mid=60.0, bottom=60.0),),
+                   reference=30.0, ceiling=60.0)
+
+        self.assertAlmostEqual(b.charge_percent, 100.0, places=6)
+
+    def test_lost_sensors_are_counted_across_the_store(self):
+        b = Buffer(tanks=(tank(mid=None), tank(name="B", top=None, mid=None)),
+                   reference=30.0, ceiling=60.0)
+
+        self.assertEqual(b.sensors_lost, 3)
+

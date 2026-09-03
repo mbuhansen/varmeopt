@@ -375,6 +375,9 @@ class Varmeopt:
             "loft_temp": buffer.ceiling,
             "plads_i_alt_kwh": round(buffer.peak_headroom_kwh, 2),
             "over_vp_loft": buffer.above_heatpump_ceiling,
+            # En manglende dybdefoeler goer lagerenergien til et skoen. Det
+            # skal kunne ses, ikke bare regnes videre paa.
+            "foelere_mangler": buffer.sensors_lost,
             # Hvor meget af varmepumpens baand solen selv tager i dag, og hvad
             # der saa er tilbage at lade uden at fortraenge gratis varme.
             "forventet_solvarme_kwh": _round(self.status.get("solar_expected"), 1),

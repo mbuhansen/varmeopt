@@ -64,9 +64,15 @@ class Forecast:
             minutes = (stamp - now).total_seconds() / 60
             if minutes < -60:
                 continue
-            points.append((max(0.0, minutes), temp))
+            points.append((minutes, temp))
 
-        points.sort()
+        # Sorter paa den *rigtige* tid, ikke paa den afkortede. Foer laa
+        # klampningen foer sorteringen, saa alle fortidige punkter fik
+        # minuttal 0,0 og blev raekkefoelgebestemt af deres temperatur.
+        # Harmloest ved timeoploesning, hvor der hoejst er ét; forkert ved
+        # kvarter, hvor fire punkter byttede plads efter hvor varmt der var.
+        points.sort(key=lambda point: point[0])
+        points = [(max(0.0, minutes), temp) for minutes, temp in points]
         return cls(tuple(points))
 
     # ------------------------------------------------------------------ opslag
