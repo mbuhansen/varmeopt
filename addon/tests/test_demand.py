@@ -98,3 +98,36 @@ class BalanceTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MeterFloorTest(unittest.TestCase):
+    """Et nul fra en maaler der foerst taeller fra 100 l/h er ikke et nul."""
+
+    def test_a_zero_below_the_floor_is_unknown_not_no_demand(self):
+        # Maaleren kan vise nul ved reelle stroemme op mod 100 l/h. Ved 15 K
+        # er det op mod 1,7 kW, altsaa ikke noget man kan kalde ingenting.
+        load = Load(flow=45.0, ret=30.0, litres_per_hour=0.0)
+
+        self.assertIsNone(load.kw)
+        self.assertFalse(load.trustworthy)
+
+    def test_a_stuck_meter_is_unknown_too(self):
+        # 5 l/h gav foer 0,06 kW, som ser ud som et rigtigt forbrug: 101
+        # timers restlevetid paa lageret.
+        load = Load(flow=45.0, ret=30.0, litres_per_hour=5.0)
+
+        self.assertIsNone(load.kw)
+
+    def test_above_the_floor_the_reading_counts(self):
+        load = Load(flow=45.0, ret=30.0, litres_per_hour=130.0)
+
+        self.assertIsNotNone(load.kw)
+        self.assertTrue(load.trustworthy)
+
+    def test_the_floor_is_the_meters_property_not_the_plants(self):
+        # En bedre maaler ville have et lavere gulv, og saa er 50 l/h en
+        # maaling. Derfor er tallet en indstilling.
+        load = Load(flow=45.0, ret=30.0, litres_per_hour=50.0, meter_floor=10.0)
+
+        self.assertIsNotNone(load.kw)
+

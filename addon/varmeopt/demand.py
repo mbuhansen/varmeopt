@@ -17,8 +17,10 @@ Formlen er efterprøvet mod anlæggets eget display: 130 l/h ved 18,2 K giver
 De fire kilder er ikke lige sikkert målt, og det skal man vide inden man
 undrer sig over at regnskabet ikke går op:
 
-- **Husets forbrug** har en rigtig flowmåler. Det er det mest pålidelige tal
-  i balancen.
+- **Husets forbrug** har en rigtig flowmåler, men den har en bund: under
+  omkring 100 l/h kan den vise nul selv om der løber vand. Et nul betyder
+  altså ikke «intet forbrug» — det betyder «højst 100 l/h», og det er ikke
+  det samme. Derfor er behovet *ukendt* under den grænse, ikke nul.
 - **Solvarmen** har ikke. Produktionen er en flowkurve lagt ind i UVR'en, som
   følger pumpens PWM-signal og et analogt flow — der er ingen digital
   flowmåler. Værdien er altså modelleret, ikke målt, og en skævhed i den
@@ -62,6 +64,9 @@ class Load:
     flow: float | None = None
     ret: float | None = None
     litres_per_hour: float | None = None
+    # Målerens bund. Under den kan den vise nul selv om der løber vand, så
+    # aflæsningen siger «højst så meget» og ikke «så meget».
+    meter_floor: float = 100.0
 
     @property
     def delta(self) -> float | None:
@@ -71,27 +76,38 @@ class Load:
 
     @property
     def kw(self) -> float | None:
-        """Varmebehovet nu.
+        """Varmebehovet nu, eller None når måleren ikke kan svare.
 
         Et negativt fald ville betyde at returen er varmere end fremløbet —
         det sker ved stilstand og småfejl på følerne, og det er ikke et
         forbrug. Så er svaret nul, ikke et negativt behov.
 
-        Løber der intet vand, er der heller ikke noget behov at måle, og
-        svaret er *ukendt* — ikke nul og ikke et lille tal. En flowmåler der
-        er hængt op på 5 l/h gav før 0,06 kW, som ser ud som et rigtigt
-        forbrug: 101 timers restlevetid på lageret, og en planlægger der
-        roligt lader være med at gøre noget.
+        Under målerens bund er svaret *ukendt*, ikke nul og ikke et lille
+        tal. Det gælder begge fejl: en måler der hænger på 5 l/h gav før
+        0,06 kW, som ser ud som et rigtigt forbrug — 101 timers restlevetid
+        på lageret, og en planlægger der roligt lod være med at gøre noget.
+        Og et nul fra en måler der først tæller fra 100 l/h er ikke et nul,
+        det er «højst 100 l/h», hvilket ved 15 K er op mod 1,7 kW.
         """
-        if not self.circulating:
+        if not self.trustworthy:
             return None
         power = thermal_kw(self.litres_per_hour, self.delta)
         return None if power is None else max(0.0, power)
 
     @property
+    def trustworthy(self) -> bool:
+        """Er flowaflæsningen over målerens bund?
+
+        Grænsen er målerens egenskab, ikke anlæggets. Denne måler kan vise
+        nul ved reelle strømme op mod 100 l/h, så alt derunder — nul
+        inklusive — er en aflæsning vi ikke kan regne på.
+        """
+        return _finite(self.litres_per_hour) and self.litres_per_hour >= self.meter_floor
+
+    @property
     def circulating(self) -> bool:
-        """Løber der overhovedet vand? Under 10 l/h er der tale om stilstand."""
-        return _finite(self.litres_per_hour) and self.litres_per_hour >= 10
+        """Løber der vand vi kan måle? Bevaret navn; se ``trustworthy``."""
+        return self.trustworthy
 
 
 @dataclass(frozen=True)

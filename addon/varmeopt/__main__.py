@@ -127,6 +127,9 @@ class Varmeopt:
         # med et fast setpunkt, og de maalinger hoerer ikke til i kurven.
         # Udgangene siger det som en kendsgerning; setpunktet ville kun
         # vaere et gaet.
+        room_temp = (
+            await self._number(ha, self.options.entity_room_temp) if ha else None
+        )
         dhw_active = await self._binary(ha, self.options.entity_dhw_active) if ha else None
         mode, is_dhw = _mode(
             dhw_active, vessels.get("spa_heating"), flow_temp, self.curve
@@ -215,6 +218,7 @@ class Varmeopt:
             hp_lift=_difference(hp_flow, hp_return),
             mode=mode,
             dhw_active=dhw_active,
+            room_temp=room_temp,
             curve_note=curve_note,
             predicted_setpoint=(
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
@@ -380,6 +384,17 @@ class Varmeopt:
             # En manglende dybdefoeler goer lagerenergien til et skoen. Det
             # skal kunne ses, ikke bare regnes videre paa.
             "foelere_mangler": buffer.sensors_lost,
+            # Rummet tankene staar i. Staatabet foelger forskellen til det
+            # her, ikke til en antaget kaeldertemperatur - og de to tal
+            # sammen er raamaterialet til at maale tabet naar der en nat
+            # hverken tilfoeres eller traekkes noget.
+            "rum_temp": _round(self.status.get("room_temp"), 1),
+            "over_rummet_k": _round(
+                None
+                if self.status.get("room_temp") is None or buffer.mean_temp is None
+                else buffer.mean_temp - self.status["room_temp"],
+                1,
+            ),
             # Hvor meget af varmepumpens baand solen selv tager i dag, og hvad
             # der saa er tilbage at lade uden at fortraenge gratis varme.
             "forventet_solvarme_kwh": _round(self.status.get("solar_expected"), 1),
@@ -846,6 +861,7 @@ class Varmeopt:
             flow=await self._number(ha, self.options.entity_flow_measured),
             ret=await self._number(ha, self.options.entity_ch_return),
             litres_per_hour=await self._number(ha, self.options.entity_ch_flow_rate),
+            meter_floor=self.options.ch_flow_meter_floor,
         )
 
         # Varmepumpens ydelse regnes af dens elforbrug og den målte COP.

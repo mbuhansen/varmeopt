@@ -45,6 +45,13 @@ _DEFAULTS: dict[str, object] = {
     # efter tankene.
     "entity_ch_return": "sensor.node_1_dl_bus_2",
     "entity_ch_flow_rate": "sensor.node_1_dl_bus_3",
+    # Flowmaalerens bund. Under den kan den vise nul selv om der loeber
+    # vand, saa en aflaesning derunder siger "hoejst saa meget" og ikke
+    # "saa meget" - og behovet er dermed ukendt, ikke nul.
+    "ch_flow_meter_floor": 100.0,
+    # Rummet hvor tankene staar. Staatabet foelger forskellen til det her,
+    # ikke til en antaget kaeldertemperatur.
+    "entity_room_temp": "sensor.sadelrum_temperature",
     # De øvrige kilder ind i lageret. Solvarmen er gratis varme, og den skal
     # kunne skelnes fra den købte.
     #
@@ -187,6 +194,8 @@ class Options:
     entity_hp_power: str
     entity_ch_return: str
     entity_ch_flow_rate: str
+    ch_flow_meter_floor: float
+    entity_room_temp: str
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
@@ -358,6 +367,7 @@ class Options:
                     "control_warmup_minutes",
                     "forecast_refresh_minutes",
                     "plan_max_age_minutes",
+                    "ch_flow_meter_floor",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i
