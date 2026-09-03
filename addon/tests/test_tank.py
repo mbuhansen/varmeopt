@@ -109,6 +109,9 @@ class BufferTest(unittest.TestCase):
         self.assertEqual(hot.headroom_kwh, 0.0)
         self.assertGreater(hot.peak_headroom_kwh, 0.0)
         self.assertTrue(hot.above_heatpump_ceiling)
+        # ... men solfangeren har stadig 30 K at give af. Det er forskellen
+        # paa de to lofter, og den afgoer om en soldag kan laeres af.
+        self.assertFalse(hot.at_peak_ceiling)
 
     def test_a_cool_buffer_is_not_above_the_heat_pump_ceiling(self):
         self.assertFalse(self.buffer.above_heatpump_ceiling)

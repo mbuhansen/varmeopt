@@ -1,6 +1,6 @@
 import unittest
 
-from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_incidence
+from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_irradiance, diffuse_fraction
 
 # Anlægget på Fyn: fire solfangere i syd med 45°, mod 6,4 kW syd/20° og
 # 4 kW vest/15° solceller.
@@ -20,34 +20,61 @@ def model(scale=None, days=0.0):
 
 class IncidenceTest(unittest.TestCase):
     def test_a_steep_south_panel_beats_a_flat_one_in_winter(self):
-        steep = daily_incidence(MIDWINTER, 55.4, Plane(45.0, 0.0))
-        flat = daily_incidence(MIDWINTER, 55.4, Plane(15.0, 0.0))
+        steep = daily_irradiance(MIDWINTER, 55.4, Plane(45.0, 0.0))
+        flat = daily_irradiance(MIDWINTER, 55.4, Plane(15.0, 0.0))
 
         self.assertGreater(steep, flat)
 
     def test_and_loses_to_it_in_summer(self):
-        steep = daily_incidence(MIDSUMMER, 55.4, Plane(45.0, 0.0))
-        flat = daily_incidence(MIDSUMMER, 55.4, Plane(15.0, 0.0))
+        steep = daily_irradiance(MIDSUMMER, 55.4, Plane(45.0, 0.0))
+        flat = daily_irradiance(MIDSUMMER, 55.4, Plane(15.0, 0.0))
 
         self.assertLess(steep, flat)
 
     def test_the_sun_is_up_far_longer_in_june(self):
         self.assertGreater(
-            daily_incidence(MIDSUMMER, 55.4, Plane(0.0, 0.0)),
-            3 * daily_incidence(MIDWINTER, 55.4, Plane(0.0, 0.0)),
+            daily_irradiance(MIDSUMMER, 55.4, Plane(0.0, 0.0)),
+            3 * daily_irradiance(MIDWINTER, 55.4, Plane(0.0, 0.0)),
         )
+
+
+class DiffuseTest(unittest.TestCase):
+    def test_the_sky_carries_most_of_the_light_here(self):
+        # 55,4° nord. Under halvdelen kommer fra solskiven, selv midt om
+        # sommeren, og om vinteren er det fire femtedele.
+        self.assertGreater(diffuse_fraction(MIDSUMMER), 0.45)
+        self.assertGreater(diffuse_fraction(MIDWINTER), diffuse_fraction(MIDSUMMER))
+        self.assertLess(diffuse_fraction(MIDWINTER), 0.95)
+
+    def test_a_flat_plane_sees_the_whole_sky_and_a_steep_one_does_not(self):
+        # Udsynsfaktoren er hele grunden til at aarstidsudsvinget er mindre
+        # end den direkte straaling alene siger.
+        for doy in (MIDSUMMER, MIDWINTER):
+            flat = daily_irradiance(doy, 55.4, Plane(0.0, 0.0))
+            steep = daily_irradiance(doy, 55.4, Plane(90.0, 0.0))
+            self.assertGreater(flat, 0.0)
+            self.assertGreater(steep, 0.0)
 
 
 class GeometryTest(unittest.TestCase):
     def test_the_ratio_swings_across_the_year(self):
         # Det er hele grunden til at geometrien regnes i stedet for at læres:
-        # en fast faktor ville være groft forkert det halve af året.
+        # en fast faktor ville være forkert det halve af året.
         summer = FYN.ratio(MIDSUMMER)
         winter = FYN.ratio(MIDWINTER)
 
         self.assertLess(summer, 1.0)
-        self.assertGreater(winter, 2.0)
-        self.assertGreater(winter / summer, 2.0)
+        self.assertGreater(winter, 1.2)
+        self.assertGreater(winter / summer, 1.3)
+
+    def test_the_swing_is_not_the_one_beam_alone_would_predict(self):
+        # Regnet paa kun den direkte straaling svinger forholdet 2,5x og
+        # december lander paa 2,27. Det lovede planlaeggeren 74 % mere
+        # solvarme end anlaegget kan levere, i den maaned hvor et forkert
+        # loefte er dyrest.
+        winter = FYN.ratio(MIDWINTER)
+
+        self.assertLess(winter, 1.6)
 
     def test_identical_planes_give_a_ratio_of_one(self):
         same = Geometry(55.4, Plane(30.0, 0.0), (Plane(30.0, 0.0, 1.0),))
@@ -85,42 +112,64 @@ class LearnTest(unittest.TestCase):
 
         self.assertAlmostEqual(m.scale, 0.4, places=9)
 
-    def test_a_good_day_is_believed_quickly(self):
-        # Et hoejt udbytte kan ikke skyldes regulering - det er aegte.
-        m = model(scale=0.30, days=20.0)
+    def test_good_and_bad_days_move_the_scale_equally_far(self):
+        # Laeringen er symmetrisk. Det var den ikke: op med alfa 0,5, ned med
+        # 0,05, saa maetning ikke skulle traekke tallet ned. Men maetning
+        # filtreres allerede fra, og en skaev EMA er ikke en filtrering.
+        up, down = model(scale=0.40, days=20.0), model(scale=0.40, days=20.0)
+        ratio = up.geometric_ratio(MIDSUMMER)
 
-        m.learn(40.0, 50.0, MIDSUMMER)
-        observed = 40.0 / (50.0 * m.geometric_ratio(MIDSUMMER))
+        up.learn(0.50 * 50.0 * ratio, 50.0, MIDSUMMER)
+        down.learn(0.30 * 50.0 * ratio, 50.0, MIDSUMMER)
 
-        self.assertAlmostEqual(m.scale, 0.30 + 0.5 * (observed - 0.30), places=9)
+        self.assertAlmostEqual(up.scale - 0.40, 0.40 - down.scale, places=9)
 
-    def test_a_poor_day_is_believed_slowly(self):
-        # Et lavt udbytte kan lige saa godt vaere en fuld tank som en graa dag.
-        m = model(scale=0.50, days=20.0)
+    def test_symmetric_noise_no_longer_biases_the_scale_upward(self):
+        # Med 0,5 op mod 0,05 ned lagde en sand vaerdi paa 0,40 sig 12-37 %
+        # for hoejt afhaengigt af spredningen, ogsaa naar stoejen var helt
+        # symmetrisk: hvert udsving opad blev troet ti gange saa meget som
+        # det tilsvarende nedad.
+        m = model(scale=0.40, days=20.0)
+        ratio = m.geometric_ratio(MIDSUMMER)
 
-        m.learn(10.0, 50.0, MIDSUMMER)
-        observed = 10.0 / (50.0 * m.geometric_ratio(MIDSUMMER))
+        for step in range(200):
+            wobble = 0.10 if step % 2 else -0.10
+            m.learn((0.40 + wobble) * 50.0 * ratio, 50.0, MIDSUMMER)
 
-        self.assertAlmostEqual(m.scale, 0.50 + 0.05 * (observed - 0.50), places=9)
+        self.assertLess(abs(m.scale - 0.40), 0.02)
 
-    def test_the_two_august_days_from_the_real_plant(self):
+    def test_a_regulated_day_is_filtered_not_smoothed_away(self):
         # 24. august koerte frit: PV 60,9 kWh, solvarme 29 kWh, top 5,4 kW.
         # 27. august var reguleret: PV faldt kun 9 %, solvarmen 34 %, og
         # toppen naaede kun 3,6 kW paa et anlaeg der kan 5,4.
         #
-        # Symmetrisk laering ville have trukket tallet ned mod den regulerede
-        # dag. Asymmetrien holder det taet paa den frie.
+        # Den dag skal kasseres, ikke daempes. Det er det store_was_full er til.
         free = model()
         free.learn(29.0, 60.9, 236)
         truth = free.scale
 
         both = model()
         both.learn(29.0, 60.9, 236)
-        both.learn(19.0, 55.4, 239)
+        both.learn(19.0, 55.4, 239, store_was_full=True)
 
-        self.assertAlmostEqual(truth, 0.428, places=2)
-        self.assertGreater(both.scale, 0.42)
-        self.assertLess(abs(both.scale - truth), 0.01)
+        self.assertEqual(both.scale, truth)
+
+
+class PersistenceTest(unittest.TestCase):
+    def test_a_scale_survives_a_restart(self):
+        m = SolarModel.from_raw(model(scale=0.42, days=9.0).to_raw(), FYN)
+
+        self.assertAlmostEqual(m.scale, 0.42)
+        self.assertEqual(m.days, 9.0)
+
+    def test_a_scale_from_the_old_geometry_is_discarded(self):
+        # Version 1 regnede kun direkte straaling, saa 0,42 betoed noget
+        # andet end det goer nu. At laese det videre ville blande to
+        # malestokke; det koster et doegn at laere forfra.
+        m = SolarModel.from_raw({"scale": 0.42, "days": 40.0}, FYN)
+
+        self.assertIsNone(m.scale)
+        self.assertFalse(m.known)
 
 
 class ExpectTest(unittest.TestCase):
@@ -134,9 +183,13 @@ class ExpectTest(unittest.TestCase):
         summer = m.expected_kwh(50.0, MIDSUMMER)
         winter = m.expected_kwh(50.0, MIDWINTER)
 
-        # Samme PV-prognose giver langt mere solvarme om vinteren, fordi 45°
-        # møder den lave sol naer vinkelret.
-        self.assertGreater(winter, summer * 2)
+        # Samme PV-prognose giver mere solvarme om vinteren, fordi 45° møder
+        # den lave sol naermere vinkelret. Men kun omkring 45 % mere - ikke
+        # de over 100 % den rene direkte straaling ville love, for om
+        # vinteren kommer fire femtedele af lyset fra hele himlen, og der
+        # ser en flad flade mere end en stejl.
+        self.assertGreater(winter, summer * 1.3)
+        self.assertLess(winter, summer * 1.7)
 
     def test_no_forecast_no_prediction(self):
         m = model(scale=0.4, days=20.0)

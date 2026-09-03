@@ -141,6 +141,17 @@ class Buffer:
         return self.covered and self.headroom_kwh <= 0.01
 
     @property
+    def at_peak_ceiling(self) -> bool:
+        """Er der fysisk ikke mere plads — heller ikke til gratis varme?
+
+        Det er det spørgsmål solfangeren stiller. Den stagnerer først når
+        tankene er helt oppe ved de 90 °C, ikke når de er kommet forbi
+        varmepumpens rækkevidde ved 60. Forskellen er 30 K, og de 30 K er
+        præcis de bedste soltimer på den bedste soldag.
+        """
+        return self.covered and self.peak_headroom_kwh <= 0.01
+
+    @property
     def charge_percent(self) -> float | None:
         """Hvor fuldt lageret er, mellem reference og loft."""
         total = self.stored_kwh + self.headroom_kwh

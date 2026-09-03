@@ -746,7 +746,12 @@ class Varmeopt:
         now = datetime.now().astimezone()
         # Maetningen skal ses undervejs. Ved midnat er tankene koelet af, og
         # en dag hvor solen bankede mod et fuldt lager ville se normal ud.
-        full_now = buffer.above_heatpump_ceiling if buffer is not None else False
+        #
+        # Og den skal maales mod det *fysiske* loft. Stod der
+        # above_heatpump_ceiling, ville hver eneste god soldag blive kasseret,
+        # for solen presser rutinemaessigt tankene forbi varmepumpens 60 °C -
+        # og det er netop de dage der baerer information.
+        full_now = buffer.at_peak_ceiling if buffer is not None else False
         finished = self.solar_day.observe(
             now.strftime("%Y-%m-%d"), now.hour, remaining, today, store_full=full_now
         )

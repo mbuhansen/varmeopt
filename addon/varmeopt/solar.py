@@ -2,21 +2,28 @@
 
 Solfangerne og solcellerne ser den samme sol, men ikke fra samme vinkel: fire
 paneler i syd med 45° hældning mod 6,4 kW syd/20° plus 4 kW vest/15°. Den
-forskel er ikke lille. Regnet på indfaldsvinklen over året svinger forholdet
-mellem de to flader med en faktor 2,5 — fra 0,90 i juni til 2,25 i december,
-fordi 45° fanger den lave vintersol langt bedre end 20° gør.
+forskel kan **regnes, ikke læres.** Tilbage står ét enkelt tal: en skalafaktor
+der dækker kollektorareal, virkningsgrad og Solcasts egen skævhed. Årstidsformen
+kommer gratis fra matematikken, og modellen skal derfor kun lære én værdi i
+stedet for tolv — dage i stedet for et år.
 
-En fast omregningsfaktor ville derfor være groft forkert det halve af året.
-Men **geometrien kan regnes, ikke læres.** Tilbage står ét enkelt tal: en
-skalafaktor der dækker kollektorareal, virkningsgrad og Solcasts egen skævhed.
-Årstidsformen kommer gratis fra matematikken, og modellen skal derfor kun lære
-én værdi i stedet for tolv — dage i stedet for et år.
+**Diffus stråling hører med.** Solcast forudsiger ikke solhøjden, men hvad
+panelerne producerer, og på 55,4° nord kommer over halvdelen af den energi fra
+den diffuse himmel — om vinteren fire femtedele. Diffus stråling rammer ikke
+fra en retning, så den ser kun hvor stor en del af himlen fladen vender mod:
+udsynsfaktoren (1+cos β)/2, som er 0,85 for 45° og 0,97 for 20°. Næsten ens.
+
+Regnes kun den direkte stråling, svinger forholdet mellem de to flader med en
+faktor 2,5 over året. Med den diffuse regnet med er svingningen 1,47, og
+december falder fra 2,27 til 1,31. Forskellen er ikke akademisk: den gamle
+udgave lovede planlæggeren 74 % mere solvarme end anlægget kan levere, netop
+i den måned hvor et forkert løfte er dyrest.
 
 Der er én fælde i læringen. Solfangerens udbytte er begrænset af
-tanktemperaturen, ikke kun af solen: er lageret fuldt, stagnerer kollektoren og
-laver ingenting, uanset vejret. Lærer man af sådan en dag, lærer man «solvarmen
-er dårlig», når sandheden er «der var ikke plads». Derfor læres kun fra dage
-hvor lageret havde plads hele vejen.
+tanktemperaturen, ikke kun af solen: er lageret fyldt helt op, stagnerer
+kollektoren, uanset vejret. Lærer man af sådan en dag, lærer man «solvarmen er
+dårlig», når sandheden er «der var ikke plads». Derfor læres kun fra dage hvor
+lageret havde plads hele vejen.
 """
 
 from __future__ import annotations
@@ -25,21 +32,43 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-# Læringen er med vilje skæv, og det er den vigtigste beslutning i modulet.
+# Læringen er symmetrisk. Det var den ikke før: en god dag blev troet med
+# alfa 0,5 og en dårlig med 0,05, for at en dag med fyldt lager ikke skulle
+# trække skalafaktoren ned.
 #
-# En dag hvor lageret var fyldt, får kollektoren til at holde igen, og
-# målingen bliver for lav. En dag kan derimod aldrig komme til at *yde mere*
-# end solen gav. Fejlen er altså ensidig: et højt udbytte er ægte information,
-# et lavt kan lige så godt være en fuld tank som en grå himmel.
+# Men mætning håndteres allerede af ``store_was_full``, som kasserer sådan en
+# dag helt. Asymmetrien var altså den samme rettelse en gang til — og en
+# skæv EMA er ikke en filtrering, den er en systematisk fejl: hvert udsving
+# opad blev troet ti gange så meget som det tilsvarende nedad, så selv med
+# symmetrisk støj omkring den sande værdi lagde estimatet sig for højt — 12 %
+# ved lille dag-til-dag-spredning, 24 % ved realistisk, 37 % ved stor.
 #
-# Derfor tror vi hurtigt på en god dag og kun langsomt på en dårlig. Det gør
-# en saturationsdetektor overflødig — asymmetrien håndterer det selv. Målt på
-# to rigtige dage i august, hvor den ene var reguleret: symmetrisk læring gav
-# 0,397, asymmetrisk gav 0,422, og sandheden fra den frie dag var 0,428.
-_ALPHA_UP = 0.5
-_ALPHA_DOWN = 0.05
+# Begrundelsen dengang var to augustdage hvor den ene var reguleret. Den dag
+# skulle have været filtreret fra, ikke udglattet.
+_ALPHA = 0.15
 
 _STEPS_PER_DAY = 288  # 5-minutters skridt
+
+# Diffusandelen af den globale stråling på disse breddegrader, glattet over
+# året: omkring 0,52 midt om sommeren og 0,85 ved vintersolhverv. Den behøver
+# ikke være præcis — den bestemmer kun *formen* på årstidsvariationen, og
+# resten samler skalafaktoren op.
+_DIFFUSE_MEAN = 0.685
+_DIFFUSE_SWING = 0.165
+
+# Hvor meget jorden kaster tilbage. Sne ville give mere, men det er få dage.
+_GROUND_ALBEDO = 0.2
+
+# Skalafaktoren maales mod geometrien, saa den betyder kun noget saa laenge
+# geometrien er den samme. Version 2 tog diffus straaling med; et tal lært
+# under version 1 er malt med en anden malestok og kastes vaek.
+MODEL_VERSION = 2
+
+
+def diffuse_fraction(day_of_year: int) -> float:
+    """Hvor stor en del af strålingen der kommer fra himlen frem for solskiven."""
+    phase = 2 * math.pi * (day_of_year - 172) / 365
+    return _DIFFUSE_MEAN - _DIFFUSE_SWING * math.cos(phase)
 
 
 @dataclass(frozen=True)
@@ -51,26 +80,40 @@ class Plane:
     weight: float = 1.0
 
 
-def daily_incidence(day_of_year: int, latitude: float, plane: Plane) -> float:
-    """Summen af cos(indfaldsvinkel) over dagens lyse timer.
+def daily_irradiance(day_of_year: int, latitude: float, plane: Plane) -> float:
+    """Dagens samlede indstråling på fladen, i vilkårlige enheder.
 
-    Diffus stråling og atmosfære er udeladt med vilje. Vi sammenligner to
-    flader samme sted samme dag, så det fælles går ud, og tilbage står præcis
-    det hældning og orientering betyder.
+    Tre bidrag: solskiven gennem indfaldsvinklen, himlen gennem udsynsfaktoren
+    og jorden gennem det den kaster tilbage. Atmosfærens dæmpning er udeladt —
+    vi sammenligner to flader samme sted samme dag, så det fælles går ud.
+
+    Den globale stråling sættes proportional med solhøjden. Det er groft, men
+    det er den *relative* fordeling mellem direkte og diffus over døgnet der
+    betyder noget her, ikke niveauet, og niveauet kommer fra Solcast.
     """
-    declination = 23.45 * math.sin(math.radians(360 * (284 + day_of_year) / 365))
-    dec = math.radians(declination)
+    dec = math.radians(23.45 * math.sin(math.radians(360 * (284 + day_of_year) / 365)))
     lat = math.radians(latitude)
     tilt = math.radians(plane.tilt)
     azi = math.radians(plane.azimuth)
+
+    sky_view = (1 + math.cos(tilt)) / 2
+    ground_view = (1 - math.cos(tilt)) / 2
+    kd = diffuse_fraction(day_of_year)
+    hours = 24 / _STEPS_PER_DAY
 
     total = 0.0
     for step in range(_STEPS_PER_DAY):
         omega = math.radians(15 * (step * 24 / _STEPS_PER_DAY - 12))
 
-        elevation = math.sin(dec) * math.sin(lat) + math.cos(dec) * math.cos(lat) * math.cos(omega)
-        if elevation <= 0:
+        sin_elev = math.sin(dec) * math.sin(lat) + math.cos(dec) * math.cos(lat) * math.cos(omega)
+        # Lige over horisonten bliver den direkte stråling numerisk ustabil
+        # (divisionen med solhøjden), og bidraget er alligevel forsvindende.
+        if sin_elev <= 0.02:
             continue
+
+        global_h = sin_elev
+        diffuse_h = kd * global_h
+        beam_normal = (global_h - diffuse_h) / sin_elev
 
         cos_theta = (
             math.sin(dec) * math.sin(lat) * math.cos(tilt)
@@ -79,8 +122,12 @@ def daily_incidence(day_of_year: int, latitude: float, plane: Plane) -> float:
             + math.cos(dec) * math.sin(lat) * math.sin(tilt) * math.cos(azi) * math.cos(omega)
             + math.cos(dec) * math.sin(tilt) * math.sin(azi) * math.sin(omega)
         )
-        if cos_theta > 0:
-            total += cos_theta * (24 / _STEPS_PER_DAY)
+
+        total += (
+            beam_normal * max(0.0, cos_theta)
+            + diffuse_h * sky_view
+            + global_h * _GROUND_ALBEDO * ground_view
+        ) * hours
     return total
 
 
@@ -101,11 +148,11 @@ class Geometry:
         pv_weight = sum(p.weight for p in self.pv)
         if pv_weight <= 0:
             return None
-        pv = sum(daily_incidence(day_of_year, self.latitude, p) * p.weight for p in self.pv)
+        pv = sum(daily_irradiance(day_of_year, self.latitude, p) * p.weight for p in self.pv)
         pv /= pv_weight
         if pv <= 0:
             return None
-        return daily_incidence(day_of_year, self.latitude, self.thermal) / pv
+        return daily_irradiance(day_of_year, self.latitude, self.thermal) / pv
 
 
 # Prognosen for et døgn skal fanges før solen står op, ellers er "resten af
@@ -250,24 +297,26 @@ class SolarModel:
             return f"foerste dag: skalafaktor {observed:.3f}"
 
         self.days += 1
-        rising = observed > self.scale
-        alpha = _ALPHA_UP if rising else _ALPHA_DOWN
-        self.scale = self.scale * (1 - alpha) + observed * alpha
-        retning = "op" if rising else "ned"
-        return (
-            f"skalafaktor {self.scale:.3f} ({retning}, dag {self.days:.0f}, "
-            f"i dag {observed:.3f})"
-        )
+        self.scale = self.scale * (1 - _ALPHA) + observed * _ALPHA
+        return f"skalafaktor {self.scale:.3f} (dag {self.days:.0f}, i dag {observed:.3f})"
 
     # ------------------------------------------------------------------ lager
 
     def to_raw(self) -> dict[str, Any]:
-        return {"scale": self.scale, "days": self.days}
+        return {"model": MODEL_VERSION, "scale": self.scale, "days": self.days}
 
     @classmethod
     def from_raw(cls, raw: Any, geometry: Geometry) -> SolarModel:
+        """Læs det lærte tilbage — men kun hvis det blev lært af samme model.
+
+        Skalafaktoren er defineret som udbytte divideret med *den her*
+        geometris forudsigelse. Ændrer geometrien sig, betyder det gemte tal
+        ikke længere det samme, og at føre det videre ville være at blande to
+        målestokke. Det koster ét døgn at lære forfra. Det er billigere end at
+        forudsige forkert i ubestemt tid.
+        """
         scale = days = None
-        if isinstance(raw, dict):
+        if isinstance(raw, dict) and raw.get("model") == MODEL_VERSION:
             try:
                 value = raw.get("scale")
                 scale = float(value) if value is not None else None
