@@ -6,7 +6,7 @@ from pathlib import Path
 
 from varmeopt.__main__ import Varmeopt
 from varmeopt.cop import Cell, CopTable
-from varmeopt.ha import State
+from varmeopt.ha import HaError, State
 from varmeopt.options import Options
 from varmeopt.store import Store
 
@@ -37,6 +37,9 @@ class FakeHa:
         # Vejrudsigten hentes med et service-kald, ikke som en tilstand.
         self.forecast_response: dict = {}
         self.services: list[tuple[str, str]] = []
+        # Naar den er sat, fejler skrivningen til netop den entitet. Bruges
+        # til at proeve at én fejlet udgivelse ikke tager de andre med sig.
+        self.fail_on: str | None = None
 
     def measure(self, cop: object, last_changed: str | None) -> None:
         self._states[COP] = State(COP, str(cop), {}, last_changed)
@@ -45,6 +48,8 @@ class FakeHa:
         return self._states.get(entity_id)
 
     async def set_state(self, entity_id, state, attributes=None) -> None:
+        if self.fail_on is not None and entity_id == self.fail_on:
+            raise HaError(f"skrivning til {entity_id} fejlede (proeve)")
         self.published.append((entity_id, state))
         self.attributes[entity_id] = attributes or {}
 

@@ -56,6 +56,11 @@ SENSOR_TANK = "sensor.varmeopt_lager"
 SENSOR_DEMAND = "sensor.varmeopt_behov"
 SENSOR_PRICE = "sensor.varmeopt_elpris"
 SENSOR_DECISION = "sensor.varmeopt_beslutning"
+# Opladningen som sit eget flag. Den staar ogsaa som attribut paa
+# beslutningen, men et flag man kan spoerge direkte om, er lettere at koble
+# videre end en attribut man skal grave ud - og en styring der er let at
+# laese rigtigt, bliver oftere laest rigtigt.
+SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
@@ -256,6 +261,9 @@ class Varmeopt:
                 command.note,
             )
             await self._publish_decision(ha, decision, command)
+            await self._safely(
+                "opladningsflag", self._publish_charge(ha, decision, command)
+            )
             await self._safely("sammenligning", self._compare(ha, decision, balance))
 
         if lookup is not None:
@@ -741,35 +749,91 @@ class Varmeopt:
             log.warning("kunne ikke udgive %s: %s", what, exc)
 
     async def release_control(self, ha: HomeAssistant) -> None:
-        """Saet flaget falsk, saa Node-RED tager over igen.
+        """Saet begge flag falske, saa Node-RED tager over igen.
 
-        Kaldes ved nedlukning. Fejler skrivningen, er der ikke mere vi kan
-        goere — men saa skal det staa i loggen, for saa *er* der en frossen
-        kommando derude.
+        Kaldes ved nedlukning. De to skrives hver for sig og med hver sin
+        fejlhaandtering: laa de i samme forsoeg, ville en fejl paa det
+        foerste betyde at det andet aldrig blev sluppet — og saa ville et
+        stop efterlade praecis den frosne kommando det hele er til for at
+        undgaa.
+
+        Opladningen slippes foerst, for den er den farligste at efterlade
+        taendt. En frossen kilde ville bare fortsaette som den koerte; et
+        frossent "lad op" ville blive ved med at fylde tankene efter vi er
+        holdt op med at kunne se paa dem.
         """
         self.guard.release()
+
+        await self._release_one(
+            ha,
+            SENSOR_CHARGE,
+            "off",
+            {
+                "friendly_name": "Varmeopt lad op",
+                "icon": "mdi:battery-charging-high",
+                "styrer": False,
+                "begrundelse": "add-on'en er stoppet",
+            },
+        )
+        decision = self.status.get("decision")
+        await self._release_one(
+            ha,
+            SENSOR_DECISION,
+            decision.source if decision is not None else "ukendt",
+            {
+                "friendly_name": "Varmeopt beslutning",
+                "icon": "mdi:scale-balance",
+                "styrer": False,
+                "styr_til": None,
+                "styring_grund": "add-on'en er stoppet",
+                "begrundelse": "add-on'en er stoppet",
+            },
+        )
+
+    async def _release_one(
+        self, ha: HomeAssistant, entity: str, state: Any, attributes: dict[str, Any]
+    ) -> None:
+        """Slip ét flag. Fejler det, er der ikke mere vi kan goere end at raabe."""
         try:
-            await ha.set_state(
-                SENSOR_DECISION,
-                self.status.get("decision").source
-                if self.status.get("decision") is not None
-                else "ukendt",
-                {
-                    "friendly_name": "Varmeopt beslutning",
-                    "icon": "mdi:scale-balance",
-                    "styrer": False,
-                    "styr_til": None,
-                    "styring_grund": "add-on'en er stoppet",
-                    "begrundelse": "add-on'en er stoppet",
-                },
-            )
-            log.info("gav slip paa styringen")
+            await ha.set_state(entity, state, attributes)
+            log.info("gav slip paa %s", entity)
         except HaError as exc:
             log.error(
-                "KUNNE IKKE give slip paa styringen: %s - "
-                "sensor.varmeopt_beslutning kan staa med styrer=true",
+                "KUNNE IKKE give slip paa %s: %s - den kan staa med styrer=true",
+                entity,
                 exc,
             )
+
+    async def _publish_charge(
+        self, ha: HomeAssistant, decision: Any, command: Any
+    ) -> None:
+        """Opladningen som et flag, ikke som en attribut.
+
+        Tilstanden er ``on``/``off`` som ethvert andet binary_sensor, saa den
+        kan spoerges direkte i stedet for at skulle graves ud af
+        beslutningens attributter.
+
+        **Samme regel som paa beslutningen:** tilstanden er hvad
+        planlaeggeren *vil*, og ``styrer`` siger om det maa foelges. De to er
+        med vilje adskilt — flaget skal kunne ses ogsaa mens styringen er
+        slaaet fra, ellers kan man ikke vurdere planen inden man kobler den
+        til. Foelg det kun naar ``styrer`` er sand, praecis som med kilden.
+        """
+        await ha.set_state(
+            SENSOR_CHARGE,
+            "on" if decision.charge else "off",
+            {
+                "friendly_name": "Varmeopt lad op",
+                "icon": "mdi:battery-charging-high",
+                # Samme port som paa beslutningen. Uden den ville flaget se
+                # ud som en ordre selv naar ingen har lov at give den.
+                "styrer": command.acting,
+                "begrundelse": decision.reason,
+                "lad_kwh": _round(decision.charge_kwh, 1),
+                "besparelse_kr": _round(decision.saving_kr, 2),
+                "vindue_min": decision.window_minutes,
+            },
+        )
 
     async def _publish_decision(
         self, ha: HomeAssistant, decision: Any, command: Any

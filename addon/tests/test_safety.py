@@ -9,9 +9,10 @@ import asyncio
 import os
 import tempfile
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 
-from varmeopt.__main__ import SENSOR_DECISION, Varmeopt
+from varmeopt.__main__ import SENSOR_CHARGE, SENSOR_DECISION, Varmeopt
 from varmeopt.cop import Cell, CopTable
 from varmeopt.ha import HaError, HomeAssistant
 from varmeopt.planner import Planner
@@ -102,11 +103,25 @@ class ReleaseOnShutdownTest(unittest.TestCase):
 
         asyncio.run(self.app.release_control(self.ha))
 
-        self.assertEqual(len(self.ha.published), 1)
-        entity, _ = self.ha.published[0]
-        self.assertEqual(entity, SENSOR_DECISION)
+        published = [entity for entity, _ in self.ha.published]
+        self.assertEqual(published, [SENSOR_CHARGE, SENSOR_DECISION])
         self.assertIs(self.ha.attributes[SENSOR_DECISION]["styrer"], False)
         self.assertIsNone(self.ha.attributes[SENSOR_DECISION]["styr_til"])
+        # Opladningsflaget er det farligste at efterlade taendt: en frossen
+        # kilde ville bare fortsaette, men det her ville blive ved med at
+        # fylde tankene. Derfor slippes det foerst.
+        self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
+
+    def test_a_failing_decision_release_still_drops_the_charge_flag(self):
+        # Laa de to i samme forsoeg, ville en fejl paa det ene efterlade det
+        # andet frosset - praecis den tilstand det hele er til for at undgaa.
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        self.ha.published.clear()
+        self.ha.fail_on = SENSOR_DECISION
+
+        asyncio.run(self.app.release_control(self.ha))
+
+        self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
 
     def test_releasing_also_drops_the_guard_commitment(self):
         self.app.guard.enabled = True
@@ -345,3 +360,79 @@ class StalePlanTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ChargeFlagTest(unittest.TestCase):
+    """Opladningen som sin egen entitet, saa den ikke skal graves ud."""
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-lad-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.app.table.learn(31, 17, 4.4)
+        self.ha = FakeHa(
+            {
+                FLOW: State(FLOW, "31.0", {}, "f"),
+                COP: State(COP, "4.4", {}, "m"),
+            }
+        )
+        # Uden tanke er der ingen plads at lade op i, og saa vil
+        # planlaeggeren aldrig sige ja uanset prisen. Halvtomme tanke:
+        # 1000 L mellem 30 og 60 grader med rigelig plads.
+        o = self.app.options
+        for entity, temp in (
+            (o.entity_tank_a_top, 44.0), (o.entity_tank_a_mid, 40.0),
+            (o.entity_tank_a_bottom, 34.0), (o.entity_tank_b_top, 42.0),
+            (o.entity_tank_b_mid, 38.0), (o.entity_tank_b_bottom, 33.0),
+        ):
+            self.ha._states[entity] = State(entity, str(temp), {}, "t")
+        self.nodered = FakeNodeRed({"udeTemp": 17.2})
+
+    def plan(self, *rates):
+        entity = self.app.options.entity_predbat_plan
+        self.ha._states[entity] = State(
+            entity,
+            "ok",
+            {"raw": {"rows": [
+                {"state": "holdchrg", "import_rate": r, "export_rate": 40,
+                 "soc_percent": 60} for r in rates
+            ]}},
+            "plan",
+            last_updated=datetime.now(timezone.utc).isoformat(),
+        )
+
+    def flag(self):
+        return dict(self.ha.published).get(SENSOR_CHARGE)
+
+    def test_it_is_off_when_there_is_nothing_to_gain(self):
+        # Flad pris: intet at hente ved at flytte varmen.
+        self.plan(80, 80, 80, 80)
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        self.assertEqual(self.flag(), "off")
+
+    def test_it_is_on_when_the_planner_wants_to_charge(self):
+        # Billigt nu, dyrt om lidt.
+        self.plan(40, 40, 300, 300)
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        self.assertEqual(self.flag(), "on")
+
+    def test_it_carries_the_same_gate_as_the_decision(self):
+        # Tilstanden er hvad planlaeggeren vil; "styrer" siger om det maa
+        # foelges. De to skal aldrig kunne sige hver sit.
+        self.plan(40, 40, 300, 300)
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        self.assertEqual(
+            self.ha.attributes[SENSOR_CHARGE]["styrer"],
+            self.ha.attributes[SENSOR_DECISION]["styrer"],
+        )
+
+    def test_the_numbers_ride_along_for_those_who_want_them(self):
+        self.plan(40, 40, 300, 300)
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        attrs = self.ha.attributes[SENSOR_CHARGE]
+
+        self.assertGreater(attrs["lad_kwh"], 0)
+        self.assertIsNotNone(attrs["vindue_min"])
+
