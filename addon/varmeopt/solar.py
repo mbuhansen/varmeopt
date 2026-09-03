@@ -252,6 +252,30 @@ class DayTracker:
         return tracker
 
 
+# Kalibreringsdagen: 24. august 2026 kørte anlægget frit med plads i lageret.
+# Solcellerne lavede 60,9 kWh, solvarmen 29,0. Det er startværdien indtil
+# modellen har set et helt døgn selv.
+CALIBRATION_DAY_OF_YEAR = 236
+CALIBRATION_PV_KWH = 60.9
+CALIBRATION_THERMAL_KWH = 29.0
+
+
+def seed_scale(geometry: Geometry) -> float | None:
+    """Startværdien, regnet af kalibreringsdagen med *den her* geometri.
+
+    Den skal udledes og ikke skrives ned. Skalafaktoren er defineret som
+    udbytte divideret med geometriens forudsigelse, så et nedskrevet tal
+    holder kun så længe geometrien er uændret — og den ændrede sig i 0.19.0,
+    da den diffuse stråling kom med. Det efterlod 0,43 i konfigurationen, hvor
+    det rigtige tal for samme dag er 0,476: 10 % for lavt, hver dag indtil
+    modellen havde lært et døgn selv.
+    """
+    ratio = geometry.ratio(CALIBRATION_DAY_OF_YEAR)
+    if ratio is None or ratio <= 0 or CALIBRATION_PV_KWH <= 0:
+        return None
+    return CALIBRATION_THERMAL_KWH / (CALIBRATION_PV_KWH * ratio)
+
+
 class SolarModel:
     """Skalafaktoren mellem forudsagt PV og faktisk solvarme."""
 

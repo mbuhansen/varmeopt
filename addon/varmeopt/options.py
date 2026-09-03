@@ -101,7 +101,10 @@ _DEFAULTS: dict[str, object] = {
     # Startvaerdi for skalafaktoren, kalibreret paa 24. august 2026: PV 60,9
     # kWh mod 29 kWh solvarme. Modellen retter den selv naar den har set et
     # helt doegn.
-    "solar_scale": 0.43,
+    # Nul betyder "regn startvaerdien ud af kalibreringsdagen med den
+    # geometri der gaelder nu". Et fast tal her holder kun saa laenge
+    # geometrien er uaendret - se solar.seed_scale.
+    "solar_scale": 0,
     # UVR'en har en minimums gangtid paa varmepumpen. Er der mindre plads end
     # ét saadant traek fylder, er svaret "lad vaere" - ikke "lad lidt".
     # Kortcykling slider og koster virkningsgrad ved hver opstart.

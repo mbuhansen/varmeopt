@@ -1,6 +1,6 @@
 import unittest
 
-from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_irradiance, diffuse_fraction
+from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_irradiance, diffuse_fraction, seed_scale
 
 # Anlægget på Fyn: fire solfangere i syd med 45°, mod 6,4 kW syd/20° og
 # 4 kW vest/15° solceller.
@@ -306,3 +306,31 @@ class MinimumChargeTest(unittest.TestCase):
         gentle = self.replace(self.opts, hp_charge_kw=4.0)
 
         self.assertAlmostEqual(gentle.min_charge_kwh, 1.0, places=6)
+
+
+class SeedTest(unittest.TestCase):
+    """Startvaerdien skal udledes, ikke skrives ned."""
+
+    def test_the_seed_comes_out_of_the_calibration_day(self):
+        # 24. august 2026: solcellerne lavede 60,9 kWh, solvarmen 29,0.
+        seed = seed_scale(FYN)
+        m = SolarModel(FYN, scale=seed, days=1.0)
+
+        self.assertAlmostEqual(m.expected_kwh(60.9, 236), 29.0, places=6)
+
+    def test_a_written_down_seed_goes_stale_when_the_geometry_moves(self):
+        # Det er praecis det der skete i 0.19.0: den diffuse straaling kom
+        # med, og 0,43 fra den gamle geometri blev 10 % for lavt.
+        beam_only = seed_scale(FYN)
+
+        self.assertGreater(beam_only, 0.43 * 1.05)
+        self.assertAlmostEqual(beam_only, 0.476, places=3)
+
+    def test_the_geometry_matches_the_plant(self):
+        # Fire solfangere i syd med 45 grader, mod 6,4 kW syd/20 og
+        # 4 kW vest/15, paa 55,4 grader nord.
+        self.assertEqual(FYN.latitude, 55.4)
+        self.assertEqual((FYN.thermal.tilt, FYN.thermal.azimuth), (45.0, 0.0))
+        self.assertEqual([(p.tilt, p.azimuth, p.weight) for p in FYN.pv],
+                         [(20.0, 0.0, 6.4), (15.0, 90.0, 4.0)])
+

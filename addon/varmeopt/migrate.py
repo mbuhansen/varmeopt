@@ -32,8 +32,12 @@ def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]
     dag frem for på ingenting: 24. august 2026, hvor solcellerne lavede 60,9
     kWh mod solvarmens 29. Modellen retter selv tallet efter første hele døgn
     den selv har set.
+
+    ``seed`` på nul betyder «regn den ud af kalibreringsdagen med den
+    geometri der gælder nu». Det er det rigtige valg: et nedskrevet tal
+    holder kun så længe geometrien er uændret, og den ændrede sig i 0.19.0.
     """
-    from .solar import DayTracker, SolarModel
+    from .solar import DayTracker, SolarModel, seed_scale
 
     raw = store.load(SOLAR_FILE, {}) if store.exists(SOLAR_FILE) else {}
     raw = raw if isinstance(raw, dict) else {}
@@ -42,9 +46,21 @@ def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]
     tracker = DayTracker.from_raw(raw.get("day"))
 
     if model.scale is None:
-        model.scale = seed if seed > 0 else None
+        derived = seed_scale(geometry)
+        if seed > 0:
+            model.scale = seed
+            source = "fra konfigurationen"
+            if derived is not None and abs(seed - derived) > 0.02:
+                source += (
+                    f" - men kalibreringsdagen giver {derived:.3f} med den "
+                    f"geometri der gaelder nu"
+                )
+        else:
+            model.scale = derived
+            source = "regnet af kalibreringsdagen"
         note = (
-            f"solvarmemodel: startvaerdi k={seed:.3f}, endnu ingen egne doegn"
+            f"solvarmemodel: startvaerdi k={model.scale:.3f} {source}, "
+            "endnu ingen egne doegn"
             if model.scale is not None
             else "solvarmemodel: intet at gaa ud fra endnu"
         )

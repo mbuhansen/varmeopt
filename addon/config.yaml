@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.28.0"
+version: "0.29.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -50,7 +50,7 @@ options:
   pv_b_kwp: 4.0
   pv_b_tilt: 15
   pv_b_azimuth: 90
-  solar_scale: 0.43
+  solar_scale: 0
   hp_min_runtime_minutes: 15
   hp_charge_kw: 16.0
   hp_wear_kr_per_kwh: 0.15
