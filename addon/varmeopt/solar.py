@@ -71,6 +71,15 @@ def diffuse_fraction(day_of_year: int) -> float:
     return _DIFFUSE_MEAN - _DIFFUSE_SWING * math.cos(phase)
 
 
+def _is_number(value: Any) -> bool:
+    """Et endeligt tal. NaN er ikke en måling, og den lyver ved enhver test."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
+
+
 @dataclass(frozen=True)
 class Plane:
     """En flade: hældning, orientering og hvor meget den vejer."""
@@ -281,9 +290,12 @@ class SolarModel:
         """Indarbejd et fuldt døgn. Returnerer en status der kan logges."""
         if store_was_full:
             return "ignoreret: lageret var fuldt - solen fik ikke lov"
-        if pv_forecast_kwh is None or pv_forecast_kwh <= 0.5:
+        # NaN sammenlignes falsk med alt, saa hverken <= 0.5 eller < 0 fanger
+        # den. Slap den igennem, forgiftede den skalafaktoren indtil naeste
+        # genstart - hver eneste forudsigelse derefter blev NaN.
+        if not _is_number(pv_forecast_kwh) or pv_forecast_kwh <= 0.5:
             return "ignoreret: for lidt sol til at sige noget"
-        if thermal_kwh is None or thermal_kwh < 0:
+        if not _is_number(thermal_kwh) or thermal_kwh < 0:
             return "ignoreret: ugyldigt solvarmeudbytte"
 
         ratio = self.geometric_ratio(day_of_year)

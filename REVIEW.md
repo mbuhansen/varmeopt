@@ -1,7 +1,30 @@
 # Kodegennemgang 2. september 2026
 
-Tre uafhængige gennemgange af 0.15.0 — økonomi, fysik og sikkerhed. Alt herunder
-er **fundet, ikke rettet.** Rækkefølgen nedenfor er den anbefalede.
+Tre uafhængige gennemgange af 0.15.0 — økonomi, fysik og sikkerhed.
+
+**Status pr. 0.25.0: alt herunder er rettet på tre punkter nær.** De tre er
+listet først; resten står som de blev fundet, så rettelsen kan holdes op mod
+beskrivelsen. Rækkefølgen var: sikkerhed, COP-filteret, solvarmen, resten.
+
+## Det der stadig står åbent
+
+1. **Slitagen i kildevalget** — `planner.py`. Den trækkes fra i opladningen,
+   men indgår ikke i sammenligningen mellem varmepumpe og pillefyr. Samme
+   omkostning, to regnestykker, to svar. Hvad de 0,15 kr/kWh *betyder* —
+   varmepumpens slid absolut, eller dens slid ud over pillefyrets — afgør
+   hvad der er rigtigt, og det er et valg, ikke en fejl.
+2. **Ståtabet** — bevidst udskudt efter aftale. Hænger sammen med at balancen
+   mangler tanktab og brugsvandsudtag: under |netto| ≈ 0,25 kW er fortegnet
+   forkert.
+3. **Spaens setpunkt** — varmekurven udelukker brugsvandets 56 °C, men kører
+   spaen på sit eget faste setpunkt, ligger dets målinger i kurven som en
+   falsk vandret linje. Hvilket setpunkt det er, skal komme fra anlægget.
+
+Dertil én ting der ikke kunne efterprøves herfra: **Predbats faktiske
+tilstandsstrenge.** `"dischrg"`-fejlen er rettet, men hverken HA eller
+Node-REDs globale kontekst havde planen at slå op i.
+
+---
 
 Testene kørte grønt (262) gennem hele gennemgangen. Fejlene er dem tests ikke
 kan se: forkerte antagelser, forkert fysik, og fejltilstande der aldrig opstår

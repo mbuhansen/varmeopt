@@ -20,6 +20,12 @@ from dataclasses import dataclass
 # Vand ved ca. 50 °C: 4,186 kJ/(kg·K) ÷ 3600 = 1,163 Wh/(kg·K), tæthed
 # 0,988 kg/L. Over hele driftsbåndet 30-70 °C varierer produktet under 1,5 %,
 # hvilket er langt under usikkerheden på at tre følere repræsenterer en tank.
+#
+# **Men UVR'en regner med 1,163** — altså uden tæthedskorrektionen. Prøven
+# mod anlægget bekræftede at flow og ΔT læses rigtigt; den kunne ikke skelne
+# de to konstanter, for forskellen *er* de 0,01 kW der lå i afvigelsen.
+# Vælger man den anden, flytter alle lagertal 1,2 % systematisk. Talet her er
+# det fysisk rigtige; det er ikke det samme som anlæggets eget.
 WH_PER_LITER_K = 1.149
 
 

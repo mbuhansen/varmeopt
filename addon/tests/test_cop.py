@@ -297,3 +297,56 @@ class CurveTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ReinforceTest(unittest.TestCase):
+    """En tynd raekke skal laane af naboerne, ikke af fabrikskurven."""
+
+    def test_a_thin_exact_row_borrows_from_a_well_measured_neighbour(self):
+        # F24 har to maalinger ved U18; F26 har 37. Foer blev de 37 ignoreret
+        # fordi fremloebet ramte F24 praecis, og resten blev hentet i
+        # fabrikskurven, som ikke ved noget om dette anlaeg.
+        t = table(f24={18: (4.73, 2)}, f26={18: (4.58, 37)})
+
+        got = t.lookup(24, 18)
+
+        self.assertGreater(got.learned_count, 5.0)
+        self.assertNotEqual(got.source, "blend")
+        self.assertLess(abs(got.cop - 4.60), 0.05)
+        self.assertIn("styrket af F26", got.detail)
+
+    def test_the_exact_row_still_weighs_most_per_measurement(self):
+        # Naboen vejer med sin evidens delt med afstanden. Lige mange
+        # maalinger, saa skal den eksakte raekke traekke mest.
+        t = table(f40={0: (3.0, 4)}, f45={0: (5.0, 4)})
+
+        got = t.lookup(40, 0)
+
+        self.assertLess(got.cop, 4.0)
+
+    def test_a_distant_row_is_not_a_neighbour(self):
+        t = table(f30={0: (4.73, 2)}, f45={0: (3.00, 500)})
+
+        got = t.lookup(30, 0)
+
+        self.assertAlmostEqual(got.learned_count, 2.0, places=9)
+        self.assertNotIn("styrket", got.detail)
+
+    def test_a_well_measured_row_is_left_alone(self):
+        t = table(f40={0: (3.0, 50)}, f42={0: (5.0, 500)})
+
+        got = t.lookup(40, 0)
+
+        self.assertAlmostEqual(got.cop, 3.0, places=9)
+        self.assertEqual(got.source, "exact")
+
+    def test_a_thin_interpolation_borrows_too(self):
+        # Mellem to tynde raekker skal opslaget ikke ende i fabrikskurven,
+        # naar en raekke lidt laengere vaek har rigelig evidens.
+        t = table(f40={10: (4.7, 1)}, f41={10: (4.8, 1)}, f42={10: (5.2, 400)})
+
+        got = t.lookup(40.8, 10)
+
+        self.assertGreater(got.learned_count, 5.0)
+        self.assertGreater(got.cop, 5.0)
+

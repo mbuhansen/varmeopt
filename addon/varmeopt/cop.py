@@ -23,6 +23,10 @@ FULL_TRUST_COUNT = 5.0
 # mange målinger nabocellen har. Vi tror ikke på tal vi aldrig har målt.
 EXTRAPOLATION_COUNT_CAP = 2.0
 
+# Inden for saa mange grader fremloeb regnes en naborraekke som evidens om
+# det samme driftspunkt - svagere, jo laengere vaek den ligger.
+REINFORCE_K = 5
+
 # Hvor stor en del af Carnot en måling højst må være for at tros. Anlæggets
 # højeste af 17.204 målinger ligger på 70,9 %, så 75 % accepterer alt
 # virkeligt med luft og afviser stadig hvad en fejlbehæftet føler finder på.
@@ -315,6 +319,8 @@ class CopTable:
             if got is None:
                 return None
             cop, count, how = got
+            if count < FULL_TRUST_COUNT:
+                return self._reinforce(f_low, outdoor, cop, count, how)
             return cop, count, how if how == "eksakt" else f"F{f_low}, {how}"
 
         # Uden for tabellens fremløbsspænd: brug nærmeste række, men lad den
@@ -341,7 +347,61 @@ class CopTable:
         w_low = 1.0 - w_high
         cop = low[0] * w_low + high[0] * w_high
         count = _blend_count(low[1], w_low, high[1], w_high)
-        return cop, count, f"interp F{f_low}-{f_high}"
+        how = f"interp F{f_low}-{f_high}"
+        if count < FULL_TRUST_COUNT:
+            # Samme grund som paa den eksakte raekke: to tynde naboer skal
+            # ikke sende opslaget i fabrikskurven, naar en raekke lidt
+            # laengere vaek har rigelig evidens ved samme udetemperatur.
+            return self._reinforce(
+                flow, outdoor, cop, count, how, skip=frozenset({f_low, f_high})
+            )
+        return cop, count, how
+
+    def _reinforce(
+        self,
+        flow: float,
+        outdoor: float,
+        cop: float,
+        count: float,
+        how: str,
+        skip: frozenset[int] = frozenset(),
+    ) -> tuple[float, float, str]:
+        """Lån evidens fra naborækkerne når den eksakte række er tynd.
+
+        Rammer fremløbet en række der findes, brugtes før kun den — også når
+        den kun havde et par målinger ved denne udetemperatur, og også når en
+        række fire grader væk havde snesevis. Resten blev hentet i
+        fabrikskurven i stedet, som ikke ved noget om dette anlæg. Det gjaldt
+        870 opslagspunkter på den rigtige tabel.
+
+        Naboerne vejer med deres egen evidens delt med afstanden: en række 2 K
+        væk med 37 målinger bidrager 12,3, mens den eksakte række med 2
+        målinger bidrager 2. Den eksakte række vejer altid tungest pr. måling,
+        for den er trods alt den rigtige række.
+        """
+        total = cop * count
+        weight = count
+        used: list[str] = []
+
+        for other in sorted(self.flow_temps, key=lambda f: abs(f - flow)):
+            distance = abs(other - flow)
+            if other in skip or other == flow or distance > REINFORCE_K:
+                continue
+            got = self._interp_row(self._table[other], outdoor)
+            if got is None:
+                continue
+            share = got[1] / (1 + distance)
+            if share <= 0:
+                continue
+            total += got[0] * share
+            weight += share
+            used.append(f"F{other}")
+            if weight >= FULL_TRUST_COUNT:
+                break
+
+        if not used:
+            return cop, count, how if how == "eksakt" else f"F{flow}, {how}"
+        return total / weight, weight, f"{how} styrket af {'+'.join(used)}"
 
     def _edge_row(self, flow: int, outdoor: float) -> tuple[float, float, str] | None:
         got = self._interp_row(self._table[flow], outdoor)
