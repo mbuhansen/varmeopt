@@ -217,11 +217,45 @@ class LearnTest(unittest.TestCase):
 
 
 class RangeTest(unittest.TestCase):
-    def test_bands_tighten_as_the_lift_grows(self):
-        self.assertEqual(plausible_cop_range(30, 15), (2.0, 6.5))
-        self.assertEqual(plausible_cop_range(40, 5), (1.5, 5.5))
-        self.assertEqual(plausible_cop_range(50, 0), (1.2, 4.0))
-        self.assertEqual(plausible_cop_range(58, -5), (1.0, 4.0))
+    def test_ceiling_falls_as_the_lift_grows(self):
+        ceilings = [plausible_cop_range(f, u)[1] for f, u in
+                    ((30, 15), (40, 5), (50, 0), (58, -5))]
+
+        self.assertEqual(ceilings, sorted(ceilings, reverse=True))
+
+    def test_ceiling_never_exceeds_carnot(self):
+        # Loftet skal ligge *under* den termodynamiske graense, ellers filtrerer
+        # det ikke andet end det absolutte tal.
+        for flow in range(20, 66, 5):
+            for outdoor in range(-15, 21, 5):
+                carnot = (flow + 273.15) / max(1.0, flow - outdoor)
+                self.assertLessEqual(plausible_cop_range(flow, outdoor)[1], carnot)
+
+    def test_floor_is_flat_so_defrost_is_not_discarded(self):
+        # Det gamle gulv steg til 2,0 ved lille loeft. En modulerende pumpe
+        # under afrimning *har* lav COP, og den maaling hoerer med.
+        t = CopTable()
+        t.learn(30, 15, 1.4)
+
+        self.assertEqual(t.cell_count, 1)
+
+    def test_the_bands_used_to_reject_half_the_plant(self):
+        # Kernen i fejlen: loftet paa 4,0 for delta-T 40-55 K laa paa medianen
+        # af netop det baand hvor anlaegget bruger halvdelen af sin tid.
+        # F56/U8 med 740 maalinger paa COP 4,03 er den tungeste af dem.
+        t = CopTable()
+        msg = t.learn(56, 8, 4.03)
+
+        self.assertEqual(t.cell_count, 1, msg)
+
+    def test_sensor_nonsense_is_still_rejected(self):
+        t = CopTable()
+        # Over Carnot ved samme loeft - fysisk umuligt, uanset maskine.
+        self.assertIn("COP", t.learn(56, 8, 12.0))
+        # Og under 1 leverer maskinen mindre varme end den bruger stroem.
+        self.assertIn("COP", t.learn(56, 8, 0.4))
+
+        self.assertEqual(t.cell_count, 0)
 
 
 class CurveTest(unittest.TestCase):

@@ -23,6 +23,18 @@ FULL_TRUST_COUNT = 5.0
 # mange målinger nabocellen har. Vi tror ikke på tal vi aldrig har målt.
 EXTRAPOLATION_COUNT_CAP = 2.0
 
+# Hvor stor en del af Carnot en måling højst må være for at tros. Anlæggets
+# højeste af 17.204 målinger ligger på 70,9 %, så 75 % accepterer alt
+# virkeligt med luft og afviser stadig hvad en fejlbehæftet føler finder på.
+CARNOT_FRACTION = 0.75
+
+# Absolut loft uanset løft. Ved mildt vejr er Carnot-grænsen så høj at den
+# ikke længere begrænser noget; den højest målte på anlægget er 5,88.
+ABSOLUTE_MAX_COP = 7.0
+
+# Under 1 leverer maskinen mindre varme end den bruger strøm.
+ABSOLUTE_MIN_COP = 1.0
+
 # Fremløbstemperaturer uden for dette spænd læres ikke.
 MIN_FLOW_TEMP = 20
 MAX_FLOW_TEMP = 65
@@ -57,23 +69,40 @@ class Lookup:
         return self.source in ("exact", "interp")
 
 
+def _carnot_ceiling(flow: float, outdoor: float) -> float:
+    """Det termodynamiske loft, ganget med en generøs virkningsgrad.
+
+    Den gamle udgave havde faste bånd, og de var forkerte. Loftet på 4,0 for
+    delta-T mellem 40 og 55 K lå på **medianen** af netop det bånd der rummer
+    halvdelen af anlæggets drift: 5.562 af 8.758 målinger lå over det. De
+    tungeste var brugsvandet — F56/U8 med 740 målinger på COP 4,03.
+
+    Værre end at kassere dem var at trunkeringen kun ramte den ene ende. En
+    celle med sand fordeling N(4,22; 0,30) og loft 4,0 konvergerer mod 3,83 —
+    9 % for lavt — og `count` vokser fire gange for langsomt. Ved break-even
+    COP 3,12 er 9 % pessimisme direkte i den beslutning der skal træffes.
+
+    Carnot er den rigtige form: loftet skal falde med temperaturløftet, og det
+    gør det af sig selv. Målt på anlæggets 17.204 målinger ligger den højeste
+    på 70,9 % af Carnot, så 75 % accepterer alt virkeligt med luft — og
+    afviser stadig alt hvad en fejlbehæftet føler kan finde på.
+    """
+    lift = max(1.0, flow - outdoor)
+    return min(ABSOLUTE_MAX_COP, CARNOT_FRACTION * (flow + 273.15) / lift)
+
+
 def plausible_cop_range(flow: float, outdoor: float) -> tuple[float, float]:
     """Hvad der overhovedet kan være en ægte måling ved dette temperaturløft.
 
-    Porteret fra det delta-T-afhængige filter i den ubrugte dubletnode i
-    Node-RED. Det er strengere end det flade 1,0-7,0 den kørende node bruger:
-    et stort løft kan fysisk ikke give høj COP, så en høj værdi der i
-    virkeligheden er afrimning eller målestøj bliver fanget i stedet for at
-    forurene tabellen.
+    Loftet er termodynamisk — se ``_carnot_ceiling``. Gulvet er fladt: under
+    COP 1 leverer maskinen mindre varme end den bruger strøm, og det er
+    afrimning eller en fejl, ikke et driftspunkt.
+
+    Det gamle gulv steg til 2,0 ved lille løft og kasserede dermed ægte
+    afrimnings- og dellastmålinger. En maskine der modulerer ned, *har* lave
+    COP'er, og de hører med i gennemsnittet.
     """
-    delta = flow - outdoor
-    if delta > 55:
-        return 1.0, 4.0
-    if delta > 40:
-        return 1.2, 4.0
-    if delta > 25:
-        return 1.5, 5.5
-    return 2.0, 6.5
+    return ABSOLUTE_MIN_COP, _carnot_ceiling(flow, outdoor)
 
 
 def _interp_1d(x: float, points: dict[int, float]) -> float:
@@ -200,7 +229,7 @@ class CopTable:
 
         lo, hi = plausible_cop_range(f, u)
         if not lo <= cop <= hi:
-            return f"ignoreret: COP {cop:.2f} uden for {lo}-{hi} ved delta-T {f - u} K"
+            return f"ignoreret: COP {cop:.2f} uden for {lo:.1f}-{hi:.1f} ved delta-T {f - u} K"
 
         row = self._table.setdefault(f, {})
         old = row.get(u)
