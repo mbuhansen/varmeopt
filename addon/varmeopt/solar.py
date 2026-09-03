@@ -85,8 +85,26 @@ class Plane:
     """En flade: hældning, orientering og hvor meget den vejer."""
 
     tilt: float
-    azimuth: float  # 0 = syd, positiv mod vest
+    # 0 = syd, positiv mod vest, negativ mod øst. Altså syd 0, vest 90,
+    # øst −90, nord ±180.
+    #
+    # Det er *ikke* kompaskonventionen, hvor nord er 0 og syd 180 — det er
+    # den soltekniske, som formlen for indfaldsvinklen nedenfor er skrevet i.
+    # Begge er gængse, og de er 180° fra hinanden, så en flade der er tastet
+    # i den forkerte peger stik modsat. Derfor siger ``compass_name`` det i
+    # ord i loggen ved opstart.
+    azimuth: float
     weight: float = 1.0
+
+    @property
+    def compass_name(self) -> str:
+        """Retningen i ord, så en forkert konvention kan ses i loggen."""
+        points = (
+            (0, "syd"), (45, "sydvest"), (90, "vest"), (135, "nordvest"),
+            (180, "nord"), (-45, "sydøst"), (-90, "øst"), (-135, "nordøst"),
+            (-180, "nord"),
+        )
+        return min(points, key=lambda p: abs(p[0] - self.azimuth))[1]
 
 
 def daily_irradiance(day_of_year: int, latitude: float, plane: Plane) -> float:

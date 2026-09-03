@@ -1004,8 +1004,22 @@ async def run() -> None:
         app.curve, curve_note = load_heat_curve(store, app.table, options.dhw_setpoint)
         log.info(curve_note)
 
+        # Azimut har to gaengse konventioner, og de er 180 grader fra
+        # hinanden: kompassets med nord som 0, og den soltekniske med syd
+        # som 0, som den her bruger. Solcast bruger den anden, saa tal
+        # kopieret derfra peger stik modsat. Derfor staar retningerne i ord.
+        geometry = options.geometry
+        log.info(
+            "solgeometri: solfangere %.0f grader mod %s, solceller %s",
+            geometry.thermal.tilt,
+            geometry.thermal.compass_name,
+            ", ".join(
+                f"{p.weight:.1f} kWp {p.tilt:.0f} grader mod {p.compass_name}"
+                for p in geometry.pv
+            ),
+        )
         app.solar, app.solar_day, solar_note = load_solar(
-            store, options.geometry, options.solar_scale
+            store, geometry, options.solar_scale
         )
         log.info(solar_note)
 
