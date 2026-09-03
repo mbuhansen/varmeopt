@@ -68,7 +68,14 @@ class Guard:
     def check(
         self, decision: Any, lookup: Any, plan: Any, now: float
     ) -> Command:
-        """Afgør om beslutningen må følges. ``now`` er sekunder, monotont."""
+        """Afgør om beslutningen må følges.
+
+        ``now`` er **vægurstid** i sekunder, ikke et monotont ur. Det er en
+        bevidst afvejning: et monotont ur nulstilles ved hver genstart, og så
+        ville opholdstiden kunne omgås ved at genstarte. Prisen er at et
+        urspring kan forlænge eller forkorte ét ophold, hvilket er skade nok
+        til at kunne leve med.
+        """
         if self.started is None:
             self.started = now
 
@@ -112,6 +119,31 @@ class Guard:
         self.committed = source
         self.committed_at = now
         return Command(source, True, reason)
+
+    # ------------------------------------------------------------------ lager
+
+    def to_raw(self) -> dict[str, Any]:
+        """Bindingen, så opholdstiden overlever en genstart.
+
+        ``started`` gemmes med vilje *ikke*: opvarmningen skal gælde efter
+        hver opstart, for tilstanden er den mindst oplyste vi har lige der.
+        Men opholdet skal fortsætte hvor det slap — ellers bliver 15 minutter
+        til 5, og med en modulerende varmepumpe er det kortcykling.
+        """
+        return {"committed": self.committed, "committed_at": self.committed_at}
+
+    def restore(self, raw: Any) -> None:
+        if not isinstance(raw, dict):
+            return
+        source = raw.get("committed")
+        self.committed = source if source in ("varmepumpe", "pillefyr") else None
+        try:
+            at = raw.get("committed_at")
+            self.committed_at = float(at) if at is not None else None
+        except (TypeError, ValueError):
+            self.committed_at = None
+        if self.committed is None:
+            self.committed_at = None
 
     def release(self) -> None:
         """Giv slip, så næste overtagelse begynder forfra."""

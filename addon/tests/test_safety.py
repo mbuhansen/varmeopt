@@ -174,5 +174,106 @@ class TimeoutTest(unittest.TestCase):
         self.assertIsNotNone(app.status["lookup"])
 
 
+
+class PublishOrderTest(unittest.TestCase):
+    """Flaget skal ud, også når de andre skrivninger fejler."""
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
+        o = self.app.options
+        self.ha = FakeHa(
+            {
+                FLOW: State(FLOW, "31.0", {}, "f"),
+                COP: State(COP, "4.4", {}, "m"),
+                o.entity_tank_a_top: State(o.entity_tank_a_top, "55", {}, "t"),
+                o.entity_tank_a_mid: State(o.entity_tank_a_mid, "45", {}, "t"),
+                o.entity_tank_a_bottom: State(o.entity_tank_a_bottom, "35", {}, "t"),
+            }
+        )
+        self.nodered = FakeNodeRed({"udeTemp": 17.2})
+
+    def test_the_flag_is_published_before_everything_else(self):
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+
+        first = self.ha.published[0][0]
+        self.assertEqual(first, SENSOR_DECISION)
+
+    def test_a_failing_tank_write_does_not_swallow_the_flag(self):
+        # Foer laa flaget sidst af seks skrivninger, saa én HaError i en af de
+        # andre sprang det over.
+        original = self.app._publish_tank
+
+        async def boom(*_a, **_k):
+            raise HaError("HA svarer ikke")
+
+        self.app._publish_tank = boom
+        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        self.app._publish_tank = original
+
+        published = dict(self.ha.published)
+        self.assertIn(SENSOR_DECISION, published)
+        self.assertNotIn("sensor.varmeopt_lager", published)
+
+
+class GuardSurvivesRestartTest(unittest.TestCase):
+    """Opholdstiden skal fortsætte hvor den slap."""
+
+    def setUp(self):
+        from varmeopt.guard import Guard
+
+        self.Guard = Guard
+
+    def test_the_commitment_is_carried_across(self):
+        import time as _time
+
+        before = self.Guard(enabled=True, warmup_minutes=0.0)
+        before.check(_decision("pillefyr"), object(), None, _time.time())
+
+        after = self.Guard(enabled=True, warmup_minutes=0.0)
+        after.restore(before.to_raw())
+
+        self.assertEqual(after.committed, "pillefyr")
+        self.assertEqual(after.committed_at, before.committed_at)
+
+    def test_a_switch_is_still_held_after_a_restart(self):
+        import time as _time
+
+        now = _time.time()
+        after = self.Guard(enabled=True, min_dwell_minutes=15.0, warmup_minutes=0.0)
+        after.restore({"committed": "pillefyr", "committed_at": now - 3 * 60})
+
+        cmd = after.check(_decision("varmepumpe"), object(), None, now)
+
+        # Tre minutter er gaaet af de femten - ikke nul, som foer.
+        self.assertEqual(cmd.source, "pillefyr")
+        self.assertIn("holder", cmd.reason)
+
+    def test_warmup_still_applies_after_a_restart(self):
+        # Bindingen genoptages, men opvarmningen skal gaelde forfra.
+        import time as _time
+
+        now = _time.time()
+        after = self.Guard(enabled=True, warmup_minutes=5.0)
+        after.restore({"committed": "pillefyr", "committed_at": now - 60 * 60})
+
+        cmd = after.check(_decision("varmepumpe"), object(), None, now)
+
+        self.assertFalse(cmd.acting)
+        self.assertIn("varmer op", cmd.reason)
+
+    def test_garbage_restores_to_nothing(self):
+        g = self.Guard()
+        for junk in (None, "ikke en binding", {"committed": "noget andet"}):
+            g.restore(junk)
+            self.assertIsNone(g.committed)
+
+
+def _decision(source):
+    from varmeopt.planner import Decision
+
+    return Decision(source=source, heat_price=0.30, pellet_price=PELLET)
+
 if __name__ == "__main__":
     unittest.main()

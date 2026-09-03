@@ -13,6 +13,7 @@ import contextlib
 import logging
 import signal
 import sys
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -31,6 +32,7 @@ from .migrate import (
     COP_TABLE_FILE,
     CURVE_FILE,
     COMPARE_FILE,
+    GUARD_FILE,
     SOLAR_FILE,
     load_cop_table,
     load_heat_curve,
@@ -173,8 +175,10 @@ class Varmeopt:
         # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
         # det. Siger den nej, staar beslutningen der stadig, og Node-RED
         # bruger sin egen logik.
+        # Vaegurstid, ikke monoton - kun den giver mening paa tvaers af en
+        # genstart, og opholdstiden skal fortsaette hvor den slap.
         command = self.guard.check(
-            decision, lookup, prices.get("plan"), asyncio.get_running_loop().time()
+            decision, lookup, prices.get("plan"), time.time()
         )
         projection = self.planner.project(
             prices.get("plan"),
@@ -218,6 +222,19 @@ class Varmeopt:
             .strftime("%Y-%m-%d %H:%M:%S"),
         )
 
+        if ha is not None:
+            # Flaget foerst. Det er den ene skrivning der er
+            # sikkerhedskritisk, og foer laa den sidst - efter fem andre
+            # der hver kunne afbryde cyklussen foer den blev naaet.
+            log.info(
+                "beslutning: %s | %s | styring: %s",
+                decision.source,
+                decision.reason,
+                command.note,
+            )
+            await self._publish_decision(ha, decision, command)
+            await self._safely("sammenligning", self._compare(ha, decision, balance))
+
         if lookup is not None:
             log.info(
                 "COP %.2f (%s: %s) | %s: setpunkt %.1f, maalt %s, ude %.1f | laering: %s",
@@ -231,7 +248,7 @@ class Varmeopt:
                 learn_note,
             )
             if ha is not None:
-                await self._publish(ha, lookup)
+                await self._safely("COP", self._publish(ha, lookup))
         else:
             log.warning("springer cyklus over: %s", learn_note)
 
@@ -243,7 +260,7 @@ class Varmeopt:
                 buffer.headroom_kwh,
                 _tank_summary(buffer),
             )
-            await self._publish_tank(ha, buffer)
+            await self._safely("lager", self._publish_tank(ha, buffer))
 
         if balance is not None and ha is not None:
             load_kw = balance.load.kw
@@ -266,7 +283,7 @@ class Varmeopt:
                     f"{net:+.2f} kW" if net is not None else "-",
                     horizon,
                 )
-            await self._publish_demand(ha, balance, buffer)
+            await self._safely("behov", self._publish_demand(ha, balance, buffer))
 
         if prices.get("price_now") is not None and ha is not None:
             price = prices["price_now"]
@@ -278,17 +295,7 @@ class Varmeopt:
                 f"{heat:.2f}" if heat is not None else "-",
                 prices["pellet_price"],
             )
-            await self._publish_price(ha, prices)
-
-        if ha is not None:
-            log.info(
-                "beslutning: %s | %s | styring: %s",
-                decision.source,
-                decision.reason,
-                command.note,
-            )
-            await self._compare(ha, decision, balance)
-            await self._publish_decision(ha, decision, command)
+            await self._safely("elpris", self._publish_price(ha, prices))
 
         self._maybe_save()
 
@@ -637,6 +644,18 @@ class Varmeopt:
                 self.tally.summary(),
             )
 
+    async def _safely(self, what: str, coro: Any) -> None:
+        """Kør en udgivelse, men lad den ikke vælte de andre.
+
+        Før lå de seks skrivninger i én kæde, så en enkelt ``HaError`` i den
+        første afbrød resten — inklusive beslutningsflaget, som er den ene der
+        er sikkerhedskritisk.
+        """
+        try:
+            await coro
+        except HaError as exc:
+            log.warning("kunne ikke udgive %s: %s", what, exc)
+
     async def release_control(self, ha: HomeAssistant) -> None:
         """Saet flaget falsk, saa Node-RED tager over igen.
 
@@ -899,6 +918,10 @@ async def run() -> None:
             store, options.geometry, options.solar_scale
         )
         log.info(solar_note)
+
+        app.guard.restore(store.load(GUARD_FILE, {}))
+        if app.guard.committed:
+            log.info("vagten genoptager binding: %s", app.guard.committed)
 
         saved = store.load(COMPARE_FILE, {}) or {}
         app.tally = Tally.from_raw(saved.get("tally"))
