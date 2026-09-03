@@ -127,12 +127,19 @@ class HeatCurve:
         return None
 
     def confidence(self, outdoor: float) -> float:
-        """Hvor mange målinger står bag forudsigelsen på det sted."""
+        """Hvor meget evidens der står bag forudsigelsen *på det sted*.
+
+        Afstanden tæller med. Før returnerede −20 °C de 70 målinger der står
+        ved −10, som om der var målt dernede — der er bare ikke nogen målinger
+        inden for 10 K. Nu falder vægten med afstanden ud over de par grader
+        hvor naboceller er reelle naboer.
+        """
         if not self._points:
             return 0.0
         keys = self.outdoor_temps
         nearest = min(keys, key=lambda k: abs(k - outdoor))
-        return self._points[nearest].count
+        distance = abs(nearest - outdoor)
+        return self._points[nearest].count / (1 + max(0.0, distance - NEAR_ENOUGH_K))
 
     # --------------------------------------------------------------- bootstrap
 
@@ -159,7 +166,7 @@ class HeatCurve:
             for outdoor, (total, count) in weighted.items()
             if count > 0
         }
-        return cls(points, dhw_setpoint=dhw_setpoint)
+        return cls(_enforce_monotone(points), dhw_setpoint=dhw_setpoint)
 
     # ------------------------------------------------------------------ lager
 
@@ -183,3 +190,52 @@ class HeatCurve:
                 if math.isfinite(setpoint) and math.isfinite(count):
                     points[outdoor] = Point(setpoint=setpoint, count=count)
         return cls(points, dhw_setpoint=dhw_setpoint)
+
+
+# Inden for saa mange grader regnes en nabocelle som evidens paa stedet.
+NEAR_ENOUGH_K = 2.0
+
+
+def _enforce_monotone(points: dict[int, Point]) -> dict[int, Point]:
+    """Gør kurven ikke-stigende i udetemperatur.
+
+    En varmekurve kan ikke andet: bliver det varmere ude, skal fremløbet ned.
+    Men kurven her er et vægtet gennemsnit pr. udetemperatur af de setpunkter
+    der tilfældigvis er målt, og belægningen er ikke ens fra grad til grad. Så
+    kom U9 til at give 38,8 mod U10's 40,8 — en varmere prognose gav et
+    *højere* setpunkt og dermed lavere COP, 2 K den forkerte vej, netop i
+    efterårets beslutningsbånd hvor valget mellem kilderne er tættest.
+
+    Rettelsen er vægtet isotonisk regression (pool adjacent violators): den
+    nærmeste ikke-stigende kurve i mindste kvadraters forstand, hvor hvert
+    punkt vejer med sit antal målinger. Et enkelt tyndt punkt kan altså ikke
+    trække en velbelagt nabo med sig.
+    """
+    keys = sorted(points)
+    if len(keys) < 2:
+        return points
+
+    # Hver blok er (sum af vægtet setpunkt, sum af vægte, antal punkter).
+    blocks: list[list[float]] = []
+    for key in keys:
+        point = points[key]
+        weight = max(point.count, 1e-9)
+        blocks.append([point.setpoint * weight, weight, 1])
+        # Stiger den nye blok over den forrige, brydes monotonien, og de to
+        # slås sammen til deres faelles gennemsnit. Det kan bryde monotonien
+        # bagud igen, saa der pooles indtil kaeden er faldende.
+        while len(blocks) > 1 and blocks[-1][0] / blocks[-1][1] > blocks[-2][0] / blocks[-2][1]:
+            merged = blocks.pop()
+            blocks[-1][0] += merged[0]
+            blocks[-1][1] += merged[1]
+            blocks[-1][2] += merged[2]
+
+    smoothed: dict[int, Point] = {}
+    index = 0
+    for total, weight, span in blocks:
+        value = total / weight
+        for key in keys[index : index + int(span)]:
+            smoothed[key] = Point(setpoint=value, count=points[key].count)
+        index += int(span)
+    return smoothed
+

@@ -145,3 +145,64 @@ class StorageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MonotoneTest(unittest.TestCase):
+    """En varmekurve kan ikke stige naar det bliver varmere ude."""
+
+    def test_the_derived_curve_never_rises_with_the_outdoor_temperature(self):
+        # Det virkelige anlaegs tabel havde seks brud. Det her er et af dem:
+        # U9 gav 38,8 og U10 gav 40,8 - en varmere prognose gav et hoejere
+        # setpunkt og dermed lavere COP, 2 K den forkerte vej.
+        table = CopTable({
+            38: {9: Cell(4.0, 181.0)},
+            41: {10: Cell(4.0, 85.0)},
+            45: {0: Cell(3.5, 400.0)},
+        })
+
+        c = HeatCurve.from_cop_table(table)
+        points = [c.predict(u) for u in sorted(c.outdoor_temps)]
+
+        self.assertEqual(points, sorted(points, reverse=True))
+
+    def test_pooling_follows_the_weight_not_the_midpoint(self):
+        # 181 maalinger paa 38 mod 85 paa 41: det faelles svar skal ligge
+        # naermest de 38, ikke midtvejs.
+        table = CopTable({
+            38: {9: Cell(4.0, 181.0)},
+            41: {10: Cell(4.0, 85.0)},
+        })
+
+        c = HeatCurve.from_cop_table(table)
+
+        self.assertAlmostEqual(c.predict(9), c.predict(10), places=9)
+        self.assertLess(c.predict(9), 39.5)
+
+    def test_an_already_falling_curve_is_left_alone(self):
+        table = CopTable({
+            50: {-5: Cell(3.0, 100.0)},
+            40: {5: Cell(4.0, 100.0)},
+            30: {15: Cell(5.0, 100.0)},
+        })
+
+        c = HeatCurve.from_cop_table(table)
+
+        self.assertAlmostEqual(c.predict(-5), 50.0, places=6)
+        self.assertAlmostEqual(c.predict(5), 40.0, places=6)
+        self.assertAlmostEqual(c.predict(15), 30.0, places=6)
+
+
+class ConfidenceTest(unittest.TestCase):
+    def test_distance_costs_confidence(self):
+        # Foer returnerede -20 de 70 maalinger der staar ved -10, som om der
+        # var maalt dernede. Der er bare ingen maalinger inden for 10 K.
+        c = curve({-10: (53.0, 70.0)})
+
+        self.assertAlmostEqual(c.confidence(-10), 70.0, places=6)
+        self.assertLess(c.confidence(-20), 10.0)
+
+    def test_a_neighbour_a_degree_away_still_counts(self):
+        c = curve({-10: (53.0, 70.0)})
+
+        self.assertAlmostEqual(c.confidence(-11), 70.0, places=6)
+
