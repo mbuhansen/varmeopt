@@ -14,6 +14,7 @@ class BootstrapTest(unittest.TestCase):
 
     def tearDown(self):
         os.environ.pop("VARMEOPT_CODE_DIR", None)
+        os.environ.pop("VARMEOPT_VERSION", None)
 
     # ------------------------------------------------------------- hjælpere
 
@@ -106,6 +107,91 @@ class BootstrapTest(unittest.TestCase):
         # download() lagde til side, ellers finder den aldrig noget at rulle
         # tilbage til.
         self.assertEqual(bootstrap.PREVIOUS_NAME, f".{selfupdate.PACKAGE}.forrige")
+        # Skallen laeser maerket, selfupdate skriver det. Staver de to det
+        # forskelligt, opdages en butiksopdatering aldrig.
+        self.assertEqual(bootstrap.IMAGE_NAME, selfupdate.IMAGE_FILE)
+
+
+class StoreUpdateTest(unittest.TestCase):
+    """En butiksopdatering skal slaa igennem, ogsaa naar der ligger hentet kode."""
+
+    def setUp(self):
+        self.tmp = Path(tempfile.mkdtemp(prefix="varmeopt-image-"))
+        os.environ["VARMEOPT_CODE_DIR"] = str(self.tmp)
+
+    def tearDown(self):
+        os.environ.pop("VARMEOPT_CODE_DIR", None)
+        os.environ.pop("VARMEOPT_VERSION", None)
+
+    def plant_download(self, image_version=None):
+        path = self.tmp / bootstrap.PACKAGE
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "__main__.py").write_text("# hentet\n", encoding="utf-8")
+        (self.tmp / bootstrap.REVISION_NAME).write_text("abc123", encoding="utf-8")
+        if image_version is not None:
+            (self.tmp / bootstrap.IMAGE_NAME).write_text(image_version, encoding="utf-8")
+
+    def test_a_newer_image_removes_the_downloaded_copy(self):
+        # Kernen: /data overlever en add-on-opdatering, og /data/code staar
+        # foer /app paa PYTHONPATH. Uden det her skygger en kopi hentet i
+        # fortiden for et nyere image *for altid* - og versionen paa
+        # systemsiden kommer fra imaget, saa man ser 0.28.0 og koerer aeldre.
+        self.plant_download(image_version="0.26.0")
+        os.environ["VARMEOPT_VERSION"] = "0.28.0"
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertFalse((self.tmp / bootstrap.PACKAGE).exists())
+        self.assertFalse((self.tmp / bootstrap.REVISION_NAME).exists())
+
+    def test_code_downloaded_before_the_stamp_existed_is_also_removed(self):
+        # Saa *ved* vi ikke at den er aeldre - men vi ved at imaget er nyt,
+        # og imaget er den kendte gode kode.
+        self.plant_download(image_version=None)
+        os.environ["VARMEOPT_VERSION"] = "0.28.0"
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertFalse((self.tmp / bootstrap.PACKAGE).exists())
+
+    def test_the_same_image_leaves_the_download_alone(self):
+        # En almindelig genstart maa ikke smide en selvopdatering vaek.
+        self.plant_download(image_version="0.28.0")
+        os.environ["VARMEOPT_VERSION"] = "0.28.0"
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertTrue((self.tmp / bootstrap.PACKAGE).exists())
+        self.assertEqual(
+            (self.tmp / bootstrap.REVISION_NAME).read_text("utf-8"), "abc123"
+        )
+
+    def test_no_download_is_nothing_to_do(self):
+        os.environ["VARMEOPT_VERSION"] = "0.28.0"
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertFalse((self.tmp / bootstrap.PACKAGE).exists())
+
+    def test_without_a_version_it_does_not_guess(self):
+        # Lokal afproevning uden Supervisor. Saa roeres der ikke ved noget.
+        self.plant_download(image_version="0.26.0")
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertTrue((self.tmp / bootstrap.PACKAGE).exists())
+
+    def test_the_rollback_copy_goes_too(self):
+        # Ellers ville en tilbagerulning hente den gamle kode frem igen.
+        self.plant_download(image_version="0.26.0")
+        old = self.tmp / bootstrap.PREVIOUS_NAME
+        old.mkdir(parents=True, exist_ok=True)
+        (old / "__main__.py").write_text("# endnu aeldre\n", encoding="utf-8")
+        os.environ["VARMEOPT_VERSION"] = "0.28.0"
+
+        bootstrap.discard_stale_download(self.tmp)
+
+        self.assertFalse(old.exists())
 
 
 if __name__ == "__main__":

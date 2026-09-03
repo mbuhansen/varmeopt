@@ -36,6 +36,13 @@ REPO = "mbuhansen/varmeopt"
 BRANCH = "master"
 PACKAGE = "varmeopt"
 REVISION_FILE = ".revision"
+# Imagets version på det tidspunkt koden blev hentet. Bootstrap sammenligner
+# den med den aktuelle for at opdage en butiksopdatering.
+IMAGE_FILE = ".image"
+
+
+def _image_version() -> str:
+    return os.environ.get("VARMEOPT_VERSION", "")
 
 # Hvor den hentede kode lægges. Skal ligge før /app på PYTHONPATH, ellers
 # vinder den indbyggede udgave. Sat i Dockerfilen.
@@ -199,6 +206,11 @@ async def download(session: aiohttp.ClientSession) -> Revision | None:
             live.rename(previous)
         (staging / PACKAGE).rename(live)
         (root / REVISION_FILE).write_text(revision.sha, encoding="utf-8")
+        # Hvilket image koden blev hentet oven på. Skifter det, har brugeren
+        # taget en butiksopdatering, og så skal den hentede kode vige —
+        # ellers skygger den for et nyere image for altid. Se
+        # ``bootstrap.discard_stale_download``.
+        (root / IMAGE_FILE).write_text(_image_version(), encoding="utf-8")
     except (OSError, tarfile.TarError) as exc:
         log.error("kunne ikke lægge den hentede kode på plads: %s", exc)
         return None

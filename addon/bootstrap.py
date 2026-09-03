@@ -29,6 +29,7 @@ from pathlib import Path
 PACKAGE = "varmeopt"
 MARKER_NAME = ".starter"
 REVISION_NAME = ".revision"
+IMAGE_NAME = ".image"
 PREVIOUS_NAME = f".{PACKAGE}.forrige"
 
 # Skal være rundelig nok til at rumme en langsom opstart, og kort nok til at
@@ -92,9 +93,51 @@ def recover_if_needed(root: Path) -> None:
         pass
 
 
+def discard_stale_download(root: Path) -> None:
+    """Er add-on'en opdateret fra butikken, må den hentede kode vige.
+
+    ``/data/code`` står før ``/app`` på PYTHONPATH, og ``/data`` overlever en
+    add-on-opdatering. Uden det her ville en kopi hentet en gang i fortiden
+    skygge for et nyere image *for altid* — og det ville være svært at se,
+    for versionen på systemsiden kommer fra imaget, ikke fra koden. Man
+    opdaterer, versionen skifter, og alligevel kører den gamle kode.
+
+    Derfor skrives imagets version ned sammen med den hentede udgave. Er den
+    en anden ved opstart, har brugeren taget en butiksopdatering, og den er
+    pr. definition nyere end det der lå der.
+    """
+    version = os.environ.get("VARMEOPT_VERSION")
+    live = root / PACKAGE
+    if not version or not live.is_dir():
+        return
+
+    try:
+        stamped = (root / IMAGE_NAME).read_text(encoding="utf-8").strip()
+    except OSError:
+        # Hentet før dette mærke fandtes. Så *ved* vi ikke at den er ældre —
+        # men vi ved at imaget er nyt, og imaget er den kendte gode kode.
+        stamped = ""
+    if stamped == version:
+        return
+
+    shutil.rmtree(live, ignore_errors=True)
+    shutil.rmtree(root / PREVIOUS_NAME, ignore_errors=True)
+    for name in (REVISION_NAME, IMAGE_NAME):
+        try:
+            (root / name).unlink(missing_ok=True)
+        except OSError:
+            pass
+    say(
+        f"add-on opdateret til {version} - fjernede hentet kode fra "
+        f"{stamped or 'en ukendt udgave'}, koerer imagets egen"
+    )
+
+
 def main() -> None:
     try:
-        recover_if_needed(code_dir())
+        root = code_dir()
+        recover_if_needed(root)
+        discard_stale_download(root)
     except Exception as exc:  # skallen må aldrig selv blokere opstarten
         say(f"genopretning fejlede, starter alligevel: {exc}")
 
