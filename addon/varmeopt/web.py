@@ -328,27 +328,23 @@ class WebUI:
         ]
         dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
 
-        # En stor forskel mellem tankene er kun et flowproblem hvis de var
-        # ment til at lades samtidig. Lades de i raekkefoelge, er forskellen
-        # netop det ventilen er sat til at lave, og en advarsel der altid
-        # lyser er en advarsel man holder op med at laese.
+        # En stor forskel mellem tankene er kun vaerd at sige noget om hvis
+        # den er en fejl. Lades de i raekkefoelge, er forskellen netop det
+        # ventilen er sat til at lave, og saa staar tallet i tabellen - det
+        # er rigeligt. At forklare anlaegget for den der har bygget det, er
+        # stoej, og stoej der staar hver gang bliver til stoej man ikke ser.
         warn = ""
-        if buffer.imbalance is not None and buffer.imbalance > 5:
-            if buffer.imbalance_is_by_design:
-                warn = (
-                    f'<p class="legend">Tankene står {buffer.imbalance:.1f} K fra '
-                    "hinanden, og det er meningen: tankene lades i rækkefølge. "
-                    f"Ventilen til tank 2 åbner først når tank 1 er over "
-                    f"{buffer.cascade_temp:.0f} °C i toppen, så de første "
-                    "liter når en brugbar temperatur hurtigt.</p>"
-                )
-            else:
-                warn = (
-                    f'<p class="legend warn">Tankene står {buffer.imbalance:.1f} K fra '
-                    "hinanden, og tank 1 er ladet så langt varmepumpen kan tage "
-                    "den. Rækkefølgen er altså kørt til ende uden at forskellen "
-                    "rettede sig — det peger på flowet, ikke på varmen.</p>"
-                )
+        if (
+            buffer.imbalance is not None
+            and buffer.imbalance > 5
+            and not buffer.imbalance_is_by_design
+        ):
+            warn = (
+                f'<p class="legend warn">Tankene står {buffer.imbalance:.1f} K fra '
+                "hinanden, og tank 1 er ladet så langt varmepumpen kan tage "
+                "den. Rækkefølgen er altså kørt til ende uden at forskellen "
+                "rettede sig — det peger på flowet, ikke på varmen.</p>"
+            )
 
         body = (
             "<h1>Varmelager</h1>"

@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.33.0"
+version: "0.33.1"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
