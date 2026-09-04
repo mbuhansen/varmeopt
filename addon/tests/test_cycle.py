@@ -375,6 +375,37 @@ class CycleTest(unittest.TestCase):
         self.assertAlmostEqual(self.app.status["hp_cop_measured"], 4.4, places=3)
         self.assertFalse(self.app._warned_hp_cop)
 
+    def test_the_calculated_house_load_gets_its_own_sensor(self):
+        # Attributter kommer ikke i Home Assistants langtidsstatistik, saa
+        # tallet skal have sin egen sensor for at kunne tegnes en maaned
+        # tilbage.
+        self.app.house_load.curve.learn(17.2, 3.3)
+
+        self.cycle()
+
+        published = dict(self.ha.published)
+        self.assertIn("sensor.varmeopt_husforbrug", published)
+        self.assertAlmostEqual(published["sensor.varmeopt_husforbrug"], 3.3, places=2)
+
+    def test_the_vessels_draw_is_a_number_we_can_state(self):
+        # Spaen alene, beholderen alene efter hvor kold den er, og begge to.
+        o = self.app.options
+
+        self.assertIsNone(self.app._vessel_kw(False, False, 50.0))
+        self.assertAlmostEqual(
+            self.app._vessel_kw(False, True, 50.0), o.spa_kw, places=6
+        )
+        # Bunden paa 40 grader er tom: fuld effekt. Paa 55 er den varm.
+        self.assertAlmostEqual(
+            self.app._vessel_kw(True, False, 40.0), o.vvb_kw_cold, places=6
+        )
+        self.assertAlmostEqual(
+            self.app._vessel_kw(True, False, 55.0), o.vvb_kw_hot, places=6
+        )
+        self.assertAlmostEqual(
+            self.app._vessel_kw(True, True, 55.0), o.vvb_kw_hot + o.spa_kw, places=6
+        )
+
     # -------------------------------------------- husets forbrug uden maaler
 
     def test_the_store_answers_when_the_flow_meter_cannot(self):

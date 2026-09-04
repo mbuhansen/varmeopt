@@ -147,6 +147,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
             ("now", "./", "Nu"),
             ("tank", "./tank", "Lager"),
             ("plan", "./plan", "Plan"),
+            ("usage", "./usage", "Forbrug"),
             ("curve", "./curve", "Varmekurve"),
             ("cop", "./cop", "COP-tabel"),
             ("standby", "./standby", "Ståtab"),
@@ -193,6 +194,7 @@ class WebUI:
         options: Any = None,
         standby: Callable[[], Any] | None = None,
         on_standby: Callable[[bool], str] | None = None,
+        house_load: Callable[[], Any] | None = None,
     ) -> None:
         self._status = status
         self._table = table
@@ -202,6 +204,7 @@ class WebUI:
         self._curve = curve
         self._standby = standby
         self._on_standby = on_standby
+        self._house_load = house_load
         self._journal = journal
         self._options = options
         self._runner: web.AppRunner | None = None
@@ -217,6 +220,7 @@ class WebUI:
         app.router.add_get("/cop", self.cop)
         app.router.add_get("/plan", self.plan)
         app.router.add_get("/curve", self.curve)
+        app.router.add_get("/usage", self.usage)
         app.router.add_get("/system", self.system)
         app.router.add_get("/debug.json", self.debug)
         app.router.add_post("/system", self.system)
@@ -463,6 +467,41 @@ class WebUI:
             '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod.</p>'
         )
         return _page("Plan", "plan", body)
+
+
+    async def usage(self, _request: web.Request) -> web.Response:
+        """Husets forbrug: hvad der er målt, og hvad kurven har lært."""
+        status = self._status()
+        model = self._house_load() if self._house_load is not None else None
+
+        if model is None:
+            return _page(
+                "Forbrug",
+                "usage",
+                "<h1>Forbrug</h1><p class='sub'>Ingen måling endnu.</p>",
+            )
+
+        now_kw = status.get("house_load_kw")
+        cards = [
+            ("Lige nu", _fmt(now_kw, "kW", 2)),
+            ("Forbrugskurven", _fmt(status.get("house_load_curve_kw"), "kW", 2)),
+            ("Kurvepunkter", f"{model.curve.point_count}"),
+        ]
+        if model.bias_kw is not None:
+            cards.append(("Mod flowmåleren", f"{model.bias_kw:+.2f} kW i gennemsnit"))
+        dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in cards)
+
+        body = (
+            "<h1>Forbrug</h1>"
+            '<p class="sub">Husets varmeforbrug læst af lagerets energiændring — '
+            "kilder ind minus det tankene tabte. Flowmåleren måler det samme "
+            "direkte, men først over 100 l/h.</p>"
+            f'<div class="card"><dl>{dl}</dl></div>'
+            f"{_history_chart(model.history)}"
+            f"{_load_curve_chart(model.curve)}"
+            f'<p class="legend">{_esc(model.note)}</p>'
+        )
+        return _page("Forbrug", "usage", body)
 
     async def curve(self, _request: web.Request) -> web.Response:
         curve = self._curve() if self._curve is not None else None
@@ -1004,6 +1043,151 @@ def _price_section(status: dict[str, Any]) -> str:
 
     dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
     return f'<h2>Pris og valg</h2>{badge}<div class="card"><dl>{dl}</dl></div>'
+
+
+
+def _history_chart(history: Any) -> str:
+    """De sidste par ugers målinger, som de faldt.
+
+    Modellerede vinduer — dem hvor spaen eller beholderen kørte og deres træk
+    er trukket fra efter et skøn — tegnes åbne. De er med, fordi et hul i
+    grafen er sværere at læse end et punkt med et forbehold, men de skal kunne
+    kendes fra dem der er målt rent.
+    """
+    points = [h for h in (history or []) if h[1] is not None]
+    if len(points) < 2:
+        return (
+            '<h2>Målt over tid</h2><p class="legend">For få målinger endnu — '
+            "der gemmes ét punkt pr. halve time.</p>"
+        )
+
+    first, last = points[0][0], points[-1][0]
+    span = max(1.0, last - first)
+    top = max(2.0, max(p[1] for p in points)) * 1.15
+
+    width, height = 720, 240
+    left, right, upper, lower = 46, 14, 14, 34
+
+    def sx(at: float) -> float:
+        return left + (at - first) / span * (width - left - right)
+
+    def sy(kw: float) -> float:
+        return upper + (1 - kw / top) * (height - upper - lower)
+
+    grid = []
+    step = 1 if top <= 6 else 2
+    for value in range(0, int(top) + 1, step):
+        y = sy(value)
+        grid.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" '
+            'stroke="currentColor" stroke-opacity=".13"/>'
+            f'<text x="{left - 7}" y="{y + 3.5:.1f}" text-anchor="end" '
+            'font-size="10" fill="currentColor" opacity=".55">'
+            f"{value}</text>"
+        )
+
+    days = []
+    seen = set()
+    for at, _kw, _outdoor, _modelled in points:
+        try:
+            stamp = datetime.fromtimestamp(at).astimezone()
+        except (OSError, OverflowError, ValueError):
+            # Et tidsstempel fra en maskine med et forkert ur maa koste en
+            # manglende datomaerkat, ikke hele siden.
+            continue
+        label = stamp.strftime("%d/%m")
+        if label in seen or stamp.hour > 1:
+            continue
+        seen.add(label)
+        days.append(
+            f'<text x="{sx(at):.1f}" y="{height - lower + 17}" '
+            'text-anchor="middle" font-size="10" fill="currentColor" '
+            f'opacity=".55">{label}</text>'
+        )
+
+    line = " ".join(f"{sx(at):.1f},{sy(kw):.1f}" for at, kw, _o, _m in points)
+    dots = [
+        f'<circle cx="{sx(at):.1f}" cy="{sy(kw):.1f}" r="2.4" '
+        f'fill="{"none" if modelled else _SOURCE_INK["varmepumpe"]}" '
+        f'stroke="{_SOURCE_INK["varmepumpe"]}" stroke-width="1"/>'
+        for at, kw, _o, modelled in points
+    ]
+    hours = span / 3600
+    return (
+        f"<h2>Målt over tid</h2>"
+        f'<div class="card"><svg viewBox="0 0 {width} {height}" '
+        f'width="100%" role="img">{"".join(grid)}{"".join(days)}'
+        f'<polyline fill="none" stroke="{_SOURCE_INK["varmepumpe"]}" '
+        f'stroke-width="1.5" stroke-opacity=".55" points="{line}"/>'
+        f'{"".join(dots)}</svg></div>'
+        f'<p class="legend">{len(points)} målinger over {hours / 24:.1f} døgn. '
+        "Åbne punkter er vinduer hvor spaen eller beholderen kørte, og deres "
+        "træk er trukket fra efter et skøn — de tæller ikke med i kurven.</p>"
+    )
+
+
+def _load_curve_chart(curve: Any) -> str:
+    """Forbruget mod udetemperaturen — husets egen kurve."""
+    temps = curve.outdoor_temps
+    if len(temps) < 2:
+        return (
+            '<h2>Mod udetemperatur</h2><p class="legend">For få punkter til at '
+            "tegne en kurve endnu.</p>"
+        )
+
+    lo, hi = temps[0], temps[-1]
+    values = [curve.point(u).kw for u in temps]
+    top = max(2.0, max(values)) * 1.15
+
+    width, height = 720, 240
+    left, right, upper, lower = 46, 14, 14, 34
+
+    def sx(outdoor: float) -> float:
+        return left + (outdoor - lo) / max(1, hi - lo) * (width - left - right)
+
+    def sy(kw: float) -> float:
+        return upper + (1 - kw / top) * (height - upper - lower)
+
+    grid = []
+    step = 1 if top <= 6 else 2
+    for value in range(0, int(top) + 1, step):
+        y = sy(value)
+        grid.append(
+            f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" '
+            'stroke="currentColor" stroke-opacity=".13"/>'
+            f'<text x="{left - 7}" y="{y + 3.5:.1f}" text-anchor="end" '
+            'font-size="10" fill="currentColor" opacity=".55">'
+            f"{value}</text>"
+        )
+
+    ticks = [
+        f'<text x="{sx(u):.1f}" y="{height - lower + 17}" text-anchor="middle" '
+        f'font-size="10" fill="currentColor" opacity=".55">{u}</text>'
+        for u in temps
+        if not u % 5
+    ]
+
+    line = " ".join(f"{sx(u):.1f},{sy(curve.point(u).kw):.1f}" for u in temps)
+    dots = []
+    for outdoor in temps:
+        point = curve.point(outdoor)
+        # Punkter med faa maalinger tegnes svagt, saa tynde steder ses.
+        opacity = min(1.0, 0.3 + point.count / 20)
+        dots.append(
+            f'<circle cx="{sx(outdoor):.1f}" cy="{sy(point.kw):.1f}" r="3" '
+            f'fill="{_SOURCE_INK["varmepumpe"]}" opacity="{opacity:.2f}"/>'
+        )
+
+    return (
+        "<h2>Mod udetemperatur</h2>"
+        f'<div class="card"><svg viewBox="0 0 {width} {height}" '
+        f'width="100%" role="img">{"".join(grid)}{"".join(ticks)}'
+        f'<polyline fill="none" stroke="{_SOURCE_INK["varmepumpe"]}" '
+        f'stroke-width="2" points="{line}"/>{"".join(dots)}</svg></div>'
+        '<p class="legend">Kilowatt mod grader ude. Svage punkter har få '
+        "målinger bag sig. Kun rene vinduer læres ind — et bad eller en spa "
+        "midt i en måling holder den ude.</p>"
+    )
 
 
 def _balance_section(balance: Any, buffer: Any, status: Any = None) -> str:

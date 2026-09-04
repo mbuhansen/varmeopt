@@ -157,6 +157,19 @@ _DEFAULTS: dict[str, object] = {
     # Beholderens rumfang kendes ikke. Nul betyder "regn ikke energi på den" —
     # to temperaturer er mere ærligt end en kWh-værdi bygget på et gæt.
     "vvb_liters": 0,
+    # Hvad beholderen og spaen traekker ud af buffertankene mens de varmer.
+    #
+    # De to tapper de samme tanke som huset, og en energibalance kan ikke se
+    # forskel paa et bad og en radiator. Uden et bud paa deres traek maa de
+    # minutter kasseres helt - og spaen koerer fem timer hver dag, saa det er
+    # en stor del af doegnet at vaere blind i. Tallene er anlaeggets ejers
+    # skoen, og et vindue der bruger dem, maerkes som modelleret og laerer
+    # ikke ind i forbrugskurven.
+    #
+    # Beholderen svinger med hvor kold den er: koldest tager den mest.
+    "spa_kw": 3.5,
+    "vvb_kw_cold": 8.0,
+    "vvb_kw_hot": 3.0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     "entity_outdoor_temp": "",
     # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
@@ -306,6 +319,9 @@ class Options:
     entity_spa_target: str
     entity_spa_heater: str
     vvb_liters: int
+    spa_kw: float
+    vvb_kw_cold: float
+    vvb_kw_hot: float
     entity_cop_measured: str
     entity_outdoor_temp: str
     dhw_setpoint: float
@@ -409,6 +425,9 @@ class Options:
                     "plan_max_age_minutes",
                     "ch_flow_meter_floor",
                     "battery_empty_percent",
+                    "spa_kw",
+                    "vvb_kw_cold",
+                    "vvb_kw_hot",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i

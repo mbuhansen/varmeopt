@@ -164,6 +164,57 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn('<td class="raw">—</td><td class="raw">—</td>', html)
 
 
+class UsagePageTest(unittest.TestCase):
+    """Forbrugsfanen: hvad der er målt, og hvad kurven har lært."""
+
+    def html(self, model, status=None):
+        import asyncio
+
+        from varmeopt.web import WebUI
+
+        ui = WebUI(
+            lambda: status or {},
+            lambda: None,
+            house_load=lambda: model,
+        )
+        return asyncio.run(ui.usage(None)).text
+
+    def model(self):
+        from varmeopt.houseload import HouseLoad
+
+        load = HouseLoad()
+        start = 1_757_000_000.0
+        for step in range(8):
+            load.history.append(
+                (start + step * 1800.0, 2.0 + step * 0.1, 5.0, step == 3)
+            )
+        for outdoor, kw in ((-2, 6.0), (2, 5.0), (6, 4.0), (10, 3.0)):
+            load.curve.learn(float(outdoor), kw)
+        return load
+
+    def test_both_charts_are_drawn(self):
+        html = self.html(self.model(), {"house_load_kw": 2.4})
+
+        self.assertIn("Målt over tid", html)
+        self.assertIn("Mod udetemperatur", html)
+        self.assertEqual(html.count("<svg"), 2)
+
+    def test_a_modelled_window_is_drawn_open(self):
+        # Et vindue hvor spaen koerte, skal kunne kendes fra et der er maalt
+        # rent - ellers ser et skoen ud som en maaling.
+        html = self.html(self.model())
+
+        self.assertIn('fill="none" stroke="', html)
+
+    def test_it_says_so_when_there_is_nothing_to_draw_yet(self):
+        from varmeopt.houseload import HouseLoad
+
+        html = self.html(HouseLoad())
+
+        self.assertIn("For få målinger endnu", html)
+        self.assertIn("For få punkter", html)
+
+
 class BalanceCardTest(unittest.TestCase):
     """Effektbalancen siger hvor husets tal kommer fra."""
 

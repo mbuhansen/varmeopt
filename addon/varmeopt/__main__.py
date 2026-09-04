@@ -26,7 +26,7 @@ from .curve import HeatCurve
 from .demand import Balance, Load
 from .forecast import Forecast
 from .guard import Guard
-from .houseload import HouseLoad
+from .houseload import MAX_AGE_MINUTES, HouseLoad
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .migrate import (
@@ -58,6 +58,11 @@ SENSOR_TANK = "sensor.varmeopt_lager"
 SENSOR_DEMAND = "sensor.varmeopt_behov"
 SENSOR_PRICE = "sensor.varmeopt_elpris"
 SENSOR_DECISION = "sensor.varmeopt_beslutning"
+# Husets forbrug som lageret maaler det. Det staar ogsaa som attribut paa
+# behovssensoren, men kun *nogle gange* som dens vaerdi - naar flowmaaleren
+# tier. En attribut kommer ikke i Home Assistants langtidsstatistik, og saa
+# kan tallet ikke tegnes en maaned tilbage. Derfor sin egen sensor.
+SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
 # Opladningen som sit eget flag. Den staar ogsaa som attribut paa
 # beslutningen, men et flag man kan spoerge direkte om, er lettere at koble
 # videre end en attribut man skal grave ud - og en styring der er let at
@@ -177,6 +182,9 @@ class Varmeopt:
             meter_kw=balance.load.kw if balance is not None and balance.load.trustworthy else None,
             standby_kw=self.standby.loss_kw_at(
                 buffer.mean_temp if buffer is not None else None, room_temp
+            ),
+            vessel_kw=self._vessel_kw(
+                dhw_active, vessels.get("spa_heating"), vessels.get("vvb_bottom")
             ),
         )
         if self.house_load.measured_at is not None:
@@ -368,6 +376,7 @@ class Varmeopt:
                     horizon,
                 )
             await self._safely("behov", self._publish_demand(ha, balance, buffer))
+            await self._safely("husforbrug", self._publish_house_load(ha))
 
         if prices.get("price_now") is not None and ha is not None:
             price = prices["price_now"]
@@ -1123,6 +1132,65 @@ class Varmeopt:
             self._warned_hp_cop = True
         return implied
 
+    def _vessel_kw(
+        self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None
+    ) -> float | None:
+        """Hvad beholderen og spaen trækker ud af tankene lige nu.
+
+        Et skøn, ikke en måling — men uden det ville målingen af husets
+        forbrug være tavs de fem timer om dagen hvor spaen kører. Beholderen
+        tager mest når den er koldest, så den interpoleres mellem de to
+        yderpunkter over det spænd den faktisk bevæger sig i.
+        """
+        total = 0.0
+        if spa:
+            total += self.options.spa_kw
+        if dhw:
+            cold, hot = self.options.vvb_kw_cold, self.options.vvb_kw_hot
+            if vvb_bottom is None:
+                total += (cold + hot) / 2
+            else:
+                # 40 °C er en toemt beholder, 55 en fuldt opvarmet. Uden for
+                # spaendet klemmes der fast paa yderpunktet.
+                share = min(1.0, max(0.0, (vvb_bottom - 40.0) / 15.0))
+                total += cold + (hot - cold) * share
+        return total if total > 0 else None
+
+    async def _publish_house_load(self, ha: HomeAssistant) -> None:
+        """Husets forbrug som lageret måler det — som sit eget tal i HA."""
+        now = time.time()
+        outdoor = self.status.get("outdoor_temp")
+        value = self.house_load.kw_at(now, outdoor)
+        if value is None:
+            return
+
+        fresh = (
+            self.house_load.measured_at is not None
+            and now - self.house_load.measured_at <= MAX_AGE_MINUTES * 60
+        )
+        await ha.set_state(
+            SENSOR_HOUSE,
+            round(value, 2),
+            {
+                "friendly_name": "Varmeopt husforbrug",
+                "unit_of_measurement": "kW",
+                "device_class": "power",
+                "state_class": "measurement",
+                "icon": "mdi:home-thermometer",
+                "kilde": "maalt paa lageret" if fresh else "forbrugskurven",
+                "maalt_kw": _round(self.house_load.kw, 2),
+                "kurve_kw": _round(
+                    self.house_load.curve.predict(outdoor)
+                    if outdoor is not None
+                    else None,
+                    2,
+                ),
+                "kurvepunkter": self.house_load.curve.point_count,
+                "afvigelse_mod_maaler_kw": _round(self.house_load.bias_kw, 2),
+                "note": self.house_load.note,
+            },
+        )
+
     async def _publish_demand(
         self, ha: HomeAssistant, balance: Balance, buffer: Buffer | None
     ) -> None:
@@ -1302,6 +1370,7 @@ async def run() -> None:
             options=options,
             standby=lambda: app.standby,
             on_standby=lambda arm: _toggle_standby(app, arm),
+            house_load=lambda: app.house_load,
         )
         await web.start()
         log.info("web-UI lytter paa port %d (ingress)", web.port)

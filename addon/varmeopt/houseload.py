@@ -26,6 +26,15 @@ kasseres, ellers bliver et brusebad til husets varmeforbrug. Det samme gælder
 et vindue hvor varmepumpen kører uden en COP at regne ydelsen af, hvor antallet
 af følere skifter undervejs, eller hvor der er hul i aflæsningerne.
 
+**Bad og spa kan modelleres frem for at kasseres.** Varmtvandsbeholderen og
+spaen tapper de samme tanke, og de to kan ikke skelnes fra huset i en
+energibalance. Kasseres de vinduer, er målingen tavs fem timer om dagen, for
+spaen kører 12-17 hver eneste dag. Kendes vessel-trækket omtrent — spaen på
+omkring 3,5 kW, beholderen mellem 3 og 8 alt efter hvor kold den er — kan det
+trækkes fra i stedet, og så bliver der målt videre. Men et modelleret vindue
+er ikke en måling: det tæller med i det tal der vises nu, og aldrig i kurven.
+Kurven skal blive ved med kun at kende rene vinduer.
+
 **To skævheder, som er kendte og ikke skjulte.** Ståtabet til rummet tilskrives
 huset indtil ``standby`` har målt det; det er 0,1-0,2 kW for meget ved et
 forbrug på 2-3 kW. Og solvarmen er modelleret, ikke målt, så en skæv flowkurve
@@ -68,6 +77,12 @@ _SETTLED_COUNT = 10
 
 # Inden for saa mange grader regnes en nabocelle som evidens paa stedet.
 NEAR_ENOUGH_K = 2.0
+
+# Hvor laenge maalinger gemmes til grafen, og hvor tit der gemmes et punkt.
+# Én pr. vindue over fjorten dage er 672 punkter - nok til at se et doegns
+# form og en uges vejr, og lille nok til en fil der skrives hvert femte
+# minut.
+HISTORY_DAYS = 14.0
 
 
 def _finite(value: Any) -> bool:
@@ -248,7 +263,11 @@ class HouseLoad:
     # det - og det er ogsaa saadan man opdager at maaleren driver.
     error_sum: float = 0.0
     error_n: float = 0.0
+    # (tidspunkt, kW, udetemperatur, modelleret) pr. vindue. Til grafen - den
+    # rullende maaling selv lever kun i hukommelsen.
+    history: list[tuple[float, float, float | None, bool]] = field(default_factory=list)
     _samples: list[_Sample] = field(default_factory=list)
+    _modelled: bool = False
     _sensors: int | None = None
     _last_learned_at: float | None = None
 
@@ -266,11 +285,13 @@ class HouseLoad:
         outdoor: float | None = None,
         meter_kw: float | None = None,
         standby_kw: float | None = None,
+        vessel_kw: float | None = None,
     ) -> str:
         """Ét skridt. Returnerer en status der kan vises og logges."""
-        if dhw or spa:
+        if (dhw or spa) and not _finite(vessel_kw):
             # Bad og spa tapper de samme tanke som huset, og en lagerbalance
-            # kan ikke se forskel. Vinduet begynder forfra.
+            # kan ikke se forskel. Uden et bud paa hvor meget de tager,
+            # begynder vinduet forfra.
             return self._drop("bad eller spa tapper tankene")
         if not inputs_known:
             return self._drop("varmepumpen koerer uden en COP at regne paa")
@@ -295,6 +316,12 @@ class HouseLoad:
             if gap <= 0 or gap > MAX_GAP_SECONDS:
                 return self._drop("hul i aflaesningerne")
             input_kw = sum(v for v in (sources or {}).values() if _finite(v))
+            # Det bad eller den spa der koerer, taeller som et traek ved siden
+            # af husets - altsaa som en negativ tilfoersel. Tallet er et
+            # skoen, og derfor bliver vinduet maerket.
+            if dhw or spa:
+                input_kw -= vessel_kw or 0.0
+                self._modelled = True
             inflow = self._samples[-1].inflow_kwh + input_kw * gap / 3600
 
         self._samples.append(_Sample(now, float(heat_kwh), inflow))
@@ -305,6 +332,7 @@ class HouseLoad:
 
     def _drop(self, why: str) -> str:
         self._samples = []
+        self._modelled = False
         self.note = f"venter — {why}"
         return self.note
 
@@ -344,13 +372,18 @@ class HouseLoad:
 
         self.kw = drawn
         self.measured_at = now
-        if _finite(meter_kw):
+        if _finite(meter_kw) and not self._modelled:
             self.error_sum += drawn - meter_kw
             self.error_n += 1
         self._maybe_learn(now, outdoor)
 
-        bias = "" if _finite(standby_kw) else " (staatab ikke trukket fra)"
-        self.note = f"maalt {drawn:.2f} kW over {hours * 60:.0f} min{bias}"
+        notes = []
+        if self._modelled:
+            notes.append("bad/spa trukket fra efter skøn")
+        if not _finite(standby_kw):
+            notes.append("ståtab ikke trukket fra")
+        tail = f" ({', '.join(notes)})" if notes else ""
+        self.note = f"maalt {drawn:.2f} kW over {hours * 60:.0f} min{tail}"
         return self.note
 
     def _maybe_learn(self, now: float, outdoor: float | None) -> None:
@@ -360,13 +393,23 @@ class HouseLoad:
         stort set den samme halve time. Lærte kurven af dem alle, ville én
         aften tælle tredive gange og se ud som tredive aftener.
         """
-        if not _finite(outdoor) or self.kw is None:
+        if self.kw is None:
             return
         if self._last_learned_at is not None:
             if now - self._last_learned_at < WINDOW_MINUTES * 60:
                 return
-        self.curve.learn(outdoor, self.kw)
         self._last_learned_at = now
+
+        # Grafen skal vise alt der er maalt, ogsaa de modellerede vinduer -
+        # de er maerket, saa de kan tegnes for sig.
+        self.history.append((now, self.kw, outdoor, self._modelled))
+        cutoff = now - HISTORY_DAYS * 86400
+        self.history = [h for h in self.history if h[0] >= cutoff]
+
+        # Kurven derimod kender kun rene vinduer. Et skoen paa spaens traek
+        # maa gerne baere det tal der vises nu; det maa ikke bygge modellen.
+        if _finite(outdoor) and not self._modelled:
+            self.curve.learn(outdoor, self.kw)
 
     # -------------------------------------------------------------- resultat
 
@@ -399,6 +442,10 @@ class HouseLoad:
             "curve": self.curve.to_raw(),
             "error_sum": round(self.error_sum, 4),
             "error_n": self.error_n,
+            "history": [
+                [round(at, 1), round(kw, 3), outdoor, modelled]
+                for at, kw, outdoor, modelled in self.history
+            ],
         }
 
     @classmethod
@@ -411,6 +458,15 @@ class HouseLoad:
                 model.error_n = float(raw.get("error_n", 0.0))
             except (TypeError, ValueError):
                 model.error_sum, model.error_n = 0.0, 0.0
+            for item in raw.get("history") or []:
+                try:
+                    at, kw = float(item[0]), float(item[1])
+                    outdoor = None if item[2] is None else float(item[2])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if math.isfinite(at) and math.isfinite(kw):
+                    modelled = bool(item[3]) if len(item) > 3 else False
+                    model.history.append((at, kw, outdoor, modelled))
         if model.curve.point_count:
             model.note = f"{model.curve.point_count} punkt(er) på kurven"
         return model

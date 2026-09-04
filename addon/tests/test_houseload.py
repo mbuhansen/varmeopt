@@ -9,6 +9,7 @@ husets forbrug.
 import unittest
 
 from varmeopt.houseload import (
+    HISTORY_DAYS,
     MAX_AGE_MINUTES,
     WINDOW_MINUTES,
     HouseLoad,
@@ -166,6 +167,83 @@ class RejectionTest(unittest.TestCase):
         drive(load, draw_kw=-0.2)
 
         self.assertEqual(load.kw, 0.0)
+
+
+class ModelledVesselTest(unittest.TestCase):
+    """Spaen kører fem timer om dagen. Kasseres de vinduer, er målingen tavs."""
+
+    def test_a_known_vessel_draw_keeps_the_measurement_running(self):
+        # 6,0 kW ud af tankene, hvoraf spaen tager 3,5. Saa er huset paa 2,5.
+        load = HouseLoad()
+
+        drive(load, draw_kw=6.0, dhw=True, vessel_kw=3.5, outdoor=5.0)
+
+        self.assertAlmostEqual(load.kw, 2.5, places=6)
+        self.assertIn("bad/spa", load.note)
+
+    def test_a_modelled_window_never_teaches_the_curve(self):
+        # Skoennet maa gerne baere det tal der vises nu. Det maa ikke bygge
+        # modellen - saa ville et gaet paa spaens traek blive til viden om
+        # huset.
+        load = HouseLoad()
+
+        drive(load, draw_kw=6.0, dhw=True, vessel_kw=3.5, outdoor=5.0)
+
+        self.assertEqual(load.curve.point_count, 0)
+        self.assertEqual(len(load.history), 1)
+        self.assertTrue(load.history[0][3], "vinduet skal vaere maerket")
+
+    def test_a_modelled_window_is_not_scored_against_the_meter(self):
+        # Scoren skal sige hvor godt *maalingen* rammer, ikke hvor godt et
+        # skoen paa spaen rammer.
+        load = HouseLoad()
+
+        drive(load, draw_kw=6.0, dhw=True, vessel_kw=3.5, meter_kw=2.4)
+
+        self.assertIsNone(load.bias_kw)
+
+    def test_without_a_number_for_the_vessel_it_still_gives_up(self):
+        load = HouseLoad()
+
+        note = load.observe(0.0, 60.0, {}, dhw=True)
+
+        self.assertIn("bad eller spa", note)
+
+
+class HistoryTest(unittest.TestCase):
+    def test_a_point_is_kept_per_window(self):
+        load = HouseLoad()
+
+        drive(load, draw_kw=2.5, outdoor=5.0)
+
+        self.assertEqual(len(load.history), 1)
+        at, kw, outdoor, modelled = load.history[0]
+        self.assertAlmostEqual(kw, 2.5, places=6)
+        self.assertEqual(outdoor, 5.0)
+        self.assertFalse(modelled)
+
+    def test_old_points_fall_off(self):
+        load = HouseLoad()
+        load.history = [(0.0, 2.0, 5.0, False)]
+
+        drive(load, draw_kw=2.5, outdoor=5.0, start_at=HISTORY_DAYS * 86400 + 3600)
+
+        self.assertEqual(len(load.history), 1)
+        self.assertGreater(load.history[0][0], 0.0)
+
+    def test_history_survives_a_restart(self):
+        load = HouseLoad()
+        drive(load, draw_kw=2.5, outdoor=5.0)
+
+        back = HouseLoad.from_raw(load.to_raw())
+
+        self.assertEqual(len(back.history), 1)
+        self.assertAlmostEqual(back.history[0][1], 2.5, places=3)
+
+    def test_rubbish_history_is_skipped(self):
+        back = HouseLoad.from_raw({"history": [["aeh", 2], [1.0], None, [1.0, "nej"]]})
+
+        self.assertEqual(back.history, [])
 
 
 class CurveTest(unittest.TestCase):
