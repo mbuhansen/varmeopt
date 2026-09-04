@@ -27,15 +27,44 @@ class LearnTest(unittest.TestCase):
     def test_a_settled_point_barely_moves(self):
         # 500 målinger bag et punkt må ikke rykke sig på én afvigende aflæsning.
         c = curve({5: (44.0, 500.0)})
-        c.learn(outdoor=5.0, setpoint=54.0)
+        c.learn(outdoor=5.0, setpoint=48.0)
 
-        self.assertAlmostEqual(c.point(5).setpoint, 44.5, places=6)
+        self.assertAlmostEqual(c.point(5).setpoint, 44.2, places=6)
 
     def test_a_fresh_point_moves_faster(self):
         c = curve({5: (44.0, 2.0)})
-        c.learn(outdoor=5.0, setpoint=54.0)
+        c.learn(outdoor=5.0, setpoint=48.0)
 
-        self.assertAlmostEqual(c.point(5).setpoint, 45.5, places=6)
+        self.assertAlmostEqual(c.point(5).setpoint, 44.6, places=6)
+
+    def test_a_leap_above_a_settled_point_is_hot_water_not_weather(self):
+        # Ti grader over et punkt med 500 maalinger bag sig er ikke vejret.
+        # Brugsvand og spa varmer altid hedere end huset har brug for, saa
+        # skaevheden er ensidig - og det er den asymmetri testen her holder
+        # fast i.
+        c = curve({5: (44.0, 500.0)})
+
+        note = c.learn(outdoor=5.0, setpoint=54.0)
+
+        self.assertIn("varmtvand", note)
+        self.assertAlmostEqual(c.point(5).setpoint, 44.0, places=6)
+
+    def test_a_thin_point_has_no_veto(self):
+        # Et punkt der selv er et gaet, skal ikke kunne afvise nye maalinger.
+        c = curve({5: (44.0, 2.0)})
+
+        note = c.learn(outdoor=5.0, setpoint=54.0)
+
+        self.assertNotIn("ignoreret", note)
+
+    def test_a_drop_is_always_the_weather(self):
+        # Testen er ensidig med vilje: en justering *nedad* er aldrig
+        # varmtvand, og den skal laeres med det samme.
+        c = curve({5: (44.0, 500.0)})
+
+        note = c.learn(outdoor=5.0, setpoint=30.0)
+
+        self.assertNotIn("ignoreret", note)
 
 
 class DomesticHotWaterTest(unittest.TestCase):

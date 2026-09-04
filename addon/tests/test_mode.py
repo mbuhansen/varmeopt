@@ -28,47 +28,63 @@ class ModeTest(unittest.TestCase):
         self.assertEqual(mode, "varmt vand + spa")
 
     def test_neither_output_on_is_space_heating(self):
-        # Selv hvis setpunktet tilfaeldigvis staar paa 56: begge udgange er
-        # slukket, saa det *er* varmedrift, og maalingen hoerer til i kurven.
-        mode, dhw = _mode(dhw=False, spa=False, setpoint=56.0, curve=CURVE)
+        mode, dhw = _mode(dhw=False, spa=False, setpoint=38.0, curve=CURVE)
 
         self.assertEqual(mode, "varme")
         self.assertFalse(dhw)
+
+    def test_a_negative_flag_does_not_make_56_degrees_the_weather(self):
+        # Her stod det modsatte, og det var fejlen: udgangen kan staa paa nul
+        # mens spaen varmer, og saa blev 56 °C laert som om huset havde bedt
+        # om det. Ved 19 °C ude kom kurven til at staa paa 44 i stedet for 27.
+        mode, dhw = _mode(dhw=False, spa=False, setpoint=56.0, curve=CURVE)
+
+        self.assertIn("varmt vand", mode)
+        self.assertTrue(dhw)
 
     def test_without_sensors_we_fall_back_to_the_setpoint(self):
         mode, dhw = _mode(dhw=None, spa=None, setpoint=56.0, curve=CURVE)
 
         self.assertIn("gættet", mode)
-        # None betyder "lad kurven afgoere det selv ud fra setpunktet".
-        self.assertIsNone(dhw)
+        self.assertTrue(dhw)
 
     def test_the_fallback_still_recognises_space_heating(self):
         mode, dhw = _mode(dhw=None, spa=None, setpoint=38.0, curve=CURVE)
 
         self.assertEqual(mode, "varme")
-        self.assertIsNone(dhw)
-
-    def test_one_sensor_answering_is_enough_to_be_certain(self):
-        # Spaets foeler mangler, men varmtvandsudgangen svarer. Saa behoever
-        # vi ikke gaette.
-        mode, dhw = _mode(dhw=False, spa=None, setpoint=56.0, curve=CURVE)
-
-        self.assertEqual(mode, "varme")
         self.assertFalse(dhw)
+
+    def test_a_setpoint_far_above_the_curve_is_hot_water_wherever_it_sits(self):
+        # 44 °C er husets rigtige fremloeb om vinteren, men ved 19 °C ude
+        # beder huset om 27. Det er den slags varmtvand der ikke kan kendes
+        # paa vaerdien - kun paa stedet.
+        curve = HeatCurve(dhw_setpoint=56.0)
+        for _ in range(10):
+            curve.learn(outdoor=19.0, setpoint=27.0)
+
+        mode, dhw = _mode(
+            dhw=False, spa=False, setpoint=44.0, curve=curve, outdoor=19.0
+        )
+
+        self.assertTrue(dhw)
+        self.assertIn("varmt vand", mode)
 
     def test_no_setpoint_and_no_sensors_gives_nothing(self):
         self.assertEqual(_mode(None, None, None, CURVE), (None, None))
 
 
 class CurveTrustsTheFactTest(unittest.TestCase):
-    def test_an_explicit_flag_beats_the_setpoint(self):
+    def test_a_flag_may_add_suspicion_but_never_remove_it(self):
+        # Et *ja* fra anlaegget er en kendsgerning. Et *nej* er ikke den samme
+        # slags: udgangen kan staa paa nul mens spaen varmer. Her stod
+        # ``if self.is_dhw(setpoint) if dhw is None else dhw``, og det lod
+        # nejet slaa vaerditjekket fra.
         curve = HeatCurve(dhw_setpoint=56.0)
 
-        # 56 grader, men anlaegget siger at det ikke er varmt vand.
         note = curve.learn(outdoor=-8.0, setpoint=56.0, dhw=False)
 
-        self.assertNotIn("ignoreret", note)
-        self.assertEqual(curve.point_count, 1)
+        self.assertIn("varmtvand", note)
+        self.assertEqual(curve.point_count, 0)
 
     def test_and_can_also_exclude_a_normal_looking_setpoint(self):
         curve = HeatCurve(dhw_setpoint=56.0)

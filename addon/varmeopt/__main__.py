@@ -153,7 +153,11 @@ class Varmeopt:
         )
         dhw_active = await self._binary(ha, self.options.entity_dhw_active) if ha else None
         mode, is_dhw = _mode(
-            dhw_active, vessels.get("spa_heating"), flow_temp, self.curve
+            dhw_active,
+            vessels.get("spa_heating"),
+            flow_temp,
+            self.curve,
+            outdoor_temp,
         )
 
         # Husets forbrug laest af lagerets energiaendring. Den koerer efter
@@ -1302,7 +1306,11 @@ async def _self_update_on_start(
 
 
 def _mode(
-    dhw: bool | None, spa: bool | None, setpoint: float | None, curve: HeatCurve
+    dhw: bool | None,
+    spa: bool | None,
+    setpoint: float | None,
+    curve: HeatCurve,
+    outdoor: float | None = None,
 ) -> tuple[str | None, bool | None]:
     """Hvad varmepumpen laver, og om det hører til i varmekurven.
 
@@ -1312,18 +1320,21 @@ def _mode(
     genkende varmtvandssetpunktet på tallet — og så siger tilstanden selv at
     den er gættet.
 
-    Returnerer også om målingen skal holdes ude af kurven. ``None`` betyder
-    "afgør det selv ud fra setpunktet".
+    Returnerer også om målingen skal holdes ude af kurven — men kun som et
+    *ja*. Et nej herfra er ikke en kendsgerning på samme måde: udgangen kan
+    stå på nul mens spaen varmer, og så er setpunktet stadig ikke husets.
+    Derfor er svaret ``False`` og ikke ``None`` kun en oplysning om at
+    flagene svarede; ``HeatCurve.learn`` afgør resten selv.
     """
     if dhw or spa:
         names = [n for n, on in (("varmt vand", dhw), ("spa", spa)) if on]
         return " + ".join(names), True
-    if dhw is not None or spa is not None:
-        return "varme", False
     if setpoint is None:
-        return None, None
-    guessed = "varmt vand / spa (gættet)" if curve.is_dhw(setpoint) else "varme"
-    return guessed, None
+        return ("varme", False) if dhw is not None or spa is not None else (None, None)
+    # Ordet paa skaermen skal sige det samme som kurven gjorde ved sig selv.
+    if curve.is_dhw(setpoint, outdoor):
+        return "varmt vand / spa (gættet)", True
+    return "varme", False
 
 
 def _round(value: float | None, digits: int) -> float | None:

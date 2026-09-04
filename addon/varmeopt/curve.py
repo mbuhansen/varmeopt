@@ -26,9 +26,37 @@ from typing import Any
 # spa og læres ikke ind i varmekurven.
 DHW_TOLERANCE = 0.5
 
+# Hvor meget over kurven et setpunkt skal ligge, før det ikke længere kan være
+# husets.
+#
+# Varmtvandet har ikke ét setpunkt. UVR'en kører det efter tidsplaner, og
+# uden for planen varmer den op ved en lavere temperatur — 42, 44 eller 56
+# alt efter hvornår på døgnet. De to lave tal ligger midt i vinterens rigtige
+# fremløb (kurven er 44,7 ved +4 °C ude), så de kan ikke kendes på værdien
+# alene. Men de kan kendes på *stedet*: 44 ved 19 °C ude er brugsvand, for
+# huset beder om 27 der.
+#
+# Skævheden er altid opad. Brugsvand og spa varmer hedere end huset har brug
+# for — ellers var der ingen grund til at gøre det — så en måling der ligger
+# højt over kurven, er den mistænkte, og en der ligger lavt, er bare vejret.
+# Derfor er testen ensidig, og derfor kan den ikke låse kurven fast: en
+# rigtig justering nedad læres med det samme, og en opad inden for marginen.
+DHW_MARGIN_K = 5.0
+
+# Under så meget evidens på stedet kan kurven ikke afvise noget. Et punkt der
+# selv er et gæt, skal ikke have vetoret over nye målinger.
+VETO_COUNT = 5.0
+
 # Under så mange observationer flytter en ny måling punktet mærkbart; derover
 # er punktet velbestemt og skal ikke rykke sig på en enkelt aflæsning.
 _SETTLED_COUNT = 10
+
+# Kurvens format. Version 1 blev lært med en fejl: et negativt
+# varmtvandsflag slog værditjekket fra, så 56 °C blev lært som om det var
+# vejrkurven hver gang udgangen stod på nul mens spaen varmede. Skaden voksede
+# til 16,6 K ved 19 °C ude. En kurve fra dengang kastes væk og udledes forfra
+# af COP-tabellen, som er ren.
+CURVE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -65,8 +93,26 @@ class HeatCurve:
     def point(self, outdoor: int) -> Point | None:
         return self._points.get(outdoor)
 
-    def is_dhw(self, setpoint: float) -> bool:
-        return abs(setpoint - self.dhw_setpoint) <= DHW_TOLERANCE
+    def is_dhw(self, setpoint: float, outdoor: float | None = None) -> bool:
+        """Er det her setpunkt varmtvand eller spa frem for vejret?
+
+        To spørgsmål, og det andet er det der virker om sommeren:
+
+        1. Ligger det på varmtvandsværdien (56 °C)? Huset beder aldrig om så
+           meget — kurven topper ved 54 i frost.
+        2. Ligger det langt over hvad kurven selv siger på stedet? Så er det
+           ikke vejret, uanset hvilket tal det er. Det fanger de lave
+           varmtvandssetpunkter (42 og 44), som ikke kan kendes på værdien,
+           fordi de er husets rigtige fremløb midt om vinteren.
+        """
+        if not _finite(setpoint):
+            return False
+        if abs(setpoint - self.dhw_setpoint) <= DHW_TOLERANCE:
+            return True
+        if outdoor is None or self.confidence(outdoor) < VETO_COUNT:
+            return False
+        predicted = self.predict(outdoor)
+        return predicted is not None and setpoint > predicted + DHW_MARGIN_K
 
     # --------------------------------------------------------------- læring
 
@@ -76,14 +122,19 @@ class HeatCurve:
         """Indarbejd en observation. Returnerer en status der kan logges.
 
         ``dhw`` er en kendsgerning fra anlægget, når den findes: står
-        varmtvandsudgangen tændt, hører målingen ikke til i kurven,
-        uanset hvad setpunktet tilfældigvis står på. Uden den falder vi
-        tilbage på at genkende varmtvandssetpunktet på tallet — men det
-        er et gæt, og et gæt der ville fejle den dag setpunktet ændres.
+        varmtvandsudgangen tændt, hører målingen ikke til i kurven, uanset
+        hvad setpunktet tilfældigvis står på.
+
+        Men et flag der siger *nej*, er ikke den samme slags kendsgerning.
+        Her stod ``if self.is_dhw(setpoint) if dhw is None else dhw``, og den
+        lod et negativt flag slå værditjekket fra: stod varmtvandsudgangen på
+        nul mens spaen varmede, blev 56 °C lært som om det var vejrkurven.
+        Det kostede 16,6 K ved 19 °C ude, hvor kurven kom til at stå på 44 i
+        stedet for 27. Flaget må kun *tilføje* mistanke, aldrig fjerne den.
         """
         if not _finite(outdoor) or not _finite(setpoint):
             return "ignoreret: mangler data"
-        if self.is_dhw(setpoint) if dhw is None else dhw:
+        if dhw or self.is_dhw(setpoint, outdoor):
             return f"ignoreret: varmtvand ({setpoint:.0f} °C)"
 
         key = round(outdoor)
@@ -170,17 +221,23 @@ class HeatCurve:
 
     # ------------------------------------------------------------------ lager
 
-    def to_raw(self) -> dict[str, dict[str, float]]:
+    def to_raw(self) -> dict[str, Any]:
         return {
-            str(outdoor): {"setpoint": round(p.setpoint, 3), "count": p.count}
-            for outdoor, p in sorted(self._points.items())
+            "version": CURVE_VERSION,
+            "points": {
+                str(outdoor): {"setpoint": round(p.setpoint, 3), "count": p.count}
+                for outdoor, p in sorted(self._points.items())
+            },
         }
 
     @classmethod
     def from_raw(cls, raw: Any, dhw_setpoint: float = 56.0) -> HeatCurve:
         points: dict[int, Point] = {}
         if isinstance(raw, dict):
-            for key, cell in raw.items():
+            # Version 1 var punkterne selv; version 2 lagde dem i "points" og
+            # skrev et versionsnummer ved siden af.
+            cells = raw.get("points") if isinstance(raw.get("points"), dict) else raw
+            for key, cell in cells.items():
                 try:
                     outdoor = int(key)
                     setpoint = float(cell["setpoint"])

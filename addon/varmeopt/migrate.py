@@ -11,7 +11,7 @@ import logging
 from typing import Any
 
 from .cop import CopTable
-from .curve import HeatCurve
+from .curve import CURVE_VERSION, HeatCurve
 from .nodered import NodeRed
 from .store import Store
 
@@ -81,8 +81,20 @@ def load_heat_curve(
     målinger — så den vægtede middelværdi pr. udetemperatur *er* kurven, og
     den ligger allerede i de data der blev migreret fra Node-RED.
     """
-    if store.exists(CURVE_FILE):
-        curve = HeatCurve.from_raw(store.load(CURVE_FILE, {}), dhw_setpoint)
+    saved = store.load(CURVE_FILE, {}) if store.exists(CURVE_FILE) else None
+    if isinstance(saved, dict) and saved.get("version") != CURVE_VERSION:
+        # En kurve lært under version 1 er malet med en anden målestok: et
+        # negativt varmtvandsflag slog værditjekket fra, så spaens 56 °C blev
+        # lært som vejrkurve. Den kastes væk og udledes forfra af COP-tabellen,
+        # som aldrig har haft fejlen.
+        log.warning(
+            "varmekurven er fra en aeldre udgave med varmtvand lært ind - "
+            "udleder den forfra af COP-tabellen"
+        )
+        saved = None
+
+    if saved is not None:
+        curve = HeatCurve.from_raw(saved, dhw_setpoint)
         return curve, (
             f"varmekurve fra eget lager: {curve.point_count} punkter, "
             f"{curve.sample_count:.0f} målinger"
