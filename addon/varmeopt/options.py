@@ -79,8 +79,17 @@ _DEFAULTS: dict[str, object] = {
     # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
     # og uden pris naegter vagten at styre.
     "plan_max_age_minutes": 60,
+    # Anlaeggets fire elektriske maalinger, og deres fortegn:
+    #   batteriet   positiv naar det aflader
+    #   nettet      negativ naar der saelges, positiv naar der koebes
+    #   solcellerne jaevnstroem ind fra panelerne, aldrig under nul
+    #   inverteren  vekselstroem ud - sol plus batteri - negativ ved ladning
+    # De to sidste afgoer ingen pris. De er der for at balancen kan
+    # efterproeves, og for at begrundelsen kan sige at solen daekker huset.
     "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
     "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
+    "entity_pv_power": "sensor.hostname_scb_5313dd_sum_power_of_all_pv_dc_inputs",
+    "entity_inverter_ac": "sensor.hostname_scb_5313dd_ac_power",
     # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
     # kalibrerer hinanden: solfangerne og cellerne ser samme sol.
     "entity_solar_today": "sensor.solvarme_produktion_idag",
@@ -215,6 +224,8 @@ class Options:
     plan_max_age_minutes: float
     entity_battery_power: str
     entity_grid_power: str
+    entity_pv_power: str
+    entity_inverter_ac: str
     entity_solar_today: str
     entity_solcast_remaining: str
     entity_solcast_tomorrow: str

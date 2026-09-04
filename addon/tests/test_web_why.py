@@ -8,12 +8,13 @@ igennem, og de har været forkerte tre gange.
 import unittest
 from dataclasses import dataclass
 
-from varmeopt.web import _basis, _charge_because, _highlight_basis, _now_note, _switch_note
+from varmeopt.web import _charge_because, _highlight_basis, _now_note, _switch_note
 
 
 @dataclass
 class FakeRow:
     reason: str = "net: import"
+    power: str = "net"
     source: str = "varmepumpe"
 
 
@@ -25,11 +26,6 @@ class FakeDecision:
 
 
 class BasisTest(unittest.TestCase):
-    def test_the_basis_is_the_word_before_the_colon(self):
-        self.assertEqual(_basis("net: batteriet er bundet"), "net")
-        self.assertEqual(_basis("eksport: mistet indtjening"), "eksport")
-        self.assertEqual(_basis("batteri: frit"), "batteri")
-
     def test_net_is_set_in_red(self):
         # Den dyre vej: hverken batteri eller sol daekker, og hver kWh koebes
         # til fuld importpris. Det skal kunne ses paa een gang.
@@ -53,11 +49,9 @@ class NowNoteTest(unittest.TestCase):
     def test_charging_says_why_the_dear_hour_is_dear(self):
         # De to grunde foerer til samme handling, men er ikke samme historie.
         against_export = _now_note(
-            FakeDecision(charge=True), FakeRow(reason="eksport: mistet indtjening")
+            FakeDecision(charge=True), FakeRow(power="eksport")
         )
-        against_price = _now_note(
-            FakeDecision(charge=True), FakeRow(reason="net: import")
-        )
+        against_price = _now_note(FakeDecision(charge=True), FakeRow(power="net"))
 
         self.assertIn("eksport", against_export)
         self.assertIn("strøm", against_price)
@@ -75,7 +69,7 @@ class SwitchNoteTest(unittest.TestCase):
     def test_switching_to_pellets_says_so_not_the_two_prices(self):
         # Her stod "VP 0.84 > pille 0.71" - de tal hoerer i varmekolonnen ved
         # siden af, ikke i en kolonne der skal skimmes.
-        note = _switch_note(FakeRow(reason="net: import", source="pillefyr"))
+        note = _switch_note(FakeRow(power="net", source="pillefyr"))
 
         self.assertIn("pillefyr", note)
         self.assertNotIn(">", note)
@@ -83,7 +77,7 @@ class SwitchNoteTest(unittest.TestCase):
 
     def test_the_three_reasons_are_told_apart(self):
         notes = {
-            b: _switch_note(FakeRow(reason=f"{b}: noget", source="pillefyr"))
+            b: _switch_note(FakeRow(power=b, source="pillefyr"))
             for b in ("net", "eksport", "batteri")
         }
 
@@ -93,7 +87,7 @@ class SwitchNoteTest(unittest.TestCase):
         self.assertIn("batteriet", notes["batteri"])
 
     def test_switching_back_says_the_pump_took_over(self):
-        note = _switch_note(FakeRow(reason="net: import", source="varmepumpe"))
+        note = _switch_note(FakeRow(power="net", source="varmepumpe"))
 
         self.assertIn("varmepumpen", note)
 
@@ -102,6 +96,60 @@ class ChargeBecauseTest(unittest.TestCase):
     def test_without_a_target_it_does_not_invent_one(self):
         self.assertIn("dyrere varme", _charge_because(None))
 
+
+
+class PlanTableTest(unittest.TestCase):
+    """Tabellen viser Predbats egen raekke ved siden af vores pris.
+
+    Uden ladetilstanden og tilstandsordet kan man ikke se *hvorfor* kilden er
+    som den er - at der staar hold charge ved 16 % - uden at gaa over i
+    Predbats egen tabel og finde den samme halvtime.
+    """
+
+    def html(self, rows):
+        import asyncio
+
+        from varmeopt.web import WebUI
+
+        ui = WebUI(lambda: {"projection": rows, "decision": None}, lambda: None)
+        return asyncio.run(ui.plan(None)).text
+
+    def row(self, **over):
+        from varmeopt.planner import Projection
+
+        values = dict(
+            minutes=0,
+            electricity=1.85,
+            reason="net: afladning er slaaet fra",
+            power="net",
+            import_price=1.85,
+            export_price=1.09,
+            heat_price=0.58,
+            state="holdchrg",
+            soc_percent=16.0,
+        )
+        values.update(over)
+        return Projection(**values)
+
+    def test_the_plan_shows_predbats_state_and_the_charge_level(self):
+        html = self.html([self.row()])
+
+        self.assertIn("<th>SOC</th>", html)
+        self.assertIn("<th>Predbat</th>", html)
+        self.assertIn("holdchrg", html)
+        self.assertIn("16 %", html)
+
+    def test_the_why_column_names_the_source(self):
+        # "net" saettes i roedt af _highlight_basis, saa ordet staar i sit
+        # eget element - men det staar der, og det kommer fra kildefeltet.
+        html = self.html([self.row()])
+
+        self.assertIn(">net</span> ·", html)
+
+    def test_a_row_without_a_plan_state_leaves_a_dash(self):
+        html = self.html([self.row(state="", soc_percent=None)])
+
+        self.assertIn('<td class="raw">—</td><td class="raw">—</td>', html)
 
 
 class VesselCardTest(unittest.TestCase):

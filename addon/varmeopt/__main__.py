@@ -622,6 +622,8 @@ class Varmeopt:
         grid = Grid(
             battery_power=await self._number(ha, self.options.entity_battery_power) or 0.0,
             grid_power=await self._number(ha, self.options.entity_grid_power) or 0.0,
+            pv_power=await self._number(ha, self.options.entity_pv_power) or 0.0,
+            inverter_ac=await self._number(ha, self.options.entity_inverter_ac) or 0.0,
         )
         now = plan.marginal(0, grid=grid)
         if now is None:

@@ -71,8 +71,8 @@ RESERVE_SLOTS = 2
 FLOOR_TOLERANCE = 0.5
 
 # Hvor mange procentpoint over reserven der skal vaere, foer batteriet reelt
-# kan levere den naeste kilowatt-time. Varmepumpen traekker 16 kW, saa en
-# halvtimes drift er 8 kWh - en stor bid af batteriet. Ligger ladetilstanden
+# kan levere den naeste kilowatt-time. Varmepumpen traekker 4 kW, saa en
+# halvtimes drift er 2 kWh - en stor bid af batteriet. Ligger ladetilstanden
 # faa point over reserven, er der ikke noget at hente, og det aendrer hverken
 # en planlagt ladning senere eller et gennemsnit fra i gaar paa.
 USABLE_ABOVE_RESERVE = 5.0
@@ -95,22 +95,56 @@ ASSUMED_SOC = 50.0
 
 SLOT_MINUTES = 30
 
-# Predbats ordforraad for hvad batteriet laver i en halvtime, som det staar i
-# planens raekker. Listen er ikke en filtrering - den er en kontrol, saa en
-# tilstand vi ikke kender bliver sagt hoejt i loggen i stedet for stiltiende
-# at blive laest som "batteriet er frit".
-_KNOWN_STATES = (
-    "chrg",     # ogsaa dischrg, frzchrg, holdchrg
-    "charge",
-    "exp",      # ogsaa frzexp
-    "export",
-    "hold",
-    "freeze",
-    "frz",
-    "idle",
-    "demand",
-    "ecoo",     # Predbats "Eco (no discharge)"
-)
+# Hvad inverteren goer i en halvtime. Det er det eneste spoergsmaal planens
+# tilstandsord skal besvare, for det afgoer hvor varmepumpens naeste
+# kilowatt-time kommer fra.
+DISCHARGE = "discharge"   # inverteren daekker forbruget fra batteriet
+LOCKED = "locked"         # afladning sat til 0, eller der lades fra nettet
+EXPORT = "export"         # der eksporteres
+
+# Predbats ordforraad oversat til hvad inverteren goer.
+#
+# De fem foerste er anlaeggets egne, bekraeftet af ejeren: "demand" er
+# inverteren der daekker forbruget, "chrg" er ladning fra nettet, "holdchrg"
+# er Predbat der saetter afladningen til 0 (solen daekker huset, resten kommer
+# fra nettet), og "exp"/"frzexp" er eksport. Resten er stavemaader af de
+# samme fire handlinger, sat konservativt: alt der ikke er en afladning,
+# laaser batteriet.
+#
+# Det stod foer som delstrengstest - "frzchrg" blev fanget fordi den
+# indeholder "chrg", og "frzexp" fordi den indeholder "exp". Det virkede, men
+# det var held, og hvert ord vi ikke kendte, faldt igennem til "batteriet er
+# frit". Netop den antagelse har kostet mest.
+_STATES: dict[str, str] = {
+    "demand": DISCHARGE,
+    "chrg": LOCKED,
+    "holdchrg": LOCKED,
+    "exp": EXPORT,
+    "frzexp": EXPORT,
+    "dischrg": DISCHARGE,
+    "discharge": DISCHARGE,
+    "charge": LOCKED,
+    "export": EXPORT,
+    "frzchrg": LOCKED,
+    "frzdischrg": LOCKED,
+    "frzdis": LOCKED,
+    "hold": LOCKED,
+    "freeze": LOCKED,
+    "frz": LOCKED,
+}
+
+# Bemaerk hvad der *ikke* staar der. Predbat har flere ord - "ecoo" (Eco, no
+# discharge) og "idle" blandt dem - men de forekommer ikke paa det her
+# anlaeg, og hvad de praecis betyder, ville vaere et gaet. Et gaet i den
+# tabel er værre end ingenting: det ville se ud som viden. De laaser derfor
+# som ethvert andet ukendt ord, og halvtimen siger det paa skaermen.
+
+# Kilder en kilowatt-time kan komme fra. Ordet staar paa skaermen, saa
+# hvorfor-kolonnen kan skrive kilden i stedet for at klippe en tekst ved
+# kolon og haabe at det foerste ord var en kilde.
+NET = "net"
+BATTERY = "batteri"
+EXPORTED = "eksport"
 
 
 def _number(value: Any) -> float | None:
@@ -138,43 +172,49 @@ class Slot:
         return self.index * SLOT_MINUTES
 
     @property
-    def discharging(self) -> bool:
-        return "dischrg" in self.state or "discharge" in self.state
+    def word(self) -> str:
+        """Tilstanden som ét renset ord — det er sådan den slås op."""
+        return self.state.strip().lower()
+
+    @property
+    def mode(self) -> str:
+        """Hvad inverteren gør i den halvtime.
+
+        En tom tilstand er «ingenting planlagt», og så kører anlægget som det
+        plejer: inverteren dækker forbruget. Et ord vi ikke kender, låser
+        batteriet — så koster halvtimen importprisen i stedet for at blive
+        læst som et frit batteri. Det er den forsigtige vej og den rigtige: en
+        for høj pris koster en opladning vi kunne have taget, en for lav
+        tømmer batteriet på en løgn.
+        """
+        if not self.word:
+            return DISCHARGE
+        return _STATES.get(self.word, LOCKED)
 
     @property
     def understood(self) -> bool:
-        """Kunne vi overhovedet tyde hvad Predbat har planlagt her?
-
-        En tom tilstand er «ingenting planlagt» og er helt i orden. Alt andet
-        vi ikke genkender, er ordforråd vi ikke kender — og så prissætter vi
-        halvtimen som om batteriet var frit, hvilket det måske ikke er.
-        """
-        return not self.state.strip() or any(
-            word in self.state for word in _KNOWN_STATES
-        )
+        """Kunne vi overhovedet tyde hvad Predbat har planlagt her?"""
+        return not self.word or self.word in _STATES
 
     @property
-    def charging(self) -> bool:
-        """Bemærk rækkefølgen: «dischrg» indeholder «chrg».
+    def refills(self) -> bool:
+        """Bliver batteriet *fyldt op* i den halvtime?
 
-        Uden afladningstesten først blev hver eneste planlagte afladning læst
-        som en opladning. Det gik to steder galt på én gang: halvtimen blev
-        prissat til importprisen, som om batteriet var bundet, og
-        ``no_charge_first`` troede at batteriet ville blive fyldt inden en
-        kommende eksport — netop når det modsatte var planlagt.
+        Ikke det samme som at være bundet. «Hold charge» låser afladningen og
+        holder ladetilstanden, men den hæver den ikke — batteriet får ikke
+        mere i sig, og en halvtime der venter på at blive toppet op, venter
+        forgæves på den. Kun en rigtig ladning tæller.
         """
-        if self.discharging:
-            return False
-        return "chrg" in self.state or "charge" in self.state
+        return self.word in ("chrg", "charge")
 
     @property
     def locked(self) -> bool:
-        """Batteriet er bundet — enten lades det, eller det holdes."""
-        return self.charging or "hold" in self.state
+        """Batteriet er bundet — enten lades det, eller afladning er slået fra."""
+        return self.mode == LOCKED
 
     @property
     def exporting(self) -> bool:
-        return "exp" in self.state
+        return self.mode == EXPORT
 
 
 @dataclass(frozen=True)
@@ -188,14 +228,35 @@ class Price:
 
     kr_per_kwh: float
     reason: str
+    # Hvor kilowatt-timen kommer fra: ``NET``, ``BATTERY`` eller ``EXPORTED``.
+    # Begrundelsen forklarer *hvorfor*; kilden er hvad den er, og skaermen
+    # skal ikke skulle udlede den ved at klippe teksten ved et kolon.
+    source: str = NET
 
 
 @dataclass(frozen=True)
 class Grid:
-    """Den fysiske strømretning lige nu. Kendes kun for indeværende halvtime."""
+    """Den fysiske strømretning lige nu. Kendes kun for indeværende halvtime.
+
+    Fortegnene er anlæggets, og de står her fordi de ellers kun ville leve
+    inde i tærskeltallene nedenfor:
+
+    * ``grid_power`` — **negativ når der sælges til nettet, positiv når der
+      købes.**
+    * ``battery_power`` — positiv når batteriet aflader.
+    * ``inverter_ac`` — vekselstrøm ud af inverteren, altså sol plus batteri.
+      **Negativ når batteriet lades.**
+    * ``pv_power`` — jævnstrøm ind fra panelerne, aldrig under nul.
+
+    De to sidste afgør ingen pris. De er der for at balancen kan efterprøves
+    i debug-filen, og for at begrundelsen kan sige at solen dækker huset når
+    den gør.
+    """
 
     battery_power: float = 0.0
     grid_power: float = 0.0
+    pv_power: float = 0.0
+    inverter_ac: float = 0.0
 
     @property
     def battery_discharging(self) -> bool:
@@ -208,6 +269,24 @@ class Grid:
     @property
     def exporting(self) -> bool:
         return self.grid_power < -200
+
+    @property
+    def solar_covering(self) -> bool:
+        """Dækker solcellerne huset lige nu?
+
+        Målt, ikke udledt: panelerne leverer, batteriet aflader ikke, og der
+        købes ikke.
+
+        Det gør ikke solen til kilden for den *næste* kilowatt-time. Er der
+        intet overskud, kommer den fra batteriet eller nettet; er der
+        overskud, går det til eksport, og så er prisen den mistede indtægt.
+        Men det hører med i begrundelsen, for det er det man ser på anlægget.
+        """
+        return (
+            self.pv_power > 200
+            and not self.battery_discharging
+            and not self.importing
+        )
 
 
 class Plan:
@@ -334,9 +413,16 @@ class Plan:
 
         Tre krav, og de holder tre andre ting ude: bunden skal ligge lavt (en
         flad kurve i 70 % er solen der dækker, ikke et tomt batteri), den
-        skal holde i mere end én halvtime (et dyk er ikke en bund), og
-        halvtimerne må ikke være bundne (står ladetilstanden stille fordi
-        Predbat holder batteriet, er det ikke fordi der ikke er noget i det).
+        skal holde i mere end én halvtime (et dyk er ikke en bund), og en af
+        halvtimerne skal være en hvor batteriet *måtte* aflade. Står
+        ladetilstanden stille fordi Predbat holder batteriet, er det ikke
+        fordi der ikke er noget i det.
+
+        En eksport tæller derimod med, når den ligger dernede sammen med en
+        afladning: Predbat sælger ikke under reserven, så en frossen eksport
+        på bunden ligger der netop fordi det *er* bunden. Kravet er kun at
+        bunden også ses ét sted hvor batteriet havde lov at levere — ellers
+        kunne et hold alene udnævne en reserve.
         """
         levels = [s.soc_percent for s in self.slots if s.soc_percent is not None]
         if not levels:
@@ -349,9 +435,11 @@ class Plan:
             for s in self.slots
             if s.soc_percent is not None
             and s.soc_percent <= floor + FLOOR_TOLERANCE
-            and not s.locked
+            and s.mode != LOCKED
         ]
-        return floor if len(resting) >= RESERVE_SLOTS else None
+        if len(resting) < RESERVE_SLOTS:
+            return None
+        return floor if any(s.mode == DISCHARGE for s in resting) else None
 
     def _at_bottom(self, slot: Slot) -> bool:
         """Er batteriet i bund i den halvtime — kan det levere den næste kWh?
@@ -360,8 +448,8 @@ class Plan:
         Predbats reserve, ikke et fladt batteri: under den aflader
         inverteren ikke, og så kommer den næste kilowatt-time fra nettet,
         uanset hvor meget der fysisk står tilbage. Og de sidste par
-        procentpoint over reserven er ikke en kilde til en varmepumpe — der
-        skal en femtedel af batteriet til at holde den kørende en halv time.
+        procentpoint over reserven er ikke en kilde til en varmepumpe: se
+        ``USABLE_ABOVE_RESERVE``.
 
         Planens egen bund, hvis den kan læses; ellers vores eget gulv.
         """
@@ -391,18 +479,33 @@ class Plan:
 
         physical_export = grid is not None and grid.exporting
         physical_import = grid is not None and grid.importing
-        battery_free = grid is not None and grid.battery_discharging
 
         # 1. Eksporterer vi — planlagt eller fysisk — er prisen den indtægt vi
         #    giver afkald på.
         if physical_export or slot.exporting:
             if slot.export_price is not None:
-                return Price(slot.export_price, "eksport: mistet indtjening")
+                return Price(
+                    slot.export_price, "eksport: mistet indtjening", EXPORTED
+                )
 
         # 2. Batteriet er bundet. Varmepumpen koerer paa nettet.
+        #
+        #    Det er "hold charge": Predbat saetter afladningen til 0, solen
+        #    daekker huset saa langt den raekker, og resten kommer fra nettet.
+        #    Det er ogsaa "chrg", hvor der oven i koebet lades fra nettet.
         if slot.locked:
             if slot.import_price is not None:
-                return Price(slot.import_price, "net: batteriet er bundet")
+                why = (
+                    "net: batteriet lades"
+                    if slot.refills
+                    else "net: afladning er slaaet fra"
+                )
+                if not slot.understood:
+                    # En tilstand vi ikke kender, laases - men saa skal det
+                    # ogsaa staa der, i stedet for at se ud som en beslutning
+                    # Predbat har truffet.
+                    why = f"net: ukendt tilstand «{slot.state}»"
+                return Price(slot.import_price, why, NET)
 
         # 3. Koeber vi allerede fra nettet, kommer den naeste kWh derfra.
         #
@@ -410,10 +513,9 @@ class Plan:
         #    begge var sande. Baade "batteriet aflader" og "vi importerer"
         #    kan gaelde samtidig, og saa betyder det at inverteren staar paa
         #    sit loft: batteriet giver alt hvad det kan, og *ekstra* forbrug
-        #    kan kun komme fra nettet. Med 12 kW inverter mod en varmepumpe
-        #    paa 16 kW er det ikke et hjoerne, det er en almindelig tirsdag.
+        #    kan kun komme fra nettet.
         if physical_import and slot.import_price is not None:
-            return Price(slot.import_price, "net: import")
+            return Price(slot.import_price, "net: import", NET)
 
         # 3b. Er batteriet i bund, kommer den naeste kWh fra nettet - og det
         #     er ligegyldigt hvad der er planlagt senere.
@@ -426,9 +528,9 @@ class Plan:
         #     billig ladning om to timer goer ikke energien billig nu; den er
         #     der ikke.
         #
-        #     Den skal ogsaa ligge foer "balanceret" nedenfor, som ellers tog
-        #     den laveste af importprisen og batteriets gennemsnit - ogsaa
-        #     naar batteriet var tomt.
+        #     Den skal ogsaa ligge foer batterigrenen nedenfor: det er ikke
+        #     energiens vaerdi der er spoergsmaalet, naar der ikke er nogen
+        #     energi at tage af.
         if self._at_bottom(slot) and slot.import_price is not None:
             # Reserven og et tomt batteri er ikke det samme, og det skal
             # kunne ses paa skaermen: det ene er en indstilling, det andet
@@ -438,27 +540,40 @@ class Plan:
                 if self.reserve is not None
                 else f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)"
             )
-            return Price(slot.import_price, note)
+            return Price(slot.import_price, note, NET)
 
-        # 4. Batteriet er frit. Hvad er dets energi vaerd?
-        if battery_free or (grid is None and not slot.locked):
-            price = self._battery_price(slot)
-            if price is not None:
-                return price
-
-        # 5. Hverken det ene eller det andet - solen daekker. Den billigste af
-        #    de to muligheder gaelder.
-        if slot.import_price is not None:
-            return Price(
-                min(slot.import_price, self.battery_average), "balanceret"
+        # 4. Tilbage er der kun én mulighed: inverteren maa aflade, og der er
+        #    noget over reserven. Saa kommer den naeste kilowatt-time fra
+        #    batteriet - ogsaa hvis batteriet lige nu staar stille, fordi
+        #    solen daekker huset praecis. Det er anlaeggets egen regel: som
+        #    udgangspunkt leverer inverteren, og nettet kommer foerst ind naar
+        #    der ikke er mere at tage af, eller naar Predbat har laast.
+        #
+        #    Her stod foer en gren mere - "balanceret" - som slog til naar
+        #    maaleren hverken saa import, eksport eller en afladning over
+        #    500 W. Den svarede med den laveste af importprisen og batteriets
+        #    gennemsnit, og det tal svarer ikke til nogen kilde: kl. 08:18 den
+        #    4. september leverede batteriet 389 W, og halvtimen blev prissat
+        #    til 0,97 kr mens batteriet laa paa reserven og huset koebte til
+        #    1,85. Spoergsmaalet er ikke hvor mange watt der tilfaeldigvis
+        #    loeber i det sekund, men om inverteren maa aflade og om der er
+        #    noget tilbage.
+        price = self._battery_price(slot)
+        if price is None:
+            return None
+        if grid is not None and grid.solar_covering:
+            price = Price(
+                price.kr_per_kwh,
+                f"{price.reason} (solen daekker huset)",
+                price.source,
             )
-        return None
+        return price
 
     def _battery_price(self, slot: Slot) -> Price | None:
         """Hvad batteriets energi er værd, når det står frit."""
         after = slot.index + 1
         next_export = self._next_where(lambda s: s.exporting, after)
-        next_charge = self._next_where(lambda s: s.charging, after)
+        next_charge = self._next_where(lambda s: s.refills, after)
 
         # Venter der eksport snart, og bliver batteriet ikke fyldt inden, er
         # energien mere vaerd end sit gennemsnit: den kan saelges.
@@ -487,6 +602,7 @@ class Plan:
                     next_export.export_price * EXPORT_DISCOUNT,
                     f"batteri: værdisat mod eksport om {minutes} min "
                     f"(SOC {soc:.0f} %)",
+                    BATTERY,
                 )
 
         # Fyldes batteriet billigt snart, kan det bruges frit - det bliver
@@ -505,6 +621,7 @@ class Plan:
                 return Price(
                     next_charge.import_price * CHARGE_LOSS_MARKUP,
                     f"batteri: lades om {next_charge.minutes_ahead - slot.minutes_ahead} min",
+                    BATTERY,
                 )
 
         # Loeber batteriet toert inden det lades op igen, er dets energi fuldt
@@ -525,9 +642,23 @@ class Plan:
                 return Price(
                     empty.import_price,
                     f"batteri: købes tilbage om {minutes} min",
+                    BATTERY,
                 )
 
-        return Price(self.battery_average, "batteri: frit")
+        # Aldrig dyrere end at koebe den samme kilowatt-time fra nettet i
+        # den samme halvtime. Paastaar gennemsnittet andet, er gennemsnittet
+        # forældet - importprisen er det tal vi faktisk kender.
+        #
+        # Loftet er det eneste der overlever fra den gamle "balanceret"-gren.
+        # Den tog ``min(importpris, gennemsnit)`` og kaldte resultatet et navn
+        # der ikke var en kilde; her staar kilden rigtigt, og loftet bliver.
+        if slot.import_price is not None:
+            return Price(
+                min(self.battery_average, slot.import_price),
+                "batteri: frit",
+                BATTERY,
+            )
+        return Price(self.battery_average, "batteri: frit", BATTERY)
 
     # -------------------------------------------------------------- planlaeg
 

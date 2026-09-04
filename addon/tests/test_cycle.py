@@ -186,7 +186,7 @@ class CycleTest(unittest.TestCase):
         self.assertAlmostEqual(published["sensor.varmeopt_elpris"], 1.80, places=3)
 
         status = self.app.status
-        self.assertEqual(status["price_now"].reason, "net: batteriet er bundet")
+        self.assertEqual(status["price_now"].reason, "net: afladning er slaaet fra")
         # 1,80 delt med den lærte COP mod pillefyrets 0,706.
         self.assertIsNotNone(status["heat_price"])
         self.assertIn(status["decision"].source, ("varmepumpe", "pillefyr"))
@@ -223,9 +223,10 @@ class CycleTest(unittest.TestCase):
         )
         self.assertIn("batteri", self.app.status["price_now"].reason)
 
-    def test_a_balanced_plant_takes_the_cheaper_of_grid_and_battery(self):
-        # Ingen maalbar stroem nogen vej: solen daekker. Saa er svaret den
-        # billigste af de to muligheder.
+    def test_a_balanced_plant_runs_on_the_battery_at_the_grid_s_price(self):
+        # Ingen maalbar stroem nogen vej. Kilden er inverteren - det er
+        # anlaeggets regel - og prisen er loftet af hvad nettet tager for den
+        # samme kilowatt-time.
         o = self.app.options
         self.nodered = FakeNodeRed({"udeTemp": 17.2, "battery_avg_price": 1.35})
         self.ha._states[o.entity_predbat_plan] = State(
@@ -237,7 +238,8 @@ class CycleTest(unittest.TestCase):
         self.cycle()
 
         self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 0.40, places=3)
-        self.assertEqual(self.app.status["price_now"].reason, "balanceret")
+        self.assertEqual(self.app.status["price_now"].source, "batteri")
+        self.assertIn("frit", self.app.status["price_now"].reason)
 
     def test_outdoor_temp_falls_back_to_nodered(self):
         self.cycle()

@@ -71,9 +71,18 @@ class Projection:
     # for at skulle regne det ud af begrundelsen.
     electricity: float
     reason: str
+    # Hvor stroemmen kommer fra i den halvtime: "net", "batteri" eller
+    # "eksport". Den staar her som sit eget felt, saa skaermen ikke skal
+    # udlede en kilde ved at klippe begrundelsen ved et kolon.
+    power: str = "net"
     import_price: float | None = None
     export_price: float | None = None
     heat_price: float | None = None
+    # Predbats egen raekke: hvad planen siger, og ved hvilken ladetilstand.
+    # Uden de to kan man ikke se *hvorfor* kilden er som den er - at der fx
+    # staar hold charge ved 37 % - uden at gaa over i Predbats egen tabel.
+    state: str = ""
+    soc_percent: float | None = None
     source: str = "varmepumpe"
     # Hvorfor *den kilde* - ikke hvor prisen kommer fra. Det er den
     # forklaring der hoerer hjemme paa en raekke hvor noget aendrer sig.
@@ -442,9 +451,12 @@ class Planner:
                     minutes=minutes,
                     electricity=price.kr_per_kwh,
                     reason=price.reason,
+                    power=price.source,
                     import_price=slot.import_price if slot else None,
                     export_price=slot.export_price if slot else None,
                     heat_price=heat,
+                    state=slot.state if slot else "",
+                    soc_percent=slot.soc_percent if slot else None,
                     source=source,
                     note=note,
                     target=target_minutes is not None and minutes == target_minutes,

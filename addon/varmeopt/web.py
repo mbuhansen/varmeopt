@@ -404,19 +404,19 @@ class WebUI:
             changed = previous_source is not None and row.source != previous_source
             previous_source = row.source
             if row.now:
-                why = f"{_basis(row.reason)} · {_now_note(decision, target)}"
+                why = f"{row.power} · {_now_note(decision, target)}"
             elif changed:
                 # Kilden skifter. Det er det eneste sted i tabellen hvor der
                 # sker noget, og saa skal der staa hvad - ikke hvilke to tal
                 # der blev sammenlignet.
-                why = f"{_basis(row.reason)} · {_switch_note(row)}"
+                why = f"{row.power} · {_switch_note(row)}"
             elif row.target:
                 # Grundlaget med, saa hele kolonnen kan skimmes efter hvor
                 # prisen kommer fra - ogsaa paa den raekke der forklarer
                 # hvorfor der lades.
-                why = f"{_basis(row.reason)} · dyreste time, der regnes herimod"
+                why = f"{row.power} · dyreste time, der regnes herimod"
             else:
-                why = _basis(row.reason)
+                why = row.power
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
             width = max(2.0, 100 * row.electricity / top)
             colour = _SOURCE_INK["varmepumpe" if row.source == "varmepumpe" else "pillefyr"]
@@ -437,6 +437,8 @@ class WebUI:
                 f"<b>{row.electricity:.2f}</b></td>"
                 f"<td class=\"raw\">{_fmt(row.import_price, '', 2)}</td>"
                 f"<td class=\"raw\">{_fmt(row.export_price, '', 2)}</td>"
+                f"<td class=\"raw\">{_fmt(row.soc_percent, '%', 0)}</td>"
+                f'<td class="raw">{_esc(row.state) or "—"}</td>'
                 f"<td>{_fmt(row.heat_price, '', 2)}</td>"
                 f'<td style="color:{colour};font-weight:600">'
                 f"{_esc(row.source)}</td>"
@@ -445,8 +447,8 @@ class WebUI:
 
         head = (
             "<thead><tr><th>Tid</th><th>Marginal</th><th>Import</th>"
-            "<th>Eksport</th><th>Varme</th><th>Kilde</th><th>Hvorfor</th>"
-            "</tr></thead>"
+            "<th>Eksport</th><th>SOC</th><th>Predbat</th><th>Varme</th>"
+            "<th>Kilde</th><th>Hvorfor</th></tr></thead>"
         )
         summary = _decision_banner(decision)
         hours = rows[-1].minutes / 60
@@ -458,7 +460,7 @@ class WebUI:
             f"{summary}"
             f'<div class="scroll"><table class="plan">{head}'
             f"<tbody>{''.join(cells)}</tbody></table></div>"
-            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. Bjælken viser den i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod.</p>'
+            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod.</p>'
         )
         return _page("Plan", "plan", body)
 
@@ -835,14 +837,10 @@ def _plain(value: Any) -> Any:
     return str(value)
 
 
-def _basis(reason: str) -> str:
-    """Kun hvor prisen kommer fra — «batteri», «net», «eksport».
-
-    Bruges på de rækker hvor intet ændrer sig. Begrundelsen bag prisen er
-    stadig rigtig og står på sensoren, men på skærmen ville den støje: den
-    ville få en helt almindelig time til at se ud som en beslutning.
-    """
-    return reason.split(":")[0].strip() or reason
+# Kilden staar nu som sit eget felt paa raekken (``Projection.power``), og
+# skaermen laeser den derfra. Foer blev den udledt ved at klippe begrundelsen
+# ved det foerste kolon - det virkede, saa laenge hver eneste begrundelse
+# huskede at starte med et kildeord, og det gjorde "balanceret" ikke.
 
 
 # Nettet er den dyre vej: der er hverken batteri eller sol til at daekke, og
@@ -869,12 +867,11 @@ def _switch_note(row: Any) -> str:
     er noget andet end at den kunne saelges, og noget andet end at batteriet
     er tomt for billig energi.
     """
-    basis = _basis(row.reason).lower()
     if row.source != "pillefyr":
         return "tilbage på varmepumpen"
-    if basis.startswith("eksport"):
+    if row.power == "eksport":
         return "skifter til pillefyr, strømmen sælges hellere"
-    if basis.startswith("batteri"):
+    if row.power == "batteri":
         return "skifter til pillefyr, batteriet er for dyrt"
     return "skifter til pillefyr, strømmen er for dyr"
 
@@ -889,10 +886,9 @@ def _charge_because(target: Any) -> str:
     """
     if target is None:
         return "lader op mod dyrere varme"
-    basis = _basis(target.reason).lower()
-    if basis.startswith("eksport"):
+    if target.power == "eksport":
         return "lader op mod eksport senere"
-    if basis.startswith("batteri"):
+    if target.power == "batteri":
         return "lader op mod dyrere batteri"
     return "lader op mod dyrere strøm"
 

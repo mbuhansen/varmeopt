@@ -1,6 +1,16 @@
 import unittest
 
-from varmeopt.prices import EXPORT_FLOOR, Grid, Plan, Slot
+from varmeopt.prices import (
+    BATTERY,
+    DISCHARGE,
+    EXPORT,
+    EXPORT_FLOOR,
+    LOCKED,
+    NET,
+    Grid,
+    Plan,
+    Slot,
+)
 
 
 def row(state="", import_rate=200, export_rate=80, soc=50):
@@ -47,11 +57,32 @@ class ParseTest(unittest.TestCase):
 
 
 class SlotStateTest(unittest.TestCase):
-    def test_states_are_recognised(self):
-        self.assertTrue(Slot(0, "chrg", None, None, None).charging)
-        self.assertTrue(Slot(0, "holdchrg", None, None, None).locked)
-        self.assertTrue(Slot(0, "exp", None, None, None).exporting)
-        self.assertFalse(Slot(0, "", None, None, None).locked)
+    def test_the_five_states_the_plant_actually_sends(self):
+        # Anlaeggets egne fem, som ejeren har bekraeftet dem.
+        self.assertEqual(Slot(0, "Demand", None, None, None).mode, DISCHARGE)
+        self.assertEqual(Slot(0, "Chrg", None, None, None).mode, LOCKED)
+        self.assertEqual(Slot(0, "HoldChrg", None, None, None).mode, LOCKED)
+        self.assertEqual(Slot(0, "Exp", None, None, None).mode, EXPORT)
+        self.assertEqual(Slot(0, "FrzExp", None, None, None).mode, EXPORT)
+
+    def test_nothing_planned_means_the_inverter_carries_the_house(self):
+        self.assertEqual(Slot(0, "", None, None, None).mode, DISCHARGE)
+        self.assertTrue(Slot(0, "", None, None, None).understood)
+
+    def test_a_word_we_do_not_know_locks_the_battery(self):
+        # Foer faldt den igennem til "batteriet er frit" - den billigste og
+        # farligste af de tre muligheder.
+        slot = Slot(0, "SuperEcoTurbo", None, None, None)
+
+        self.assertEqual(slot.mode, LOCKED)
+        self.assertFalse(slot.understood)
+
+    def test_hold_charge_does_not_refill_the_battery(self):
+        # Den laaser afladningen, men den haever ikke ladetilstanden. Kun en
+        # rigtig ladning tæller som en paafyldning.
+        self.assertTrue(Slot(0, "chrg", None, None, None).refills)
+        self.assertFalse(Slot(0, "holdchrg", None, None, None).refills)
+        self.assertFalse(Slot(0, "frzchrg", None, None, None).refills)
 
 
 class MarginalTest(unittest.TestCase):
@@ -64,12 +95,24 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("eksport", price.reason)
 
     def test_a_locked_battery_means_the_pump_runs_on_the_grid(self):
+        # "hold charge": Predbat saetter afladningen til 0, og resten af
+        # husets forbrug - varmepumpen med - kommer fra nettet.
         p = plan(row(state="holdchrg", import_rate=180))
 
         price = p.marginal(0)
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.80, places=9)
-        self.assertIn("bundet", price.reason)
+        self.assertEqual(price.source, NET)
+        self.assertIn("afladning", price.reason)
+
+    def test_an_unknown_state_costs_the_grid_and_says_so(self):
+        p = plan(row(state="Ecoo", import_rate=180), battery_average=0.5)
+
+        price = p.marginal(0)
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.80, places=9)
+        self.assertEqual(price.source, NET)
+        self.assertIn("ukendt", price.reason)
 
     def test_a_free_battery_costs_its_average(self):
         p = plan(row(), row(), battery_average=1.15)
@@ -111,8 +154,8 @@ class MarginalTest(unittest.TestCase):
         # prissat som om batteriet var bundet.
         p = plan(row(state="dischrg", import_rate=300), battery_average=1.0)
 
-        self.assertFalse(p.slots[0].charging)
-        self.assertTrue(p.slots[0].discharging)
+        self.assertEqual(p.slots[0].mode, DISCHARGE)
+        self.assertFalse(p.slots[0].refills)
         self.assertFalse(p.slots[0].locked)
 
     def test_an_almost_empty_battery_is_priced_as_grid(self):
@@ -174,6 +217,34 @@ class MarginalTest(unittest.TestCase):
         self.assertIsNone(p.reserve)
         self.assertAlmostEqual(price.kr_per_kwh, 1.0 / 0.85, places=9)
         self.assertIn("frit", price.reason)
+
+    def test_a_frozen_export_on_the_floor_still_marks_the_reserve(self):
+        # Predbat saelger ikke under reserven, saa en frossen eksport dernede
+        # ligger der netop fordi det *er* bunden. Kravet er kun at bunden
+        # ogsaa ses ét sted hvor batteriet maatte aflade.
+        p = plan(
+            row(soc=30),
+            row(state="frzexp", soc=12),
+            row(state="frzexp", soc=12),
+            row(soc=12),
+            row(soc=20),
+            battery_average=1.0,
+        )
+
+        self.assertEqual(p.reserve, 12)
+
+    def test_a_hold_alone_does_not_name_a_reserve(self):
+        # Staar ladetilstanden stille fordi Predbat holder batteriet, er det
+        # ikke fordi der ikke er noget i det. Uden en afladning dernede er
+        # der ingen bund at laese.
+        p = plan(
+            row(soc=30),
+            row(state="holdchrg", soc=12),
+            row(state="holdchrg", soc=12),
+            battery_average=1.0,
+        )
+
+        self.assertIsNone(p.reserve)
 
     def test_a_single_dip_is_not_a_bottom(self):
         # Et dyk til 20 % er ikke en bund - batteriet kommer op igen af sig
@@ -307,13 +378,26 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 2.10, places=9)
         self.assertIn("import", price.reason)
 
-    def test_neither_direction_takes_the_cheaper_of_the_two(self):
+    def test_no_measurable_flow_still_means_the_battery(self):
+        # Maaleren ser hverken import, eksport eller en afladning vaerd at
+        # naevne. Foer gav det grenen "balanceret", som ikke var en kilde;
+        # anlaeggets regel er at inverteren daekker forbruget, saa kilden er
+        # batteriet. Prisen er stadig loftet af hvad nettet tager.
         p = plan(row(import_rate=60), battery_average=1.30)
 
         price = p.marginal(0, grid=Grid())
 
         self.assertAlmostEqual(price.kr_per_kwh, 0.60, places=9)
-        self.assertEqual(price.reason, "balanceret")
+        self.assertEqual(price.source, BATTERY)
+        self.assertIn("frit", price.reason)
+
+    def test_the_sun_is_named_when_it_carries_the_house(self):
+        p = plan(row(import_rate=200), battery_average=1.00)
+
+        price = p.marginal(0, grid=Grid(pv_power=4000))
+
+        self.assertEqual(price.source, BATTERY)
+        self.assertIn("solen daekker huset", price.reason)
 
     def test_beyond_the_horizon_there_is_no_price(self):
         self.assertIsNone(plan(row()).marginal(600))
@@ -326,7 +410,7 @@ class FutureTest(unittest.TestCase):
         p = plan(row(), row(state="exp", export_rate=150), row(state="chrg", import_rate=30))
 
         self.assertIn("eksport", p.marginal(30).reason)
-        self.assertIn("bundet", p.marginal(60).reason)
+        self.assertEqual(p.marginal(60).source, NET)
 
     def test_the_physical_reading_only_applies_to_the_slot_we_are_in(self):
         # Grid gaelder nu. En halvtime frem maa planen staa alene.
@@ -380,18 +464,35 @@ if __name__ == "__main__":
 
 
 class VocabularyTest(unittest.TestCase):
-    """Predbats tilstandsstrenge er ikke efterproevet mod anlaegget."""
+    """Ordforraadet er nu efterproevet mod anlaegget.
+
+    Fire debug-udtraek fra 3.-4. september 2026 indeholder praecis fem ord:
+    Demand, Chrg, HoldChrg, Exp og FrzExp. Ejeren har bekraeftet hvad de
+    betyder. Resten herunder er stavemaader af de samme handlinger.
+    """
 
     def test_the_states_predbat_is_known_to_write_are_understood(self):
         for state in ("Chrg", "Dischrg", "FrzChrg", "FrzDischrg", "HoldChrg",
-                      "Exp", "FrzExp", "Hold", "Idle", "Demand", ""):
+                      "Exp", "FrzExp", "Hold", "Demand", ""):
             with self.subTest(state=state):
                 p = plan(row(state=state))
                 self.assertTrue(p.slots[0].understood, state)
 
+    def test_words_the_plant_never_sends_are_not_guessed_at(self):
+        # "Idle" og "ecoo" findes i Predbat, men ikke paa det her anlaeg, og
+        # hvad de praecis goer ved inverteren ville vaere et gaet. Et gaet i
+        # tabellen ville se ud som viden. De laaser i stedet og siger det.
+        for state in ("Idle", "ecoo"):
+            with self.subTest(state=state):
+                p = plan(row(state=state, import_rate=180))
+
+                self.assertFalse(p.slots[0].understood)
+                self.assertEqual(p.slots[0].mode, LOCKED)
+                self.assertIn("ukendt", p.marginal(0).reason)
+
     def test_a_state_we_cannot_read_is_flagged_not_swallowed(self):
-        # Kan vi ikke tyde den, prissaettes halvtimen som et frit batteri -
-        # hvilket den maaske ikke er. Saa skal det staa i loggen.
+        # Kan vi ikke tyde den, laases halvtimen til importprisen - og saa
+        # skal det staa baade i loggen og i begrundelsen.
         p = plan(row(state="Turboladning"))
 
         self.assertFalse(p.slots[0].understood)
