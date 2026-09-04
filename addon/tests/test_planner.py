@@ -271,6 +271,31 @@ class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
 
         self.assertAlmostEqual(two.saving_kr, 2 * one.saving_kr, places=6)
 
+    def test_a_store_that_covers_the_dear_hours_is_not_charged(self):
+        # 3 kW gennem to dyre halvtimer er 3 kWh varme, og lageret har 5. Den
+        # varme er lavet og betalt, og den bliver brugt foerst - der er
+        # ingenting at lade op til.
+        d = self.planner.decide(
+            plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, stored_kwh=5.0, demand_kw=3.0,
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("intet at lade op til", d.reason)
+
+    def test_only_what_the_store_is_short_of_is_charged(self):
+        # Samme to halvtimer, men lageret har kun 1 kWh: der mangler 2. Der
+        # lades mindstetraekket paa 4, ikke de 8 der er plads til - og
+        # gevinsten gaelder de 2, ikke de 4.
+        d = self.planner.decide(
+            plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, stored_kwh=1.0, demand_kw=3.0,
+        )
+
+        self.assertTrue(d.charge)
+        self.assertAlmostEqual(d.charge_kwh, 4.0, places=9)
+        self.assertLess(d.saving_kr, 0.456 * 2 + 1e-9)
+
     def test_without_a_demand_it_says_so_by_not_pretending(self):
         # Uden et behov kan spoergsmaalet ikke besvares. Saa staar det gamle
         # tal - men det er nu det eneste tilfaelde, ikke reglen.

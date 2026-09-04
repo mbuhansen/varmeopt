@@ -191,6 +191,7 @@ class Planner:
         cop_now: float | None,
         cop_later: Any = None,
         headroom_kwh: float | None = None,
+        stored_kwh: float | None = None,
         solar_expected_kwh: float | None = None,
         grid: Any = None,
         demand_kw: float | None = None,
@@ -303,16 +304,45 @@ class Planner:
         # og det overdrev 2-3 gange: 24 kWh lagerplads mod en dyr halvtime
         # hvor huset bruger 3 kW er 1,5 kWh fortraengt varme, ikke 24.
         displaced = self._displaced_kwh(plan, best_when, vp_now, cop_now, cop_later, demand_kw)
-        saving = margin * min(room, displaced) if displaced is not None else margin * room
+
+        # Og kun den del af den varme der ikke allerede staar i tankene. Den
+        # varme er lavet og betalt, og den bliver brugt foerst. Skal der 11
+        # kWh gennem huset mens stroemmen er dyr, og staar der 13 i lageret,
+        # er der ingenting at lade op til - saa flytter en opladning kun
+        # varme man alligevel havde, og betaler staatab for det.
+        #
+        # Foer blev der ladet op til hele lagerpladsen, og gevinsten blev
+        # regnet paa den fortraengte varme uden at spoerge hvor den skulle
+        # komme fra. Et fuldt lager og et tomt lager gav samme svar.
+        need = displaced
+        if displaced is not None:
+            stored = stored_kwh if _finite(stored_kwh) else 0.0
+            need = max(0.0, displaced - stored)
+            if need <= 0:
+                return _with(
+                    decision,
+                    window_minutes=best_when,
+                    reason=(
+                        f"{why}; der bruges {displaced:.1f} kWh mens det er "
+                        f"dyrt, og lageret har {stored:.1f} — intet at lade "
+                        "op til"
+                    ),
+                )
+
+        # Der lades det der skal bruges - ikke hele lagerpladsen. Mindre end
+        # mindstetraekket kan pumpen ikke levere, saa der rundes op til det;
+        # gevinsten gaelder stadig kun den varme der faktisk fortraenges.
+        want = room if need is None else min(room, max(need, self.min_charge_kwh))
+        saving = margin * (want if need is None else need)
 
         return _with(
             decision,
             charge=True,
-            charge_kwh=room,
+            charge_kwh=want,
             saving_kr=saving,
             window_minutes=best_when,
             reason=(
-                f"{why}; lad {room:.1f} kWh nu og spar {saving:.2f} kr "
+                f"{why}; lad {want:.1f} kWh nu og spar {saving:.2f} kr "
                 f"mod om {best_when} min"
             ),
         )

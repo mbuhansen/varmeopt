@@ -139,7 +139,30 @@ class MarginalTest(unittest.TestCase):
 
         self.assertEqual(p.reserve, 14)
         self.assertAlmostEqual(price.kr_per_kwh, 1.70, places=9)
-        self.assertIn("tom", price.reason)
+        # Reserven er en indstilling, ikke et tomt batteri - anlaegget er
+        # foerst tomt ved 5 %. Under reserven aflader inverteren bare ikke.
+        self.assertIn("reserven", price.reason)
+
+    def test_a_charge_two_hours_out_does_not_free_a_battery_on_the_reserve(self):
+        # Loeftet om billig ladning kl. 13 goer ikke stroemmen billig kl. 11.
+        # Batteriet ligger paa reserven, huset koeber fra nettet til 1,09, og
+        # en ladning halvanden time ude aendrer ikke paa at energien ikke er
+        # der nu. Grenen laa foer efter "lades snart" og tabte til den.
+        p = plan(
+            row(soc=16, import_rate=109),
+            row(soc=16, import_rate=109),
+            row(soc=15, import_rate=95),
+            row(state="chrg", soc=30, import_rate=85),
+            row(soc=15),
+            row(soc=15),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertEqual(p.reserve, 15)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.09, places=9)
+        self.assertIn("reserven", price.reason)
 
     def test_a_flat_plan_high_up_is_not_a_bottom(self):
         # Staar ladetilstanden stille paa 70 %, er det solen der daekker

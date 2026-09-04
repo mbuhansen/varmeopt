@@ -50,20 +50,32 @@ EXPORT_DISCOUNT = 0.90
 MIN_SOC_FOR_EXPORT = 40.0
 
 # Kan planens egen bund ikke laeses, er det her graensen for hvornaar
-# batteriet ikke laengere er en reel kilde til den naeste kWh. Predbats
-# reserve ligger typisk omkring 5-10 %, saa 12 % er lige over det punkt hvor
-# der reelt ikke er noget at tage af. Staar reserven at laese i planen,
-# bruges den i stedet - paa det her anlaeg er den 14 %, og saa ramte de 12
-# aldrig.
+# batteriet ikke laengere er en reel kilde til den naeste kWh. Staar bunden
+# at laese i planen, bruges den i stedet - den er anlaeggets eget tal, og
+# den her konstant er kun et skoen.
 MIN_SOC_FOR_BATTERY = 12.0
 
 # Saa mange halvtimer skal planen ligge i bund, foer bunden er en reserve og
 # ikke bare et dyk. Et dyk er ikke en bund - der er stadig noget at tage af.
+#
+# Bunden er ikke det punkt hvor batteriet er tomt. Anlaegget her er foerst
+# tomt ved 5 %, men Predbat har faaet besked paa at gemme 5 kWh til
+# uplanlagt forbrug, og derfor lander planens gulv omkring 12-15 %. Den
+# forskel aendrer ikke regnestykket: under reserven aflader inverteren ikke,
+# saa den naeste kilowatt-time kommer fra nettet, uanset at der staar energi
+# tilbage i batteriet.
 RESERVE_SLOTS = 2
 
 # Predbats ladetilstande er hele procenter, saa en halv procent er rigeligt
 # til at afgoere om en halvtime ligger i bund.
 FLOOR_TOLERANCE = 0.5
+
+# Hvor mange procentpoint over reserven der skal vaere, foer batteriet reelt
+# kan levere den naeste kilowatt-time. Varmepumpen traekker 16 kW, saa en
+# halvtimes drift er 8 kWh - en stor bid af batteriet. Ligger ladetilstanden
+# faa point over reserven, er der ikke noget at hente, og det aendrer hverken
+# en planlagt ladning senere eller et gennemsnit fra i gaar paa.
+USABLE_ABOVE_RESERVE = 5.0
 
 # Over den her ladetilstand er en flad kurve ikke en bund. Ligger planen
 # stille paa 70 %, er det fordi solen daekker huset - ikke fordi batteriet er
@@ -341,15 +353,22 @@ class Plan:
         ]
         return floor if len(resting) >= RESERVE_SLOTS else None
 
-    def _at_reserve(self, slot: Slot) -> bool:
-        """Er batteriet i bund i den halvtime?
+    def _at_bottom(self, slot: Slot) -> bool:
+        """Er batteriet i bund i den halvtime — kan det levere den næste kWh?
+
+        Ikke «er det tomt», men «er der noget at tage af». Bunden er
+        Predbats reserve, ikke et fladt batteri: under den aflader
+        inverteren ikke, og så kommer den næste kilowatt-time fra nettet,
+        uanset hvor meget der fysisk står tilbage. Og de sidste par
+        procentpoint over reserven er ikke en kilde til en varmepumpe — der
+        skal en femtedel af batteriet til at holde den kørende en halv time.
 
         Planens egen bund, hvis den kan læses; ellers vores eget gulv.
         """
         if slot.soc_percent is None:
             return False
         if self.reserve is not None:
-            return slot.soc_percent <= self.reserve + FLOOR_TOLERANCE
+            return slot.soc_percent <= self.reserve + USABLE_ABOVE_RESERVE
         return slot.soc_percent <= MIN_SOC_FOR_BATTERY
 
     # ---------------------------------------------------------- marginalpris
@@ -395,6 +414,31 @@ class Plan:
         #    paa 16 kW er det ikke et hjoerne, det er en almindelig tirsdag.
         if physical_import and slot.import_price is not None:
             return Price(slot.import_price, "net: import")
+
+        # 3b. Er batteriet i bund, kommer den naeste kWh fra nettet - og det
+        #     er ligegyldigt hvad der er planlagt senere.
+        #
+        #     Den her stod inde i batterigrenen, *efter* "lades snart", og
+        #     saa vandt den planlagte ladning over den tomme tank: fra 11:18
+        #     til 12:48 blev stroemmen prissat til 1,00 fordi batteriet ville
+        #     blive fyldt kl. 13:18 - mens batteriet laa paa 16 % og huset
+        #     koebte hver eneste kilowatt-time fra nettet til 1,09. Loeftet om
+        #     billig ladning om to timer goer ikke energien billig nu; den er
+        #     der ikke.
+        #
+        #     Den skal ogsaa ligge foer "balanceret" nedenfor, som ellers tog
+        #     den laveste af importprisen og batteriets gennemsnit - ogsaa
+        #     naar batteriet var tomt.
+        if self._at_bottom(slot) and slot.import_price is not None:
+            # Reserven og et tomt batteri er ikke det samme, og det skal
+            # kunne ses paa skaermen: det ene er en indstilling, det andet
+            # er fysik.
+            note = (
+                f"net: batteriet er paa reserven ({slot.soc_percent:.0f} %)"
+                if self.reserve is not None
+                else f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)"
+            )
+            return Price(slot.import_price, note)
 
         # 4. Batteriet er frit. Hvad er dets energi vaerd?
         if battery_free or (grid is None and not slot.locked):
@@ -463,16 +507,6 @@ class Plan:
                     f"batteri: lades om {next_charge.minutes_ahead - slot.minutes_ahead} min",
                 )
 
-        # Et naesten tomt batteri kan ikke levere den naeste kWh, uanset hvad
-        # den energi der er tilbage, kostede. Saa kommer den fra nettet.
-        # ``soc_percent`` blev foer kun brugt i eksportgrenen, og et tomt
-        # batteri blev prissat praecis som et fuldt.
-        if self._at_reserve(slot) and slot.import_price is not None:
-            return Price(
-                slot.import_price,
-                f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)",
-            )
-
         # Loeber batteriet toert inden det lades op igen, er dets energi fuldt
         # disponeret: den kWh vi bruger nu, er praecis den kWh der mangler i
         # den halvtime hvor batteriet staar i bund, og den koeber vi fra
@@ -484,7 +518,7 @@ class Plan:
         # priser bogfoeres. Det er den samme genanskaffelsestanke som i
         # ladegrenen ovenfor; forskellen er kun hvor energien kommer tilbage
         # fra, og her er svaret nettet.
-        empty = self._next_where(self._at_reserve, slot.index + 1)
+        empty = self._next_where(self._at_bottom, slot.index + 1)
         if empty is not None and empty.import_price is not None:
             if next_charge is None or next_charge.index > empty.index:
                 minutes = empty.minutes_ahead - slot.minutes_ahead

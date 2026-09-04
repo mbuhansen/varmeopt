@@ -184,6 +184,7 @@ class Varmeopt:
             cop_now=lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
+            stored_kwh=buffer.stored_kwh if buffer is not None else None,
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
