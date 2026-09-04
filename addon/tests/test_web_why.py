@@ -49,7 +49,8 @@ class NowNoteTest(unittest.TestCase):
     def test_charging_says_why_the_dear_hour_is_dear(self):
         # De to grunde foerer til samme handling, men er ikke samme historie.
         against_export = _now_note(
-            FakeDecision(charge=True), FakeRow(power="eksport")
+            FakeDecision(charge=True),
+            FakeRow(power="batteri", reason="eksport: mistet indtjening"),
         )
         against_price = _now_note(FakeDecision(charge=True), FakeRow(power="net"))
 
@@ -76,9 +77,20 @@ class SwitchNoteTest(unittest.TestCase):
         self.assertNotIn("0.", note)
 
     def test_the_three_reasons_are_told_apart(self):
+        # Eksport er ikke en kilde men en grund - stroemmen kommer fra
+        # batteriet eller solen - saa den laeses af begrundelsen.
         notes = {
-            b: _switch_note(FakeRow(power=b, source="pillefyr"))
-            for b in ("net", "eksport", "batteri")
+            "net": _switch_note(FakeRow(power="net", source="pillefyr")),
+            "eksport": _switch_note(
+                FakeRow(
+                    power="batteri",
+                    reason="eksport: mistet indtjening",
+                    source="pillefyr",
+                )
+            ),
+            "batteri": _switch_note(
+                FakeRow(power="batteri", reason="batteri: frit", source="pillefyr")
+            ),
         }
 
         self.assertEqual(len(set(notes.values())), 3)

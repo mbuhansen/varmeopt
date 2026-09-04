@@ -679,7 +679,11 @@ class Varmeopt:
             return {}
 
         battery_average = _as_number(context.get("battery_avg_price")) or 0.0
-        plan = Plan.from_predbat(state.attributes, battery_average=battery_average)
+        plan = Plan.from_predbat(
+            state.attributes,
+            battery_average=battery_average,
+            empty_percent=self.options.battery_empty_percent,
+        )
         if not len(plan):
             log.warning(
                 "kunne ikke laese Predbats plan fra %s", self.options.entity_predbat_plan

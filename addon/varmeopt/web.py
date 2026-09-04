@@ -869,7 +869,9 @@ def _switch_note(row: Any) -> str:
     """
     if row.source != "pillefyr":
         return "tilbage på varmepumpen"
-    if row.power == "eksport":
+    # Eksport er ikke en kilde men en grund: stroemmen kommer fra batteriet
+    # eller solen, og det der goer den dyr, er at den kunne vaere solgt.
+    if row.reason.startswith("eksport"):
         return "skifter til pillefyr, strømmen sælges hellere"
     if row.power == "batteri":
         return "skifter til pillefyr, batteriet er for dyrt"
@@ -886,7 +888,7 @@ def _charge_because(target: Any) -> str:
     """
     if target is None:
         return "lader op mod dyrere varme"
-    if target.power == "eksport":
+    if target.reason.startswith("eksport"):
         return "lader op mod eksport senere"
     if target.power == "batteri":
         return "lader op mod dyrere batteri"

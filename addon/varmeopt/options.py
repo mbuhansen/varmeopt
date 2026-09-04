@@ -80,6 +80,11 @@ _DEFAULTS: dict[str, object] = {
     # til. Uden den ser et hold ud som en total laasning, og de point ned til
     # gulvet ville blive koebt fra nettet selv om de staar i batteriet.
     "entity_predbat_charge_limit": "predbat.best_charge_limit",
+    # Hvornaar batteriet er tomt. Det er anlaeggets eget nulpunkt og ikke
+    # Predbats reserve: reserven paa 12-15 % er energi der er gemt til
+    # uplanlagt forbrug, og en varmepumpe der starter, er uplanlagt forbrug.
+    # Predbat vil bare ikke *saelge* den.
+    "battery_empty_percent": 5.0,
     # Er planen aeldre end det her, er priserne fra et andet tidspunkt.
     # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
     # og uden pris naegter vagten at styre.
@@ -227,6 +232,7 @@ class Options:
     entity_predbat_plan: str
     entity_predbat_status: str
     entity_predbat_charge_limit: str
+    battery_empty_percent: float
     plan_max_age_minutes: float
     entity_battery_power: str
     entity_grid_power: str
@@ -395,6 +401,7 @@ class Options:
                     "forecast_refresh_minutes",
                     "plan_max_age_minutes",
                     "ch_flow_meter_floor",
+                    "battery_empty_percent",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i

@@ -7,6 +7,7 @@ from varmeopt.prices import (
     EXPORT_FLOOR,
     LOCKED,
     NET,
+    SUN,
     Grid,
     Plan,
     Slot,
@@ -118,8 +119,8 @@ class MarginalTest(unittest.TestCase):
 
     def test_hold_charge_at_the_floor_is_the_grid(self):
         # Samme hold, men ladetilstanden ligger paa gulvet. Saa er der ikke
-        # noget at tage af, og huset koeber.
-        p = plan(row(state="holdchrg", soc=31, import_rate=180), battery_average=1.0)
+        # mere at aflade, og huset koeber.
+        p = plan(row(state="holdchrg", soc=30, import_rate=180), battery_average=1.0)
 
         price = p.marginal(0, grid=Grid(discharge_floor=30.0))
 
@@ -212,10 +213,11 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 3.00, places=9)
         self.assertIn("tom", price.reason)
 
-    def test_the_reserve_is_read_from_the_plan_not_from_a_constant(self):
-        # Reserven paa anlaegget er 14 %, ikke de 12 der stod i koden. Uden
-        # planens eget gulv blev en halvtime hvor batteriet ligger i bund,
-        # prissat som om der stadig var noget at tage af.
+    def test_the_reserve_is_not_a_floor_under_the_heat_pump(self):
+        # Predbats reserve paa 14 % er 5 kWh gemt til uplanlagt forbrug - og
+        # en varmepumpe der starter, *er* uplanlagt forbrug. Anlaegget kan
+        # aflade til 5 %. Reserven siger kun at Predbat ikke vil *saelge*
+        # den energi, ikke at den ikke maa bruges.
         p = plan(
             row(soc=14, import_rate=170),
             row(soc=14, import_rate=160),
@@ -225,16 +227,23 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertEqual(p.reserve, 14)
-        self.assertAlmostEqual(price.kr_per_kwh, 1.70, places=9)
-        # Reserven er en indstilling, ikke et tomt batteri - anlaegget er
-        # foerst tomt ved 5 %. Under reserven aflader inverteren bare ikke.
-        self.assertIn("reserven", price.reason)
+        self.assertEqual(price.source, BATTERY)
 
-    def test_a_charge_two_hours_out_does_not_free_a_battery_on_the_reserve(self):
-        # Loeftet om billig ladning kl. 13 goer ikke stroemmen billig kl. 11.
-        # Batteriet ligger paa reserven, huset koeber fra nettet til 1,09, og
-        # en ladning halvanden time ude aendrer ikke paa at energien ikke er
-        # der nu. Grenen laa foer efter "lades snart" og tabte til den.
+    def test_an_empty_battery_is_the_grid(self):
+        # Under anlaeggets eget nulpunkt kan inverteren ikke levere.
+        p = plan(row(soc=4, import_rate=170), battery_average=0.80)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertEqual(price.source, NET)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.70, places=9)
+        self.assertIn("tomt", price.reason)
+
+    def test_a_battery_on_the_reserve_still_answers(self):
+        # Batteriet ligger paa Predbats reserve, og der lades halvanden time
+        # senere. Energien over anlaeggets nulpunkt er der stadig, saa den
+        # naeste kilowatt-time er batteriets - og den koster hvad det koster
+        # at fylde den paa igen.
         p = plan(
             row(soc=16, import_rate=109),
             row(soc=16, import_rate=109),
@@ -248,8 +257,38 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertEqual(p.reserve, 15)
-        self.assertAlmostEqual(price.kr_per_kwh, 1.09, places=9)
-        self.assertIn("reserven", price.reason)
+        self.assertEqual(price.source, BATTERY)
+        self.assertAlmostEqual(price.kr_per_kwh, 0.85 / 0.85, places=9)
+        self.assertIn("lades om", price.reason)
+
+    def test_a_plain_export_sells_the_battery(self):
+        # "exp" toemmer batteriet ud paa nettet. Tager varmepumpen en
+        # kilowatt-time, er det batteriets - prisen er den mistede indtaegt.
+        p = plan(row(state="exp", export_rate=140))
+
+        price = p.marginal(0)
+
+        self.assertEqual(price.source, BATTERY)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
+
+    def test_a_frozen_export_sells_the_sun(self):
+        # "frzexp" holder ladetilstanden og saelger solen. Saa er det solens
+        # kilowatt-time der bliver brugt, ikke batteriets.
+        p = plan(row(state="frzexp", export_rate=140))
+
+        price = p.marginal(0)
+
+        self.assertEqual(price.source, SUN)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
+
+    def test_an_empty_battery_under_a_covering_sun_is_the_sun(self):
+        # Batteriet er ude af spillet, men panelerne baerer huset og der
+        # koebes ikke. Saa er det solen der leverer den naeste kilowatt-time.
+        p = plan(row(soc=4, import_rate=170))
+
+        price = p.marginal(0, grid=Grid(pv_power=4000))
+
+        self.assertEqual(price.source, SUN)
 
     def test_a_flat_plan_high_up_is_not_a_bottom(self):
         # Staar ladetilstanden stille paa 70 %, er det solen der daekker
@@ -309,10 +348,10 @@ class MarginalTest(unittest.TestCase):
         p = plan(
             row(soc=37, import_rate=190),
             row(soc=20, import_rate=180),
-            row(soc=14, import_rate=173),
-            row(soc=14, import_rate=170),
-            row(soc=14, import_rate=150),
-            row(soc=15, import_rate=140),
+            row(soc=4, import_rate=173),
+            row(soc=4, import_rate=170),
+            row(soc=4, import_rate=150),
+            row(soc=5, import_rate=140),
             row(state="chrg", soc=40, import_rate=85),
             battery_average=1.0,
         )
@@ -331,8 +370,8 @@ class MarginalTest(unittest.TestCase):
             row(soc=37, import_rate=190),
             row(soc=30, import_rate=180),
             row(state="exp", soc=24, export_rate=115),
-            row(soc=14, import_rate=185),
-            row(soc=14, import_rate=173),
+            row(soc=4, import_rate=185),
+            row(soc=4, import_rate=173),
             row(state="chrg", soc=40, import_rate=85),
             battery_average=1.0,
         )
@@ -349,8 +388,8 @@ class MarginalTest(unittest.TestCase):
             row(soc=37, import_rate=190),
             row(soc=30, import_rate=180),
             row(soc=24, import_rate=180),
-            row(soc=14, import_rate=185),
-            row(soc=14, import_rate=173),
+            row(soc=4, import_rate=185),
+            row(soc=4, import_rate=173),
             row(state="chrg", soc=40, import_rate=85),
             battery_average=1.0,
         )

@@ -44,42 +44,28 @@ EXPORT_SOON_MINUTES = 180
 EXPORT_DISCOUNT = 0.90
 
 # Under denne ladetilstand vaerdisaettes batteriet ikke mod en kommende
-# eksport. Er der ikke energi nok til baade at varme og saelge, er eksporten
-# ikke et reelt alternativ, og saa er batteriets egen pris den rigtige.
-# Node-RED har samme graense; den faldt paa gulvet ved portningen.
+# eksport. Kan planens egen reserve laeses, bruges den i stedet: Predbat
+# eksporterer ikke under sin reserve, saa energien dernede *kan* ikke saelges,
+# og saa er eksporten ikke et alternativ. Konstanten her er kun det skoen der
+# staar tilbage naar reserven ikke kan laeses.
 MIN_SOC_FOR_EXPORT = 40.0
 
-# Kan planens egen bund ikke laeses, er det her graensen for hvornaar
-# batteriet ikke laengere er en reel kilde til den naeste kWh. Staar bunden
-# at laese i planen, bruges den i stedet - den er anlaeggets eget tal, og
-# den her konstant er kun et skoen.
-MIN_SOC_FOR_BATTERY = 12.0
+# Hvor tomt batteriet er, naar det er tomt. Det her er anlaeggets eget tal og
+# ikke Predbats reserve - se ``Plan.reserve`` for forskellen. Under det kan
+# inverteren ikke levere, og saa kommer den naeste kilowatt-time fra nettet
+# eller fra solen.
+BATTERY_EMPTY_PERCENT = 5.0
 
-# Saa mange halvtimer skal planen ligge i bund, foer bunden er en reserve og
-# ikke bare et dyk. Et dyk er ikke en bund - der er stadig noget at tage af.
-#
-# Bunden er ikke det punkt hvor batteriet er tomt. Anlaegget her er foerst
-# tomt ved 5 %, men Predbat har faaet besked paa at gemme 5 kWh til
-# uplanlagt forbrug, og derfor lander planens gulv omkring 12-15 %. Den
-# forskel aendrer ikke regnestykket: under reserven aflader inverteren ikke,
-# saa den naeste kilowatt-time kommer fra nettet, uanset at der staar energi
-# tilbage i batteriet.
+# Saa mange halvtimer skal planen ligge i bund, foer bunden er Predbats
+# reserve og ikke bare et dyk.
 RESERVE_SLOTS = 2
 
 # Predbats ladetilstande er hele procenter, saa en halv procent er rigeligt
 # til at afgoere om en halvtime ligger i bund.
 FLOOR_TOLERANCE = 0.5
 
-# Hvor mange procentpoint over reserven der skal vaere, foer batteriet reelt
-# kan levere den naeste kilowatt-time. Varmepumpen traekker 4 kW, saa en
-# halvtimes drift er 2 kWh - en stor bid af batteriet. Ligger ladetilstanden
-# faa point over reserven, er der ikke noget at hente, og det aendrer hverken
-# en planlagt ladning senere eller et gennemsnit fra i gaar paa.
-USABLE_ABOVE_RESERVE = 5.0
-
-# Over den her ladetilstand er en flad kurve ikke en bund. Ligger planen
-# stille paa 70 %, er det fordi solen daekker huset - ikke fordi batteriet er
-# tomt. En reserve er altid et lavt tal.
+# Over den her ladetilstand er en flad kurve ikke en reserve. Ligger planen
+# stille paa 70 %, er det fordi solen daekker huset. En reserve er et lavt tal.
 MAX_RESERVE = 25.0
 
 # Tillaeg paa genanskaffelsesprisen: tab ved at koere en kWh ind og ud af
@@ -144,7 +130,7 @@ _STATES: dict[str, str] = {
 # kolon og haabe at det foerste ord var en kilde.
 NET = "net"
 BATTERY = "batteri"
-EXPORTED = "eksport"
+SUN = "sol"
 
 
 def _number(value: Any) -> float | None:
@@ -216,6 +202,17 @@ class Slot:
     def exporting(self) -> bool:
         return self.mode == EXPORT
 
+    @property
+    def frozen(self) -> bool:
+        """Fastholder Predbat ladetilstanden i den halvtime?
+
+        Forskellen mellem «exp» og «frzexp» er hvor det der saelges, kommer
+        fra: en almindelig eksport toemmer batteriet ud paa nettet, mens en
+        frossen eksport holder ladetilstanden og saelger solen. Det afgoer
+        hvem der maa undvaere, hvis varmepumpen tager en kilowatt-time.
+        """
+        return self.word.startswith("frz") or "freeze" in self.word
+
 
 @dataclass(frozen=True)
 class Price:
@@ -228,9 +225,11 @@ class Price:
 
     kr_per_kwh: float
     reason: str
-    # Hvor kilowatt-timen kommer fra: ``NET``, ``BATTERY`` eller ``EXPORTED``.
-    # Begrundelsen forklarer *hvorfor*; kilden er hvad den er, og skaermen
-    # skal ikke skulle udlede den ved at klippe teksten ved et kolon.
+    # Hvor kilowatt-timen kommer fra: ``NET``, ``BATTERY`` eller ``SUN``.
+    # Begrundelsen forklarer *hvorfor* den koster det den koster; kilden er
+    # hvor stroemmen fysisk kommer fra, og de to er ikke det samme. En
+    # halvtime hvor der eksporteres, henter stroemmen i batteriet og koster
+    # den mistede indtaegt - kilde ``BATTERY``, begrundelse "eksport".
     source: str = NET
 
 
@@ -301,8 +300,11 @@ class Plan:
         slots: tuple[Slot, ...],
         battery_average: float = 0.0,
         export_floor: float = EXPORT_FLOOR,
+        empty_percent: float = BATTERY_EMPTY_PERCENT,
     ) -> None:
         self.slots = slots
+        # Hvornaar batteriet er tomt. Anlaeggets tal, ikke Predbats reserve.
+        self.empty_percent = empty_percent
         # Batteriets gennemsnitspris, men aldrig under eksportgulvet: der er
         # altid muligheden for at sælge i stedet for at bruge.
         # Batteriets snitpris er hvad energien kostede *ved elmåleren*, pr.
@@ -333,7 +335,11 @@ class Plan:
 
     @classmethod
     def from_predbat(
-        cls, attributes: Any, battery_average: float = 0.0, export_floor: float = EXPORT_FLOOR
+        cls,
+        attributes: Any,
+        battery_average: float = 0.0,
+        export_floor: float = EXPORT_FLOOR,
+        empty_percent: float = BATTERY_EMPTY_PERCENT,
     ) -> Plan:
         """Læs ``predbat.plan_html``'s ``raw.rows``.
 
@@ -361,7 +367,7 @@ class Plan:
                     soc_percent=_number(row.get("soc_percent")),
                 )
             )
-        plan = cls(tuple(slots), battery_average, export_floor)
+        plan = cls(tuple(slots), battery_average, export_floor, empty_percent)
         unknown = sorted({s.state for s in plan.slots if not s.understood})
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
@@ -380,6 +386,7 @@ class Plan:
             "battery_average": self.battery_average,
             "export_floor": self.export_floor,
             "reserve": self.reserve,
+            "empty_percent": self.empty_percent,
             "horizon_minutes": self.horizon_minutes,
             "slots": [
                 {
@@ -406,21 +413,24 @@ class Plan:
     # -------------------------------------------------------------- reserven
 
     def _find_reserve(self) -> float | None:
-        """Den ladetilstand planen falder ned til og bliver liggende på.
+        """Predbats reserve: den ladetilstand planen falder ned til og bliver
+        liggende på.
 
-        Predbats reserve står ikke i planen, men den kan læses af den: er
-        batteriet i bund, bliver ladetilstanden stående på det samme tal
-        halvtime efter halvtime, mens huset kører videre på nettet. Det er
-        forskellen mellem «her er der ikke mere at tage af» og «her er det
-        billigst at tage det fra», og den forskel afgør hvad den næste kWh
-        koster.
+        **Den er ikke en bund for varmepumpen.** Anlægget er først tomt ved
+        5 %, og reserven på 12-15 % er 5 kWh Predbat holder tilbage til
+        uplanlagt forbrug — og en varmepumpe der starter, *er* uplanlagt
+        forbrug. Den energi må bruges; Predbat vil bare ikke sælge den.
+
+        Derfor er reserven et loft over hvad der kan **eksporteres**, ikke et
+        gulv under hvad der kan bruges, og det er kun dér den bruges: en
+        kommende eksport er ikke et alternativ til den energi der ligger
+        under reserven, for den bliver aldrig solgt.
 
         Tre krav, og de holder tre andre ting ude: bunden skal ligge lavt (en
-        flad kurve i 70 % er solen der dækker, ikke et tomt batteri), den
-        skal holde i mere end én halvtime (et dyk er ikke en bund), og en af
-        halvtimerne skal være en hvor batteriet *måtte* aflade. Står
-        ladetilstanden stille fordi Predbat holder batteriet, er det ikke
-        fordi der ikke er noget i det.
+        flad kurve i 70 % er solen der dækker), den skal holde i mere end én
+        halvtime (et dyk er ikke en bund), og en af halvtimerne skal være en
+        hvor batteriet måtte aflade. Står ladetilstanden stille fordi Predbat
+        holder batteriet, er det et hold og ikke en reserve.
 
         En eksport tæller derimod med, når den ligger dernede sammen med en
         afladning: Predbat sælger ikke under reserven, så en frossen eksport
@@ -445,28 +455,17 @@ class Plan:
             return None
         return floor if any(s.mode == DISCHARGE for s in resting) else None
 
-    def _at_bottom(self, slot: Slot, floor: float | None = None) -> bool:
-        """Er batteriet i bund i den halvtime — kan det levere den næste kWh?
+    def _at_bottom(self, slot: Slot) -> bool:
+        """Er batteriet tomt i den halvtime?
 
-        Ikke «er det tomt», men «er der noget at tage af». Bunden er
-        Predbats reserve, ikke et fladt batteri: under den aflader
-        inverteren ikke, og så kommer den næste kilowatt-time fra nettet,
-        uanset hvor meget der fysisk står tilbage. Og de sidste par
-        procentpoint over reserven er ikke en kilde til en varmepumpe: se
-        ``USABLE_ABOVE_RESERVE``.
-
-        Bunden kan komme to steder fra, og den højeste gælder: planens egen
-        reserve, og det gulv Predbat lige nu har skrevet til inverteren.
-        Kendes ingen af dem, står vores eget gulv tilbage.
+        Tomt, ikke «på reserven». Anlægget kan aflade til 5 %, og de 12-15 %
+        Predbat planlægger efter, er penge på bogen og ikke en mur — se
+        ``_find_reserve``. Under det punkt kan inverteren ikke levere, og så
+        kommer den næste kilowatt-time fra nettet eller fra solen.
         """
         if slot.soc_percent is None:
             return False
-        bottom = self.reserve
-        if floor is not None:
-            bottom = floor if bottom is None else max(bottom, floor)
-        if bottom is not None:
-            return slot.soc_percent <= bottom + USABLE_ABOVE_RESERVE
-        return slot.soc_percent <= MIN_SOC_FOR_BATTERY
+        return slot.soc_percent <= self.empty_percent
 
     def _may_still_discharge(self, slot: Slot, floor: float | None) -> bool:
         """Er «bundet» alligevel ikke helt bundet?
@@ -479,11 +478,23 @@ class Plan:
         Gælder kun hold, ikke en rigtig ladning: mens der lades fra nettet,
         aflader inverteren ikke uanset hvor fyldt batteriet er. Og kun for
         den halvtime vi står i — gulvet er hvad der er skrevet til
-        inverteren *nu*, ikke et løfte om klokken 18.
+        inverteren *nu*, ikke et løfte om klokken 18. Kender vi ikke gulvet
+        for en halvtime længere fremme, er nettet det forsigtige svar.
         """
         if floor is None or slot.refills or slot.soc_percent is None:
             return False
-        return slot.soc_percent > floor + USABLE_ABOVE_RESERVE
+        return slot.soc_percent > floor
+
+    def _grid_or_sun(self, grid: Grid | None) -> str:
+        """Nettet — eller solen, når vi kan måle at det er den der bærer.
+
+        Er batteriet ude af spillet, kommer den næste kilowatt-time fra
+        nettet eller fra solcellerne, og de to kan ikke skelnes af planen
+        alene. Måler vi at panelerne bærer huset uden at der købes, er det
+        solen; ellers er nettet det ærlige svar. For en halvtime længere
+        fremme er der ingen måling, og så er det nettet.
+        """
+        return SUN if grid is not None and grid.solar_covering else NET
 
     # ---------------------------------------------------------- marginalpris
 
@@ -510,12 +521,15 @@ class Plan:
         floor = grid.discharge_floor if grid is not None else None
 
         # 1. Eksporterer vi — planlagt eller fysisk — er prisen den indtægt vi
-        #    giver afkald på.
+        #    giver afkald på. Kilden er derimod ikke «eksport», for eksport er
+        #    ikke et sted stroem kommer fra: en almindelig eksport toemmer
+        #    batteriet ud paa nettet, saa den kilowatt-time varmepumpen tager,
+        #    er batteriets. En frossen eksport holder ladetilstanden og saelger
+        #    solen, og saa er det solens.
         if physical_export or slot.exporting:
             if slot.export_price is not None:
-                return Price(
-                    slot.export_price, "eksport: mistet indtjening", EXPORTED
-                )
+                sold = SUN if slot.frozen else BATTERY
+                return Price(slot.export_price, "eksport: mistet indtjening", sold)
 
         # 2. Batteriet er bundet. Varmepumpen koerer paa nettet.
         #
@@ -538,7 +552,11 @@ class Plan:
                     # ogsaa staa der, i stedet for at se ud som en beslutning
                     # Predbat har truffet.
                     why = f"net: ukendt tilstand «{slot.state}»"
-                return Price(slot.import_price, why, NET)
+                # Lades der fra nettet, kommer ekstra forbrug ogsaa derfra -
+                # solen gaar jo i batteriet. Er afladningen bare slaaet fra,
+                # kan solen daekke huset saa langt den raekker.
+                source = NET if slot.refills else self._grid_or_sun(grid)
+                return Price(slot.import_price, why, source)
 
         # 3. Koeber vi allerede fra nettet, kommer den naeste kWh derfra.
         #
@@ -564,16 +582,12 @@ class Plan:
         #     Den skal ogsaa ligge foer batterigrenen nedenfor: det er ikke
         #     energiens vaerdi der er spoergsmaalet, naar der ikke er nogen
         #     energi at tage af.
-        if self._at_bottom(slot, floor) and slot.import_price is not None:
-            # Reserven og et tomt batteri er ikke det samme, og det skal
-            # kunne ses paa skaermen: det ene er en indstilling, det andet
-            # er fysik.
-            note = (
-                f"net: batteriet er paa reserven ({slot.soc_percent:.0f} %)"
-                if self.reserve is not None
-                else f"net: batteriet er naesten tomt ({slot.soc_percent:.0f} %)"
+        if self._at_bottom(slot) and slot.import_price is not None:
+            return Price(
+                slot.import_price,
+                f"net: batteriet er tomt ({slot.soc_percent:.0f} %)",
+                self._grid_or_sun(grid),
             )
-            return Price(slot.import_price, note, NET)
 
         # 4. Tilbage er der kun én mulighed: inverteren maa aflade, og der er
         #    noget over reserven. Saa kommer den naeste kilowatt-time fra
@@ -631,10 +645,15 @@ class Plan:
             # eksport 1,05 gav 0,945 - energien blev *billigere* af at have
             # et salg i vente.
             worth_it = next_export.export_price * EXPORT_DISCOUNT > self.battery_average
-            # Er batteriet lavt, raekker energien ikke til baade at varme og
-            # saelge. Saa er eksporten ikke et reelt alternativ, og batteriets
-            # egen pris er den rigtige.
-            enough = soc > MIN_SOC_FOR_EXPORT
+            # Under Predbats reserve bliver energien aldrig solgt - Predbat
+            # eksporterer ikke derunder - og saa er en kommende eksport ikke
+            # et alternativ til at bruge den. Reserven er anlaeggets eget tal
+            # naar den kan laeses af planen; ellers staar skoennet tilbage.
+            #
+            # Her stod ``MIN_SOC_FOR_EXPORT`` alene, og de 40 % var langt over
+            # den reserve anlaegget faktisk koerer med.
+            floor_for_sale = self.reserve if self.reserve is not None else MIN_SOC_FOR_EXPORT
+            enough = soc > floor_for_sale
             if soon and no_charge_first and worth_it and enough:
                 minutes = next_export.minutes_ahead - slot.minutes_ahead
                 return Price(
