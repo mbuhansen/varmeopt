@@ -130,6 +130,10 @@ class Balance:
     """Hvad der lades ind i lageret, mod hvad huset tager ud."""
 
     load: Load
+    # Varmepumpens elforbrug. Ikke en varmekilde og taeller ikke med i
+    # ``input_kw`` - den staar her fordi ydelsen delt med den *er* COP'en, og
+    # fordi det er det ene sted i huset hvor vi maaler baade ind og ud.
+    hp_power_kw: float | None = None
     solar_kw: float | None = None
     element_kw: float | None = None
     heatpump_kw: float | None = None

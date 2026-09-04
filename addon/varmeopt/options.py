@@ -38,9 +38,15 @@ _DEFAULTS: dict[str, object] = {
     # BT12 minus BT3 er løftet over kondensatoren, altså hvor hårdt den kører.
     "entity_hp_flow": "sensor.nibe_eb101_ep14_bt12_condensor_out",
     "entity_hp_return": "sensor.nibe_eb101_ep14_bt3_return_temp",
-    # Varmepumpens elforbrug. Ganget med den målte COP giver det dens
-    # varmeydelse, uafhængigt af hvad tankene i øvrigt får fra solen.
+    # Varmepumpens to egne tal: hvad den bruger, og hvad den laver.
+    #
+    # Ydelsen blev før *udledt* som elforbrug gange målt COP. Det virkede, men
+    # det bandt hele energiregnskabet til COP-føleren: manglede den, manglede
+    # varmepumpens bidrag, og så kunne lagerbalancen ikke måle husets forbrug.
+    # Måles ydelsen direkte, er den udledning ikke nødvendig — og de to tal
+    # tilsammen giver en COP vi kan holde føleren op imod.
     "entity_hp_power": "sensor.node_1_input_15",
+    "entity_hp_heat": "sensor.node_1_analog_logging_24",
     # Husets forbrug: retur og flow hører til fremløbet ovenfor, alle tre
     # efter tankene.
     "entity_ch_return": "sensor.node_1_dl_bus_2",
@@ -219,6 +225,7 @@ class Options:
     entity_hp_flow: str
     entity_hp_return: str
     entity_hp_power: str
+    entity_hp_heat: str
     entity_ch_return: str
     entity_ch_flow_rate: str
     ch_flow_meter_floor: float

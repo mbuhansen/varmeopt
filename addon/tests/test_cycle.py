@@ -298,6 +298,83 @@ class CycleTest(unittest.TestCase):
         self.assertIsNone(self.app._status_mode("noget helt andet"))
         self.assertIsNone(self.app._status_mode("idle"))
 
+    # ------------------------------------------ varmepumpens egne to tal
+
+    def with_hp(self, power=None, heat=None, cop=None):
+        """Saet varmepumpens elforbrug, varmeydelse og COP-foeler."""
+        o = self.app.options
+        for entity, value in (
+            (o.entity_hp_power, power),
+            (o.entity_hp_heat, heat),
+        ):
+            if value is None:
+                self.ha._states.pop(entity, None)
+            else:
+                self.ha._states[entity] = State(
+                    entity, str(value), {"unit_of_measurement": "kW"}, "hp-1"
+                )
+        if cop is not None:
+            self.ha.measure(cop, "cop-1")
+
+    def test_the_measured_output_beats_the_derived_one(self):
+        # Foer blev ydelsen udledt som elforbrug gange COP - her 2 x 4,4 =
+        # 8,8 kW. Naar anlaegget selv maaler 6,0, er det 6,0 der gaelder:
+        # det maalte slaar det udledte.
+        self.with_hp(power=2.0, heat=6.0, cop=4.4)
+
+        self.cycle()
+
+        self.assertAlmostEqual(
+            self.app.status["balance"].heatpump_kw, 6.0, places=3
+        )
+
+    def test_without_the_output_sensor_it_still_derives(self):
+        self.with_hp(power=2.0, heat=None, cop=4.4)
+
+        self.cycle()
+
+        self.assertAlmostEqual(
+            self.app.status["balance"].heatpump_kw, 8.8, places=3
+        )
+
+    def test_a_measured_output_frees_the_balance_from_the_cop_sensor(self):
+        # Uden COP kunne varmepumpens bidrag foer ikke regnes, og saa maatte
+        # lagerbalancen ikke maale husets forbrug. Maales ydelsen, er den
+        # spaerre vaek.
+        o = self.app.options
+        self.with_hp(power=2.0, heat=6.0)
+        self.ha._states.pop(o.entity_cop_measured, None)
+
+        self.cycle()
+
+        self.assertTrue(self.app.status["balance"].inputs_known)
+        self.assertAlmostEqual(
+            self.app.status["balance"].heatpump_kw, 6.0, places=3
+        )
+
+    def test_the_plants_own_numbers_check_the_cop_sensor(self):
+        # 6,0 kW varme paa 2,0 kW el er COP 3,0. Melder foeleren 4,4, maaler
+        # den noget andet end vi tror - og hele COP-tabellen er bygget paa den.
+        self.with_hp(power=2.0, heat=6.0, cop=4.4)
+
+        with self.assertLogs("varmeopt", level="WARNING") as caught:
+            self.cycle()
+
+        self.assertAlmostEqual(self.app.status["hp_cop_measured"], 3.0, places=3)
+        self.assertTrue(
+            any("COP" in line and "foeleren" in line for line in caught.output),
+            caught.output,
+        )
+
+    def test_agreement_is_not_worth_a_warning(self):
+        # 8,8 kW paa 2,0 kW el er praecis de 4,4 foeleren melder.
+        self.with_hp(power=2.0, heat=8.8, cop=4.4)
+
+        self.cycle()
+
+        self.assertAlmostEqual(self.app.status["hp_cop_measured"], 4.4, places=3)
+        self.assertFalse(self.app._warned_hp_cop)
+
     # -------------------------------------------- husets forbrug uden maaler
 
     def test_the_store_answers_when_the_flow_meter_cannot(self):

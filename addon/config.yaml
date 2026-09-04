@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.42.0"
+version: "0.43.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -23,6 +23,7 @@ options:
   entity_hp_flow: sensor.nibe_eb101_ep14_bt12_condensor_out
   entity_hp_return: sensor.nibe_eb101_ep14_bt3_return_temp
   entity_hp_power: sensor.node_1_input_15
+  entity_hp_heat: sensor.node_1_analog_logging_24
   entity_ch_return: sensor.node_1_dl_bus_2
   entity_ch_flow_rate: sensor.node_1_dl_bus_3
   ch_flow_meter_floor: 100.0
@@ -99,6 +100,7 @@ schema:
   entity_hp_flow: str?
   entity_hp_return: str?
   entity_hp_power: str?
+  entity_hp_heat: str?
   entity_ch_return: str?
   entity_ch_flow_rate: str?
   ch_flow_meter_floor: float(0,)?

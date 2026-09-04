@@ -105,6 +105,8 @@ class Varmeopt:
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
         self._warned_limit_unit = False
+        self._warned_hp_cop = False
+        self._hp_cop: float | None = None
         self._last_save = 0.0
         self._last_learned_stamp: str | None = None
 
@@ -277,6 +279,11 @@ class Varmeopt:
             standby_loss_kw=self.standby.loss_kw_at(
                 buffer.mean_temp if buffer is not None else None, room_temp
             ),
+            hp_power_kw=balance.hp_power_kw if balance is not None else None,
+            hp_heat_kw=balance.heatpump_kw if balance is not None else None,
+            # Varmeydelse delt med elforbrug - anlaeggets egen COP, regnet af
+            # to maalinger i stedet for laest af en foeler.
+            hp_cop_measured=self._hp_cop,
             house_load=load_note,
             house_load_kw=self.house_load.kw,
             house_load_curve_kw=(
@@ -1050,29 +1057,71 @@ class Varmeopt:
             fallback_kw=fallback_kw,
         )
 
-        # Varmepumpens ydelse regnes af dens elforbrug og den målte COP.
-        # Tanktemperaturen kan ikke bruges: solvarmen lader de samme tanke, og
-        # så ville solen blive krediteret varmepumpen.
+        # Varmepumpens ydelse måles nu direkte. Før blev den udledt af
+        # elforbrug gange målt COP — det var rigtigt regnet, men det bandt
+        # hele energiregnskabet til COP-føleren, og tanktemperaturen kunne
+        # ikke træde i stedet: solvarmen lader de samme tanke, så solen ville
+        # blive krediteret varmepumpen.
         hp_power = await self._power_kw(ha, self.options.entity_hp_power)
-        heatpump_kw = (
+        hp_heat = await self._power_kw(ha, self.options.entity_hp_heat)
+        derived = (
             hp_power * measured_cop
             if hp_power is not None and measured_cop is not None and measured_cop > 0
             else None
         )
+        heatpump_kw = hp_heat if hp_heat is not None else derived
+        self._hp_cop = self._check_hp_cop(hp_power, hp_heat, measured_cop)
 
         return Balance(
             load=load,
+            hp_power_kw=hp_power,
             solar_kw=await self._power_kw(ha, self.options.entity_solar_power),
             element_kw=await self._power_kw(ha, self.options.entity_element_power),
             boiler_kw=await self._power_kw(ha, self.options.entity_boiler_power),
             heatpump_kw=heatpump_kw,
-            # Koerer pumpen uden at vi kan regne dens ydelse, mangler der en
+            # Koerer pumpen uden at vi kan sige hvad den laver, mangler der en
             # kilde i summen, og en energibalance bygget paa den ville
-            # tilskrive huset varmen.
+            # tilskrive huset varmen. Maales ydelsen direkte, sker det ikke
+            # laengere fordi COP-foeleren tier.
             inputs_known=not (
                 hp_power is not None and hp_power > 0.05 and heatpump_kw is None
             ),
         )
+
+    def _check_hp_cop(
+        self,
+        power_kw: float | None,
+        heat_kw: float | None,
+        measured_cop: float | None,
+    ) -> float | None:
+        """Anlæggets to tal mod dets egen COP-føler.
+
+        ``varmeydelse / elforbrug`` *er* COP'en. Er den påfaldende langt fra
+        det føleren melder, måler føleren noget andet end vi tror — og hele
+        COP-tabellen er bygget på den. Det skal siges højt én gang pr. ny
+        uenighed, ikke opdages en vinter senere.
+        """
+        if not power_kw or power_kw <= 0.2 or heat_kw is None or heat_kw <= 0:
+            return None
+        implied = heat_kw / power_kw
+        if measured_cop is None or measured_cop <= 0:
+            return implied
+        off = abs(implied - measured_cop)
+        if off <= max(0.5, 0.15 * measured_cop):
+            self._warned_hp_cop = False
+            return implied
+        if not self._warned_hp_cop:
+            log.warning(
+                "varmepumpens egne tal giver COP %.2f (%.2f kW varme / %.2f kW el), "
+                "men %s melder %.2f - tabellen er bygget paa foeleren",
+                implied,
+                heat_kw,
+                power_kw,
+                self.options.entity_cop_measured,
+                measured_cop,
+            )
+            self._warned_hp_cop = True
+        return implied
 
     async def _publish_demand(
         self, ha: HomeAssistant, balance: Balance, buffer: Buffer | None
