@@ -355,7 +355,7 @@ class WebUI:
             f'{buffer.reference:.0f} °C</div></div>'
             f'<div class="tanks">{"".join(cards)}</div>'
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
-            + _balance_section(status.get("balance"), buffer)
+            + _balance_section(status.get("balance"), buffer, status)
             + _solar_section(status, buffer)
             + _vessel_section(status)
         )
@@ -1004,10 +1004,11 @@ def _price_section(status: dict[str, Any]) -> str:
     return f'<h2>Pris og valg</h2>{badge}<div class="card"><dl>{dl}</dl></div>'
 
 
-def _balance_section(balance: Any, buffer: Any) -> str:
+def _balance_section(balance: Any, buffer: Any, status: Any = None) -> str:
     """Effekt ind mod effekt ud — og hvor længe det holder."""
     if balance is None:
         return ""
+    status = status or {}
 
     sources = balance.sources
     rows = [(name.capitalize(), f"{kilowatt:.2f} kW") for name, kilowatt in sources.items()]
@@ -1015,8 +1016,17 @@ def _balance_section(balance: Any, buffer: Any) -> str:
         rows = [("Kilder", "ingen leverer lige nu")]
 
     load_kw = balance.load.kw
+    # Hvor tallet kom fra. Flowmaaleren har en bund den ikke maaler under, og
+    # saa svarer lageret i stedet - det skal kunne ses, for de to er ikke
+    # lige sikre.
+    source = balance.load.source
+    told = {"flowmaaler": "flowmåleren", "lager": "lagerets energiændring"}
     rows += [
-        ("Husets behov", _fmt(load_kw, "kW", 2)),
+        (
+            "Husets behov",
+            _fmt(load_kw, "kW", 2)
+            + (f' <span class="tag">{told[source]}</span>' if source in told else ""),
+        ),
         (
             "Frem / retur",
             f"{_fmt(balance.load.flow, '°C', 1)} / {_fmt(balance.load.ret, '°C', 1)}"
@@ -1024,6 +1034,19 @@ def _balance_section(balance: Any, buffer: Any) -> str:
         ),
         ("Netto", _fmt(balance.net_kw, "kW", 2)),
     ]
+
+    measured = status.get("house_load_kw")
+    if measured is not None or status.get("house_load"):
+        rows.append(("Målt på lageret", _fmt(measured, "kW", 2)))
+    curve_kw = status.get("house_load_curve_kw")
+    if curve_kw is not None:
+        points = status.get("house_load_points") or 0
+        rows.append(
+            ("Forbrugskurven siger", f"{curve_kw:.2f} kW · {points} punkt(er)")
+        )
+    bias = status.get("house_load_bias")
+    if bias is not None:
+        rows.append(("Mod flowmåleren", f"{bias:+.2f} kW i gennemsnit"))
 
     if buffer is not None:
         left = balance.hours_left(buffer.stored_kwh)
@@ -1038,6 +1061,13 @@ def _balance_section(balance: Any, buffer: Any) -> str:
     dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
     free = balance.free_kw
     note = ""
+    load_note = status.get("house_load")
+    if load_note:
+        note += (
+            f'<p class="legend">Lagermålingen: {_esc(str(load_note))}. '
+            "Den er bagstopper for flowmåleren, som ikke måler under 100 l/h — "
+            "og indtil ståtabet er målt, tilskrives de par hundrede watt huset.</p>"
+        )
     if free > 0.05:
         note = (
             f'<p class="legend">Heraf {free:.2f} kW fra solvarmen, som er gratis. '

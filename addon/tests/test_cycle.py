@@ -298,6 +298,30 @@ class CycleTest(unittest.TestCase):
         self.assertIsNone(self.app._status_mode("noget helt andet"))
         self.assertIsNone(self.app._status_mode("idle"))
 
+    # -------------------------------------------- husets forbrug uden maaler
+
+    def test_the_store_answers_when_the_flow_meter_cannot(self):
+        # Flowmaaleren svarer ikke i attrappen - praecis som naar den ligger
+        # under sin bund paa anlaegget. Saa skal lagerets tal traede i stedet
+        # hele vejen ud til sensoren, ikke bare staa i en attribut.
+        self.app.house_load.curve.learn(17.2, 3.3)
+
+        self.cycle()
+
+        published = dict(self.ha.published)
+        self.assertIn("sensor.varmeopt_behov", published)
+        self.assertAlmostEqual(published["sensor.varmeopt_behov"], 3.3, places=2)
+        self.assertEqual(
+            dict(self.ha.attributes)["sensor.varmeopt_behov"]["kilde"], "lager"
+        )
+
+    def test_without_either_the_demand_sensor_stays_quiet(self):
+        # Ingen maaler og ingen kurve: saa er behovet ukendt, og en sensor der
+        # gaettede paa et tal ville vaere vaerre end en der tier.
+        self.cycle()
+
+        self.assertNotIn("sensor.varmeopt_behov", dict(self.ha.published))
+
     def test_outdoor_temp_falls_back_to_nodered(self):
         self.cycle()
 

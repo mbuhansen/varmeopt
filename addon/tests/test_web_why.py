@@ -152,6 +152,39 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn('<td class="raw">—</td><td class="raw">—</td>', html)
 
 
+class BalanceCardTest(unittest.TestCase):
+    """Effektbalancen siger hvor husets tal kommer fra."""
+
+    def section(self, **over):
+        from varmeopt.demand import Balance, Load
+        from varmeopt.web import _balance_section
+
+        load = Load(**over.pop("load", {}))
+        status = over.pop("status", {})
+        return _balance_section(Balance(load=load, **over), None, status)
+
+    def test_the_meter_is_named_when_it_answers(self):
+        html = self.section(load={"flow": 45.0, "ret": 30.0, "litres_per_hour": 300.0})
+
+        self.assertIn("flowmåleren", html)
+
+    def test_the_store_is_named_when_it_stands_in(self):
+        # Under maalerens bund traeder lageret til, og det skal kunne ses -
+        # de to er ikke lige sikre.
+        html = self.section(
+            load={"litres_per_hour": 0.0, "fallback_kw": 2.4},
+            status={"house_load_kw": 2.4, "house_load": "maalt 2,40 kW over 30 min"},
+        )
+
+        self.assertIn("lagerets energiændring", html)
+        self.assertIn("2.40 kW", html)
+
+    def test_the_bias_against_the_meter_is_shown_when_it_is_known(self):
+        html = self.section(status={"house_load_bias": 0.18})
+
+        self.assertIn("+0.18 kW", html)
+
+
 class VesselCardTest(unittest.TestCase):
     """Brugsvand og spa: begge beholdere siger om de varmer lige nu."""
 

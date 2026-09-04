@@ -190,6 +190,23 @@ class Buffer:
         return sum(t.stored_kwh(self.reference) for t in self.measured)
 
     @property
+    def heat_kwh(self) -> float:
+        """Al energien i vandet, uden reference og uden klemme.
+
+        Ikke det samme som ``stored_kwh``, og forskellen er ikke akademisk.
+        ``stored_kwh`` er den *brugbare* varme — den over 30 °C — og den
+        klemmer ved nul, fordi et lag på 28 °C ikke kan varme et hus der vil
+        have 31. Det tal er rigtigt til «hvor længe rækker lageret».
+
+        Men det kan ikke bruges til en *forskel*. Falder et lag fra 31 til
+        29 °C, tæller ``stored_kwh`` kun den ene grad ned til referencen, og
+        halvdelen af den energi der faktisk forlod tanken, forsvinder ud af
+        regnskabet. Til en energibalance — hvad der gik ind mod hvad der kom
+        ud — skal hele vandsøjlen tælle med, og det er det her tal.
+        """
+        return sum(t.stored_kwh(0.0) for t in self.measured)
+
+    @property
     def headroom_kwh(self) -> float:
         """Hvor meget varmepumpen kan nå at tilføre, før den løber tør for løft."""
         return sum(t.headroom_kwh(self.ceiling) for t in self.measured)

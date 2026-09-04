@@ -67,6 +67,9 @@ class Load:
     # Målerens bund. Under den kan den vise nul selv om der løber vand, så
     # aflæsningen siger «højst så meget» og ikke «så meget».
     meter_floor: float = 100.0
+    # Bagstopperen: husets forbrug læst af lagerets energiændring. Den træder
+    # til under målerens bund og kun der — se ``kw``.
+    fallback_kw: float | None = None
 
     @property
     def delta(self) -> float | None:
@@ -76,23 +79,35 @@ class Load:
 
     @property
     def kw(self) -> float | None:
-        """Varmebehovet nu, eller None når måleren ikke kan svare.
+        """Varmebehovet nu, eller None når ingen af de to kan svare.
 
         Et negativt fald ville betyde at returen er varmere end fremløbet —
         det sker ved stilstand og småfejl på følerne, og det er ikke et
         forbrug. Så er svaret nul, ikke et negativt behov.
 
-        Under målerens bund er svaret *ukendt*, ikke nul og ikke et lille
-        tal. Det gælder begge fejl: en måler der hænger på 5 l/h gav før
+        Under målerens bund er dens aflæsning *ukendt*, ikke nul og ikke et
+        lille tal. Det gælder begge fejl: en måler der hænger på 5 l/h gav før
         0,06 kW, som ser ud som et rigtigt forbrug — 101 timers restlevetid
         på lageret, og en planlægger der roligt lod være med at gøre noget.
         Og et nul fra en måler der først tæller fra 100 l/h er ikke et nul,
         det er «højst 100 l/h», hvilket ved 15 K er op mod 1,7 kW.
+
+        Derunder svarer lageret i stedet, hvis det kan. Rækkefølgen er ikke
+        til forhandling: flowmåleren måler huset direkte, hvor lageret regner
+        sig frem til det gennem fire kilder og et energiregnskab. Det målte
+        slår det udledte, og det udledte slår ingenting.
         """
         if not self.trustworthy:
-            return None
+            return self.fallback_kw
         power = thermal_kw(self.litres_per_hour, self.delta)
         return None if power is None else max(0.0, power)
+
+    @property
+    def source(self) -> str | None:
+        """Hvor tallet kom fra. ``None`` når ingen af dem kunne svare."""
+        if self.trustworthy:
+            return "flowmaaler" if self.kw is not None else None
+        return "lager" if self.fallback_kw is not None else None
 
     @property
     def trustworthy(self) -> bool:
@@ -119,6 +134,11 @@ class Balance:
     element_kw: float | None = None
     heatpump_kw: float | None = None
     boiler_kw: float | None = None
+    # Kender vi overhovedet alt det der gaar ind? Koerer varmepumpen uden en
+    # COP at regne ydelsen af, er ``heatpump_kw`` None, og saa mangler der en
+    # kilde i summen. Det gaar ud over enhver energibalance der bygger paa
+    # den - se ``houseload``.
+    inputs_known: bool = True
 
     @property
     def sources(self) -> dict[str, float]:

@@ -26,6 +26,7 @@ from .curve import HeatCurve
 from .demand import Balance, Load
 from .forecast import Forecast
 from .guard import Guard
+from .houseload import HouseLoad
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .migrate import (
@@ -33,6 +34,7 @@ from .migrate import (
     CURVE_FILE,
     COMPARE_FILE,
     GUARD_FILE,
+    HOUSE_LOAD_FILE,
     SOLAR_FILE,
     STANDBY_FILE,
     load_cop_table,
@@ -96,6 +98,9 @@ class Varmeopt:
         # Staatabsmaalingen. Den maaler kun naar brugeren selv har aabnet et
         # vindue - se standby.py for hvorfor den ikke bare kan aflaese det.
         self.standby = StandbyTest()
+        # Husets forbrug laest af lageret, som bagstopper naar
+        # flowmaaleren ligger under sin bund - se houseload.py.
+        self.house_load = HouseLoad()
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
@@ -130,7 +135,12 @@ class Varmeopt:
             flow_temp = _as_number(context.get("flowTemp"))
 
         buffer = await self._read_tank(ha)
-        balance = await self._read_balance(ha, measured_cop)
+        # Bagstopperen er forrige cyklus' maaling. Den er hoejst et minut
+        # gammel mod et vindue paa en halv time, og raekkefoelgen kan ikke
+        # vendes: maalingen har brug for den balance vi er ved at bygge.
+        balance = await self._read_balance(
+            ha, measured_cop, self.house_load.kw_at(time.time(), outdoor_temp)
+        )
         vessels = await self._read_vessels(ha)
         solar = await self._read_solar(ha, buffer)
 
@@ -145,6 +155,27 @@ class Varmeopt:
         mode, is_dhw = _mode(
             dhw_active, vessels.get("spa_heating"), flow_temp, self.curve
         )
+
+        # Husets forbrug laest af lagerets energiaendring. Den koerer efter
+        # brugsvandsflaget, for et bad tapper de samme tanke som huset, og en
+        # energibalance kan ikke se forskel paa de to.
+        load_note = self.house_load.observe(
+            time.time(),
+            buffer.heat_kwh if buffer is not None else None,
+            balance.sources if balance is not None else None,
+            inputs_known=balance.inputs_known if balance is not None else False,
+            dhw=dhw_active,
+            spa=vessels.get("spa_heating"),
+            sensors=buffer.sensor_count if buffer is not None else None,
+            outdoor=outdoor_temp,
+            meter_kw=balance.load.kw if balance is not None and balance.load.trustworthy else None,
+            standby_kw=self.standby.loss_kw_at(
+                buffer.mean_temp if buffer is not None else None, room_temp
+            ),
+        )
+        if self.house_load.measured_at is not None:
+            self._dirty = True
+
         curve_note = None
         if flow_temp is not None and outdoor_temp is not None:
             curve_note = self.curve.learn(outdoor_temp, flow_temp, is_dhw)
@@ -242,6 +273,15 @@ class Varmeopt:
             standby_loss_kw=self.standby.loss_kw_at(
                 buffer.mean_temp if buffer is not None else None, room_temp
             ),
+            house_load=load_note,
+            house_load_kw=self.house_load.kw,
+            house_load_curve_kw=(
+                self.house_load.curve.predict(outdoor_temp)
+                if outdoor_temp is not None
+                else None
+            ),
+            house_load_bias=self.house_load.bias_kw,
+            house_load_points=self.house_load.curve.point_count,
             curve_note=curve_note,
             predicted_setpoint=(
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
@@ -985,7 +1025,10 @@ class Varmeopt:
     # -------------------------------------------------------------- balance
 
     async def _read_balance(
-        self, ha: HomeAssistant | None, measured_cop: float | None
+        self,
+        ha: HomeAssistant | None,
+        measured_cop: float | None,
+        fallback_kw: float | None = None,
     ) -> Balance | None:
         """Hvad huset trækker ud, og hvad de fire kilder lader ind."""
         if ha is None:
@@ -996,6 +1039,7 @@ class Varmeopt:
             ret=await self._number(ha, self.options.entity_ch_return),
             litres_per_hour=await self._number(ha, self.options.entity_ch_flow_rate),
             meter_floor=self.options.ch_flow_meter_floor,
+            fallback_kw=fallback_kw,
         )
 
         # Varmepumpens ydelse regnes af dens elforbrug og den målte COP.
@@ -1014,6 +1058,12 @@ class Varmeopt:
             element_kw=await self._power_kw(ha, self.options.entity_element_power),
             boiler_kw=await self._power_kw(ha, self.options.entity_boiler_power),
             heatpump_kw=heatpump_kw,
+            # Koerer pumpen uden at vi kan regne dens ydelse, mangler der en
+            # kilde i summen, og en energibalance bygget paa den ville
+            # tilskrive huset varmen.
+            inputs_known=not (
+                hp_power is not None and hp_power > 0.05 and heatpump_kw is None
+            ),
         )
 
     async def _publish_demand(
@@ -1036,6 +1086,19 @@ class Varmeopt:
             "delta_t": _round(balance.load.delta, 1),
             "flow_lh": balance.load.litres_per_hour,
             "cirkulerer": balance.load.circulating,
+            # Hvor tallet kom fra. Flowmaaleren maaler huset direkte; lageret
+            # regner sig frem til det gennem fire kilder og et energiregnskab,
+            # og det staar der saa.
+            "kilde": balance.load.source,
+            "lager_kw": _round(self.house_load.kw, 2),
+            "lager_alder_min": _round(
+                (time.time() - self.house_load.measured_at) / 60
+                if self.house_load.measured_at is not None
+                else None,
+                0,
+            ),
+            "lager_afvigelse_kw": _round(self.house_load.bias_kw, 2),
+            "lager_note": self.house_load.note,
             "ind_kw": round(balance.input_kw, 2),
             "gratis_kw": round(balance.free_kw, 2),
             "netto_kw": _round(balance.net_kw, 2),
@@ -1067,6 +1130,7 @@ class Varmeopt:
                 {"model": self.solar.to_raw(), "day": self.solar_day.to_raw()},
             )
             self.store.save(STANDBY_FILE, self.standby.to_raw())
+            self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
             self.store.save(
                 COMPARE_FILE,
                 {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
@@ -1143,6 +1207,13 @@ async def run() -> None:
 
         app.guard.restore(store.load(GUARD_FILE, {}))
         app.standby = StandbyTest.from_raw(store.load(STANDBY_FILE, {}))
+        app.house_load = HouseLoad.from_raw(store.load(HOUSE_LOAD_FILE, {}))
+        if app.house_load.curve.point_count:
+            log.info(
+                "forbrugskurve fra eget lager: %d punkter, %.0f maalinger",
+                app.house_load.curve.point_count,
+                app.house_load.curve.sample_count,
+            )
         if app.guard.committed:
             log.info("vagten genoptager binding: %s", app.guard.committed)
 
