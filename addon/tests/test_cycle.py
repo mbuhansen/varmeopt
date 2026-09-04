@@ -241,6 +241,63 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(self.app.status["price_now"].source, "batteri")
         self.assertIn("frit", self.app.status["price_now"].reason)
 
+    # ------------------------------------------------- Predbats egen status
+
+    def with_plan_and_status(self, state, status):
+        """En plan hvis foerste raekke er ``state``, og Predbats status."""
+        o = self.app.options
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {"raw": {"rows": [{"state": state, "import_rate": 180, "export_rate": 60}]}},
+            "plan-1",
+        )
+        self.ha._states[o.entity_predbat_status] = State(
+            o.entity_predbat_status, status, {}, "status-1"
+        )
+
+    def test_a_cycle_survives_predbat_having_a_status(self):
+        # Her gik 0.38.0 ned: kontrollen mod Predbats status laeste stadig
+        # ``slot.discharging`` og ``slot.charging``, som var vaek. Ingen test
+        # kom nogensinde forbi den linje, og saa faldt hver eneste cyklus paa
+        # anlaegget - uden at en eneste test blev roed.
+        self.with_plan_and_status("holdchrg", "Hold charging")
+
+        self.cycle()
+
+        self.assertIn("sensor.varmeopt_elpris", dict(self.ha.published))
+
+    def test_disagreement_with_predbats_status_is_said_out_loud(self):
+        # Er de uenige om indevaerende halvtime, laeser vi planens
+        # tilstandsord forkert, og saa er hver pris i horisonten et gaet.
+        self.with_plan_and_status("demand", "Charging")
+
+        with self.assertLogs("varmeopt", level="WARNING") as caught:
+            self.cycle()
+
+        self.assertTrue(
+            any("tilstandsstrengene" in line for line in caught.output), caught.output
+        )
+
+    def test_predbats_words_map_to_the_same_three_outcomes(self):
+        # "Discharging" indeholder "charg". Raekkefoelgen i oversaettelsen er
+        # derfor ikke til pynt, og den er faldet forkert ud foer.
+        for status, mode in (
+            ("Demand", "discharge"),
+            ("Discharging", "discharge"),
+            ("Charging", "locked"),
+            ("Hold charging", "locked"),
+            ("Freeze charging", "locked"),
+            ("Exporting", "export"),
+        ):
+            with self.subTest(status=status):
+                self.assertEqual(self.app._status_mode(status.lower()), mode)
+
+    def test_a_status_we_cannot_translate_says_nothing(self):
+        # En kontrol der gaetter, er vaerre end ingen kontrol.
+        self.assertIsNone(self.app._status_mode("noget helt andet"))
+        self.assertIsNone(self.app._status_mode("idle"))
+
     def test_outdoor_temp_falls_back_to_nodered(self):
         self.cycle()
 

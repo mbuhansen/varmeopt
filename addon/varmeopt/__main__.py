@@ -42,7 +42,7 @@ from .migrate import (
 from .nodered import NodeRed
 from .options import Options
 from .planner import Planner
-from .prices import Grid, Plan
+from .prices import DISCHARGE, EXPORT, LOCKED, Grid, Plan
 from .solar import DayTracker, SolarModel
 from .store import Store
 from .standby import StandbyTest
@@ -649,6 +649,29 @@ class Varmeopt:
             "pellet_price": self.options.pellet_kwh_price,
         }
 
+    @staticmethod
+    def _status_mode(text: str) -> str | None:
+        """Predbats statustekst oversat til de samme tre udfald som planen.
+
+        Statussen er en sætning — «Hold charging» — hvor planens celle er ét
+        ord: «holdchrg». Derfor delstrenge her, hvor planen har en tabel.
+        Rækkefølgen er ikke til pynt: «Discharging» indeholder «charg».
+
+        Et ord vi ikke tør oversætte, giver ``None``, og så siges der
+        ingenting. En kontrol der gætter, er værre end ingen kontrol.
+        """
+        if "dischrg" in text or "discharg" in text:
+            return DISCHARGE
+        if "exp" in text:
+            return EXPORT
+        if "chrg" in text or "charg" in text or "hold" in text:
+            return LOCKED
+        if "freeze" in text or "frz" in text:
+            return LOCKED
+        if "demand" in text:
+            return DISCHARGE
+        return None
+
     def _check_predbat_status(self, status: str, slot: Any) -> None:
         """Siger Predbat og vores laesning af planen det samme om nu?
 
@@ -660,17 +683,16 @@ class Varmeopt:
         text = (status or "").strip().lower()
         if not text or text in ("unknown", "unavailable"):
             return
-        theirs = ("dischrg" in text or "discharg" in text, "chrg" in text or "charg" in text)
-        theirs = (theirs[0], theirs[1] and not theirs[0])
-        ours = (slot.discharging, slot.charging)
-        if theirs != ours and text != self._last_status_warning:
+        theirs = self._status_mode(text)
+        if theirs is None or theirs == slot.mode:
+            return
+        if text != self._last_status_warning:
             log.warning(
                 "Predbat siger %r, men planens foerste raekke %r laeses som "
-                "lader=%s/aflader=%s - tjek tilstandsstrengene",
+                "%s - tjek tilstandsstrengene",
                 status,
                 slot.state,
-                ours[1],
-                ours[0],
+                slot.mode,
             )
             self._last_status_warning = text
 
