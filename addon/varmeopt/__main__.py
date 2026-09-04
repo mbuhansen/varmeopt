@@ -99,6 +99,7 @@ class Varmeopt:
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
+        self._warned_limit_unit = False
         self._last_save = 0.0
         self._last_learned_stamp: str | None = None
 
@@ -507,6 +508,32 @@ class Varmeopt:
         unit = str(state.attributes.get("unit_of_measurement", "")).strip().lower()
         return value / 1000 if unit in ("w", "watt") else value
 
+    async def _charge_limit(self, ha: HomeAssistant) -> float | None:
+        """Predbats graense, som en ladetilstand i procent.
+
+        Den skal kunne sammenlignes med planens ``soc_percent``, og de to er
+        kun sammenlignelige hvis begge er procent. Melder entiteten kWh, kan
+        vi ikke regne om uden batteriets stoerrelse, og saa er det rigtige
+        svar ingenting - sagt hoejt én gang, ikke gaettet hver cyklus.
+        """
+        state = await self._state(ha, self.options.entity_predbat_charge_limit)
+        if state is None:
+            return None
+        value = state.as_float()
+        if value is None:
+            return None
+        unit = str(state.attributes.get("unit_of_measurement", "")).strip().lower()
+        if unit not in ("", "%", "percent"):
+            if not self._warned_limit_unit:
+                log.warning(
+                    "%s melder %r og ikke procent - graensen bruges ikke",
+                    self.options.entity_predbat_charge_limit,
+                    unit,
+                )
+                self._warned_limit_unit = True
+            return None
+        return value
+
     @classmethod
     async def _binary(cls, ha: HomeAssistant, entity_id: str) -> bool | None:
         state = await cls._state(ha, entity_id)
@@ -624,6 +651,7 @@ class Varmeopt:
             grid_power=await self._number(ha, self.options.entity_grid_power) or 0.0,
             pv_power=await self._number(ha, self.options.entity_pv_power) or 0.0,
             inverter_ac=await self._number(ha, self.options.entity_inverter_ac) or 0.0,
+            discharge_floor=await self._charge_limit(ha),
         )
         now = plan.marginal(0, grid=grid)
         if now is None:

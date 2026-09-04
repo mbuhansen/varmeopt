@@ -105,6 +105,50 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(price.source, NET)
         self.assertIn("afladning", price.reason)
 
+    def test_hold_charge_above_the_floor_is_still_the_battery(self):
+        # Predbat skriver et gulv til inverteren - "her maa der aflades ned
+        # til". Staar holdet ti point under ladetilstanden, er de ti point
+        # rigtig energi, og den naeste kilowatt-time kommer derfra.
+        p = plan(row(state="holdchrg", soc=40, import_rate=180), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(discharge_floor=30.0))
+
+        self.assertEqual(price.source, BATTERY)
+        self.assertIn("hold charge ned til 30 %", price.reason)
+
+    def test_hold_charge_at_the_floor_is_the_grid(self):
+        # Samme hold, men ladetilstanden ligger paa gulvet. Saa er der ikke
+        # noget at tage af, og huset koeber.
+        p = plan(row(state="holdchrg", soc=31, import_rate=180), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(discharge_floor=30.0))
+
+        self.assertEqual(price.source, NET)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.80, places=9)
+
+    def test_a_real_charge_stays_on_the_grid_however_full_it_is(self):
+        # Mens der lades fra nettet, aflader inverteren ikke - uanset at
+        # ladetilstanden ligger langt over gulvet.
+        p = plan(row(state="chrg", soc=90, import_rate=180), battery_average=1.0)
+
+        price = p.marginal(0, grid=Grid(discharge_floor=30.0))
+
+        self.assertEqual(price.source, NET)
+        self.assertIn("lades", price.reason)
+
+    def test_the_floor_only_speaks_for_the_half_hour_we_are_in(self):
+        # Gulvet er hvad der er skrevet til inverteren *nu*. En halvtime
+        # frem har kun planens ord, og der er hold charge stadig et hold.
+        p = plan(
+            row(soc=40),
+            row(state="holdchrg", soc=40, import_rate=180),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(30, grid=Grid(discharge_floor=30.0))
+
+        self.assertEqual(price.source, NET)
+
     def test_an_unknown_state_costs_the_grid_and_says_so(self):
         p = plan(row(state="Ecoo", import_rate=180), battery_average=0.5)
 
@@ -277,6 +321,44 @@ class MarginalTest(unittest.TestCase):
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.73, places=9)
         self.assertIn("købes tilbage om 60 min", price.reason)
+
+    def test_energy_the_plan_sells_before_it_runs_dry_costs_the_export(self):
+        # Batteriet naar bunden inden det lades - men det er en planlagt
+        # eksport der toemmer det. Saa er den kWh vi bruger nu, ikke en der
+        # skal koebes tilbage til importprisen i bunden; det er en der ikke
+        # bliver solgt, og prisen er den mistede indtaegt.
+        p = plan(
+            row(soc=37, import_rate=190),
+            row(soc=30, import_rate=180),
+            row(state="exp", soc=24, export_rate=115),
+            row(soc=14, import_rate=185),
+            row(soc=14, import_rate=173),
+            row(state="chrg", soc=40, import_rate=85),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.15 * 0.90, places=9)
+        self.assertIn("sælges ellers om 60 min", price.reason)
+
+    def test_without_a_sale_first_it_is_still_bought_back(self):
+        # Samme plan uden eksporten: saa er bunden en bund, og den kWh vi
+        # bruger nu, koeber vi fra nettet naar den mangler.
+        p = plan(
+            row(soc=37, import_rate=190),
+            row(soc=30, import_rate=180),
+            row(soc=24, import_rate=180),
+            row(soc=14, import_rate=185),
+            row(soc=14, import_rate=173),
+            row(state="chrg", soc=40, import_rate=85),
+            battery_average=1.0,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.85, places=9)
+        self.assertIn("købes tilbage", price.reason)
 
     def test_a_charge_before_the_bottom_leaves_the_average_alone(self):
         # Fyldes batteriet inden det loeber toert, er energien ikke

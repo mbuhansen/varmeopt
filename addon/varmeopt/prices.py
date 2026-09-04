@@ -247,6 +247,9 @@ class Grid:
     * ``inverter_ac`` — vekselstrøm ud af inverteren, altså sol plus batteri.
       **Negativ når batteriet lades.**
     * ``pv_power`` — jævnstrøm ind fra panelerne, aldrig under nul.
+    * ``discharge_floor`` — ikke en måling, men den grænse Predbat lige nu
+      har skrevet til inverteren: ladetilstanden der må aflades ned til.
+      Under hold charge er det den, ikke reserven, der binder.
 
     De to sidste afgør ingen pris. De er der for at balancen kan efterprøves
     i debug-filen, og for at begrundelsen kan sige at solen dækker huset når
@@ -257,6 +260,7 @@ class Grid:
     grid_power: float = 0.0
     pv_power: float = 0.0
     inverter_ac: float = 0.0
+    discharge_floor: float | None = None
 
     @property
     def battery_discharging(self) -> bool:
@@ -441,7 +445,7 @@ class Plan:
             return None
         return floor if any(s.mode == DISCHARGE for s in resting) else None
 
-    def _at_bottom(self, slot: Slot) -> bool:
+    def _at_bottom(self, slot: Slot, floor: float | None = None) -> bool:
         """Er batteriet i bund i den halvtime — kan det levere den næste kWh?
 
         Ikke «er det tomt», men «er der noget at tage af». Bunden er
@@ -451,13 +455,35 @@ class Plan:
         procentpoint over reserven er ikke en kilde til en varmepumpe: se
         ``USABLE_ABOVE_RESERVE``.
 
-        Planens egen bund, hvis den kan læses; ellers vores eget gulv.
+        Bunden kan komme to steder fra, og den højeste gælder: planens egen
+        reserve, og det gulv Predbat lige nu har skrevet til inverteren.
+        Kendes ingen af dem, står vores eget gulv tilbage.
         """
         if slot.soc_percent is None:
             return False
-        if self.reserve is not None:
-            return slot.soc_percent <= self.reserve + USABLE_ABOVE_RESERVE
+        bottom = self.reserve
+        if floor is not None:
+            bottom = floor if bottom is None else max(bottom, floor)
+        if bottom is not None:
+            return slot.soc_percent <= bottom + USABLE_ABOVE_RESERVE
         return slot.soc_percent <= MIN_SOC_FOR_BATTERY
+
+    def _may_still_discharge(self, slot: Slot, floor: float | None) -> bool:
+        """Er «bundet» alligevel ikke helt bundet?
+
+        Hold charge låser ikke batteriet fast — Predbat skriver et gulv til
+        inverteren, og over det gulv leverer batteriet stadig. Sættes holdet
+        ti point under ladetilstanden, er de ti point batteriets energi, og
+        den næste kilowatt-time kommer derfra og ikke fra nettet.
+
+        Gælder kun hold, ikke en rigtig ladning: mens der lades fra nettet,
+        aflader inverteren ikke uanset hvor fyldt batteriet er. Og kun for
+        den halvtime vi står i — gulvet er hvad der er skrevet til
+        inverteren *nu*, ikke et løfte om klokken 18.
+        """
+        if floor is None or slot.refills or slot.soc_percent is None:
+            return False
+        return slot.soc_percent > floor + USABLE_ABOVE_RESERVE
 
     # ---------------------------------------------------------- marginalpris
 
@@ -479,6 +505,9 @@ class Plan:
 
         physical_export = grid is not None and grid.exporting
         physical_import = grid is not None and grid.importing
+        # Gulvet Predbat har skrevet til inverteren. Som maalingerne gaelder
+        # det kun den halvtime vi staar i.
+        floor = grid.discharge_floor if grid is not None else None
 
         # 1. Eksporterer vi — planlagt eller fysisk — er prisen den indtægt vi
         #    giver afkald på.
@@ -493,7 +522,11 @@ class Plan:
         #    Det er "hold charge": Predbat saetter afladningen til 0, solen
         #    daekker huset saa langt den raekker, og resten kommer fra nettet.
         #    Det er ogsaa "chrg", hvor der oven i koebet lades fra nettet.
-        if slot.locked:
+        #    Men "hold charge" er ikke det samme som "ingen strøm": Predbat
+        #    skriver et gulv til inverteren, og ligger ladetilstanden over
+        #    det, leverer batteriet stadig. Saa falder vi igennem til
+        #    batterigrenen - de point ned til gulvet er rigtig energi.
+        if slot.locked and not self._may_still_discharge(slot, floor):
             if slot.import_price is not None:
                 why = (
                     "net: batteriet lades"
@@ -531,7 +564,7 @@ class Plan:
         #     Den skal ogsaa ligge foer batterigrenen nedenfor: det er ikke
         #     energiens vaerdi der er spoergsmaalet, naar der ikke er nogen
         #     energi at tage af.
-        if self._at_bottom(slot) and slot.import_price is not None:
+        if self._at_bottom(slot, floor) and slot.import_price is not None:
             # Reserven og et tomt batteri er ikke det samme, og det skal
             # kunne ses paa skaermen: det ene er en indstilling, det andet
             # er fysik.
@@ -561,6 +594,12 @@ class Plan:
         price = self._battery_price(slot)
         if price is None:
             return None
+        if slot.locked and floor is not None:
+            price = Price(
+                price.kr_per_kwh,
+                f"{price.reason} (hold charge ned til {floor:.0f} %)",
+                price.source,
+            )
         if grid is not None and grid.solar_covering:
             price = Price(
                 price.kr_per_kwh,
@@ -636,8 +675,31 @@ class Plan:
         # ladegrenen ovenfor; forskellen er kun hvor energien kommer tilbage
         # fra, og her er svaret nettet.
         empty = self._next_where(self._at_bottom, slot.index + 1)
-        if empty is not None and empty.import_price is not None:
-            if next_charge is None or next_charge.index > empty.index:
+        if empty is not None and next_charge is not None and next_charge.index <= empty.index:
+            empty = None
+        if empty is not None:
+            # Men *hvordan* bliver det tomt? Toemmes batteriet undervejs af
+            # en planlagt eksport, er den kilowatt-time vi bruger nu, ikke en
+            # der skal koebes tilbage - den er en der ikke bliver solgt. Saa
+            # er prisen den mistede indtaegt, ikke importprisen i bunden.
+            #
+            # Uden det her blev aftenen den 3. september prissat til 1,85 -
+            # importprisen fredag kl. 08:02, hvor planen ligger i bund - selv
+            # om det der faktisk sker inden, er en eksport kl. 07:32 til
+            # 1,15. Batteriet loeb ikke toert; det blev solgt.
+            sold = (
+                next_export
+                if next_export is not None and next_export.index <= empty.index
+                else None
+            )
+            if sold is not None and sold.export_price is not None:
+                minutes = sold.minutes_ahead - slot.minutes_ahead
+                return Price(
+                    sold.export_price * EXPORT_DISCOUNT,
+                    f"batteri: sælges ellers om {minutes} min",
+                    BATTERY,
+                )
+            if empty.import_price is not None:
                 minutes = empty.minutes_ahead - slot.minutes_ahead
                 return Price(
                     empty.import_price,

@@ -75,6 +75,11 @@ _DEFAULTS: dict[str, object] = {
     # pr. halvtime, saa den her er den eneste maade at se hvad anlaeggets
     # egen Predbat faktisk skriver - uden at gaette paa dokumentationen.
     "entity_predbat_status": "predbat.status",
+    # Graensen Predbat lige nu har skrevet til inverteren: den ladetilstand
+    # der lades op til, eller - under hold charge - den der maa aflades ned
+    # til. Uden den ser et hold ud som en total laasning, og de point ned til
+    # gulvet ville blive koebt fra nettet selv om de staar i batteriet.
+    "entity_predbat_charge_limit": "predbat.best_charge_limit",
     # Er planen aeldre end det her, er priserne fra et andet tidspunkt.
     # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
     # og uden pris naegter vagten at styre.
@@ -221,6 +226,7 @@ class Options:
     entity_nodered_decision: str
     entity_predbat_plan: str
     entity_predbat_status: str
+    entity_predbat_charge_limit: str
     plan_max_age_minutes: float
     entity_battery_power: str
     entity_grid_power: str
