@@ -98,6 +98,7 @@ class Varmeopt:
             min_charge_kwh=options.min_charge_kwh,
             charge_kw=options.hp_charge_kw,
             horizon_minutes=int(options.planner_horizon_hours * 60),
+            dhw_temp=options.dhw_usable_temp,
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         # Staatabsmaalingen. Den maaler kun naar brugeren selv har aabnet et
@@ -230,7 +231,19 @@ class Varmeopt:
             cop_now=lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
             headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
+            peak_headroom_kwh=buffer.peak_headroom_kwh if buffer is not None else None,
             stored_kwh=buffer.stored_kwh if buffer is not None else None,
+            # Den del af lageret der er varm nok til at lade beholderen. Uden
+            # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
+            # er varmt vand - og lageret kunne ikke lave et eneste bad.
+            hot_kwh=(
+                buffer.usable_kwh(self.options.dhw_usable_temp)
+                if buffer is not None
+                else None
+            ),
+            dhw_kwh_over=lambda hours: self.house_load.vessels.kwh_between(
+                time.time(), hours
+            ),
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
@@ -301,6 +314,8 @@ class Varmeopt:
             ),
             house_load_bias=self.house_load.bias_kw,
             house_load_points=self.house_load.curve.point_count,
+            vessel_hours=self.house_load.vessels.known_hours,
+            vessel_kwh_today=self.house_load.vessels.kwh_between(time.time(), 24.0),
             curve_note=curve_note,
             predicted_setpoint=(
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
@@ -1186,6 +1201,13 @@ class Varmeopt:
                     2,
                 ),
                 "kurvepunkter": self.house_load.curve.point_count,
+                # Doegnprofilen for beholderen og spaen. Den er ikke husets
+                # forbrug - den er det der skal traekkes fra for at finde det -
+                # men den afgoer hvor meget der skal lades op til aftenen.
+                "varmtvand_timer_laert": self.house_load.vessels.known_hours,
+                "varmtvand_kwh_i_doegn": _round(
+                    self.house_load.vessels.kwh_between(now, 24.0), 1
+                ),
                 "afvigelse_mod_maaler_kw": _round(self.house_load.bias_kw, 2),
                 "note": self.house_load.note,
             },

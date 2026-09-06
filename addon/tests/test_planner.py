@@ -196,6 +196,146 @@ class DecideTest(unittest.TestCase):
         self.assertIn("kWh", decision.charging_note)
 
 
+class SolarRoomTest(unittest.TestCase):
+    """Solen og varmepumpen konkurrerer kun om pladsen under 60 grader."""
+
+    def test_solar_that_fits_above_the_ceiling_blocks_nothing(self):
+        # Solfangeren kan presse til 90 hvor pumpen stopper ved 60, saa der er
+        # 20 kWh plads derover. Den forventede sol kan ligge der, og en billig
+        # formiddag behoever derfor ikke staa tom.
+        d = planner().decide(
+            plan(40, 240),
+            cop_now=4.0,
+            headroom_kwh=20,
+            peak_headroom_kwh=40,
+            solar_expected_kwh=18.0,
+            stored_kwh=0.0,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+
+    def test_solar_that_does_not_fit_still_gets_its_share_first(self):
+        # Er der kun 2 kWh plads over pumpens loft, kan solen ikke laegges
+        # derover, og saa skal den have sin plads under det.
+        d = planner().decide(
+            plan(40, 240),
+            cop_now=4.0,
+            headroom_kwh=20,
+            peak_headroom_kwh=22,
+            solar_expected_kwh=19.0,
+            stored_kwh=0.0,
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("under minimumstrækket", d.reason)
+
+
+class SavingTest(unittest.TestCase):
+    def test_the_saving_follows_what_is_actually_charged(self):
+        # Behovet er stoerre end pladsen. Saa kan gevinsten kun gaelde det der
+        # kommer i tanken - her stod behovet, og det lovede en besparelse paa
+        # varme der aldrig blev lavet.
+        d = planner().decide(
+            plan(40, 240, 240, 240),
+            cop_now=4.0,
+            headroom_kwh=6.0,
+            demand_kw=10.0,
+            stored_kwh=0.0,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        margin = 0.706 - (0.40 / 4.0 + 0.15)
+        self.assertAlmostEqual(d.saving_kr, margin * d.charge_kwh, places=6)
+
+
+class SixthOfSeptemberTest(unittest.TestCase):
+    """Dagen hvor den ikke ladede op, og brugeren maatte goere det selv.
+
+    Stroemmen var billig fra 10 til 17 og dyr om aftenen - saa dyr at der blev
+    eksporteret til 1,57 kr/kWh. Varmen kostede 0,23 kr/kWh om formiddagen mod
+    0,50 om aftenen. Planlaeggeren sagde «der bruges 1,3 kWh mens det er dyrt,
+    og lageret har 13,3 - intet at lade op til».
+
+    De 13,3 kWh var varme over 30 grader. Der stod nul over 50, og aftenen er
+    delvis varmt vand.
+    """
+
+    def buffer(self, a, b):
+        from varmeopt.tank import Buffer, Tank
+
+        return Buffer(
+            (Tank("A", 500.0, *a), Tank("B", 500.0, *b)),
+            reference=30.0,
+            ceiling=60.0,
+            peak_ceiling=90.0,
+        )
+
+    def decide(self, buf, dhw_kwh):
+        # 0,37 kr/kWh nu mod 1,57 om aftenen, COP 4,47 som den var.
+        return planner().decide(
+            plan(37, 157, 157, 157),
+            cop_now=4.47,
+            cop_later=4.47,
+            headroom_kwh=buf.headroom_kwh,
+            peak_headroom_kwh=buf.peak_headroom_kwh,
+            stored_kwh=buf.stored_kwh,
+            hot_kwh=buf.usable_kwh(55.0),
+            dhw_kwh_over=lambda hours: dhw_kwh,
+            demand_kw=0.37,
+        )
+
+    def test_the_morning_tanks_could_not_make_hot_water(self):
+        # Det er hele sagen: 13,3 kWh der kan varme et gulv, og ingenting der
+        # kan lave et bad.
+        morning = self.buffer((45.0, 45.0, 43.0), (47.0, 39.0, 31.0))
+
+        self.assertAlmostEqual(morning.stored_kwh, 13.4, delta=0.2)
+        self.assertEqual(morning.usable_kwh(55.0), 0.0)
+
+    def test_and_so_it_charges(self):
+        morning = self.buffer((45.0, 45.0, 43.0), (47.0, 39.0, 31.0))
+
+        d = self.decide(morning, dhw_kwh=6.0)
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertIn("til varmt vand", d.reason)
+
+    def test_after_the_charge_the_tanks_are_simply_full(self):
+        # Brugerens egen opladning kl. 15 gav 33,7 kWh i lageret, hvoraf
+        # 5,0 er varme nok til beholderen - og saa er der ikke mere plads.
+        afternoon = self.buffer((62.0, 63.0, 62.0), (57.0, 56.0, 56.0))
+
+        self.assertAlmostEqual(afternoon.stored_kwh, 33.7, delta=0.2)
+        self.assertAlmostEqual(afternoon.usable_kwh(55.0), 5.0, delta=0.2)
+
+        d = self.decide(afternoon, dhw_kwh=4.0)
+
+        self.assertFalse(d.charge, d.reason)
+
+    def test_a_hot_tank_with_room_left_still_says_no(self):
+        # Tank A er varm nok til aftenens bad, tank B er kold og har masser af
+        # plads. Der er altsaa plads at lade i - og alligevel ingen grund,
+        # fordi behovet er daekket. Det er selve testen af opdelingen.
+        covered = self.buffer((60.0, 60.0, 60.0), (35.0, 33.0, 31.0))
+
+        self.assertGreater(covered.headroom_kwh, 10.0)
+        self.assertAlmostEqual(covered.usable_kwh(55.0), 2.9, delta=0.2)
+
+        d = self.decide(covered, dhw_kwh=2.0)
+
+        self.assertFalse(d.charge, d.reason)
+        self.assertIn("intet at lade op til", d.reason)
+
+    def test_without_a_profile_it_falls_back_to_the_house_alone(self):
+        # Er doegnprofilen ikke laert endnu, er nul det eneste aerlige tal for
+        # varmtvandet - og saa opfoerer den sig som foer.
+        morning = self.buffer((45.0, 45.0, 43.0), (47.0, 39.0, 31.0))
+
+        d = self.decide(morning, dhw_kwh=None)
+
+        self.assertFalse(d.charge)
+
+
 class DecisionShapeTest(unittest.TestCase):
     def test_a_plain_decision_reads_sensibly(self):
         decision = Decision(source="pillefyr", heat_price=1.0, pellet_price=PELLET)

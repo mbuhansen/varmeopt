@@ -133,6 +133,7 @@ class Planner:
         min_charge_kwh: float = 4.0,
         charge_kw: float = 16.0,
         horizon_minutes: int = DEFAULT_HORIZON_MINUTES,
+        dhw_temp: float = 55.0,
     ) -> None:
         self.pellet_price = pellet_price
         self.hysteresis = hysteresis
@@ -143,6 +144,8 @@ class Planner:
         self.min_charge_kwh = min_charge_kwh
         self.charge_kw = charge_kw
         self.horizon_minutes = horizon_minutes
+        # Kun til begrundelsen: hvilken temperatur lageret blev talt ved.
+        self.dhw_temp = dhw_temp
 
     # ------------------------------------------------------------------ pris
 
@@ -200,7 +203,10 @@ class Planner:
         cop_now: float | None,
         cop_later: Any = None,
         headroom_kwh: float | None = None,
+        peak_headroom_kwh: float | None = None,
         stored_kwh: float | None = None,
+        hot_kwh: float | None = None,
+        dhw_kwh_over: Any = None,
         solar_expected_kwh: float | None = None,
         grid: Any = None,
         demand_kw: float | None = None,
@@ -294,8 +300,19 @@ class Planner:
         # Spoergsmaal 3: hvor meget maa der lades?
         room = headroom_kwh if _finite(headroom_kwh) else 0.0
         if _finite(solar_expected_kwh):
-            # Solen faar sit foerst - dens varme er gratis.
-            room = max(0.0, room - solar_expected_kwh)
+            # Solen faar sit foerst - dens varme er gratis. Men de to
+            # konkurrerer kun om pladsen under varmepumpens loft: solfangeren
+            # kan presse videre til 90 grader, hvor pumpen stopper ved 60, og
+            # den plads kan en opladning ikke tage fra den.
+            #
+            # Her stod hele den forventede solvarme, og det kostede en billig
+            # formiddag hver gang eftermiddagen tegnede til sol. Den 6.
+            # september steg lageret 11,5 -> 25 kWh paa sol alene, og der var
+            # plads til baade den og en opladning hele dagen.
+            above = 0.0
+            if _finite(peak_headroom_kwh) and _finite(headroom_kwh):
+                above = max(0.0, peak_headroom_kwh - headroom_kwh)
+            room = max(0.0, room - max(0.0, solar_expected_kwh - above))
         window = min(best_when, self.horizon_minutes)
         room = min(room, self.charge_kw * window / 60)
 
@@ -313,36 +330,47 @@ class Planner:
         # og det overdrev 2-3 gange: 24 kWh lagerplads mod en dyr halvtime
         # hvor huset bruger 3 kW er 1,5 kWh fortraengt varme, ikke 24.
         displaced = self._displaced_kwh(plan, best_when, vp_now, cop_now, cop_later, demand_kw)
+        # Varmt vand og spa over det samme spaend. Doegnprofilen ved hvornaar
+        # de koerer; her spoerges den bare om de timer der er dyre.
+        dhw_kwh = None
+        if dhw_kwh_over is not None:
+            span = self._dear_span(plan, best_when, vp_now, cop_now, cop_later)
+            if span > 0:
+                dhw_kwh = dhw_kwh_over(span / 60)
 
         # Og kun den del af den varme der ikke allerede staar i tankene. Den
-        # varme er lavet og betalt, og den bliver brugt foerst. Skal der 11
-        # kWh gennem huset mens stroemmen er dyr, og staar der 13 i lageret,
-        # er der ingenting at lade op til - saa flytter en opladning kun
-        # varme man alligevel havde, og betaler staatab for det.
+        # varme er lavet og betalt, og den bliver brugt foerst.
         #
-        # Foer blev der ladet op til hele lagerpladsen, og gevinsten blev
-        # regnet paa den fortraengte varme uden at spoerge hvor den skulle
-        # komme fra. Et fuldt lager og et tomt lager gav samme svar.
+        # Men den maa taelles ved den temperatur den skal bruges ved, og det
+        # er her det gik galt den 6. september. Tankene stod paa 45/45/43 og
+        # 47/39/31 grader: 13,3 kWh over de 30 radiatorkredsen koerer paa, og
+        # *nul* over 50. Koden lagde de 13,3 op mod en aften der delvis er
+        # varmt vand og sagde "intet at lade op til" - mens lageret ikke
+        # kunne lave et eneste bad. Stroemmen kostede 0,37 om formiddagen og
+        # 1,57 om aftenen, hvor den kunne vaere solgt.
         need = displaced
+        driver = ""
         if displaced is not None:
-            stored = stored_kwh if _finite(stored_kwh) else 0.0
-            need = max(0.0, displaced - stored)
+            need, told, driver = self._shortfall(
+                displaced, stored_kwh, hot_kwh, dhw_kwh
+            )
             if need <= 0:
                 return _with(
                     decision,
                     window_minutes=best_when,
-                    reason=(
-                        f"{why}; der bruges {displaced:.1f} kWh mens det er "
-                        f"dyrt, og lageret har {stored:.1f} — intet at lade "
-                        "op til"
-                    ),
+                    reason=f"{why}; {told} — intet at lade op til",
                 )
 
         # Der lades det der skal bruges - ikke hele lagerpladsen. Mindre end
         # mindstetraekket kan pumpen ikke levere, saa der rundes op til det;
         # gevinsten gaelder stadig kun den varme der faktisk fortraenges.
         want = room if need is None else min(room, max(need, self.min_charge_kwh))
-        saving = margin * (want if need is None else need)
+        # Gevinsten gaelder det der faktisk bliver ladet. Her stod ``need``,
+        # og naar pladsen var mindre end behovet, lovede den en besparelse paa
+        # varme der aldrig kom i tanken: "lad 5,9 kWh nu og spar 13,02 kr" er
+        # 2,2 kr/kWh, hvor marginen hoejst kan vaere forskellen op til
+        # pillefyret.
+        saving = margin * (want if need is None else min(want, need))
 
         return _with(
             decision,
@@ -351,7 +379,7 @@ class Planner:
             saving_kr=saving,
             window_minutes=best_when,
             reason=(
-                f"{why}; lad {want:.1f} kWh nu og spar {saving:.2f} kr "
+                f"{why}; lad {want:.1f} kWh{driver} nu og spar {saving:.2f} kr "
                 f"mod om {best_when} min"
             ),
         )
@@ -381,6 +409,57 @@ class Planner:
                 best = (minutes, heat)
         return best
 
+    def _shortfall(
+        self,
+        displaced: float,
+        stored_kwh: float | None,
+        hot_kwh: float | None,
+        dhw_kwh: float | None,
+    ) -> tuple[float, str, str]:
+        """Hvor meget lageret mangler — talt ved hver sin temperatur.
+
+        To spor, og de deler det samme vand. Varmt vand og spa kan kun tages
+        fra den del af lageret der er varm nok til dem; rumvarmen kan tages
+        fra det hele. Derfor får varmtvandet sit først, og gulvet får resten:
+        varme over 55 grader kan begge dele, varme over 30 kan kun det ene.
+
+        ``displaced`` er husets eget forbrug i det dyre vindue, målt på
+        flowmåleren efter tankene. ``dhw_kwh`` er hvad beholderen og spaen
+        tager i det samme vindue, læst af døgnprofilen. De to lægges ikke
+        sammen ukritisk — de skal dækkes af hver sin del af lageret.
+        """
+        warm = stored_kwh if _finite(stored_kwh) else 0.0
+        hot = hot_kwh if _finite(hot_kwh) else 0.0
+        # Uden en profil ved vi ikke hvor meget varmt vand der kommer, og saa
+        # er nul det eneste aerlige - men saa siger begrundelsen det ogsaa.
+        dhw = dhw_kwh if _finite(dhw_kwh) else 0.0
+
+        dhw_short = max(0.0, dhw - hot)
+        # Den varme del taeller med i den lune: bruges den til bad, er den
+        # ikke ogsaa til raadighed for gulvet.
+        space_have = max(0.0, warm - min(dhw, hot))
+        space_short = max(0.0, displaced - space_have)
+
+        if dhw_short > 0 and space_short > 0:
+            told = (
+                f"varmt vand mangler {dhw_short:.1f} kWh over "
+                f"{self.dhw_temp:.0f}°, rumvarmen {space_short:.1f}"
+            )
+            driver = " til varmt vand og rumvarme"
+        elif dhw_short > 0:
+            told = (
+                f"der skal {dhw:.1f} kWh varmt vand, og lageret har {hot:.1f} "
+                f"over {self.dhw_temp:.0f}°"
+            )
+            driver = " til varmt vand"
+        else:
+            told = (
+                f"der bruges {displaced:.1f} kWh mens det er dyrt, og lageret "
+                f"har {space_have:.1f}"
+            )
+            driver = " til rumvarme" if space_short > 0 else ""
+        return dhw_short + space_short, told, driver
+
     def _displaced_kwh(
         self,
         plan: Any,
@@ -397,8 +476,21 @@ class Planner:
         """
         if not _finite(demand_kw) or demand_kw <= 0:
             return None
+        return demand_kw * self._dear_span(plan, best_when, vp_now, cop_now, cop_later) / 60
 
-        threshold = vp_now
+    def _dear_span(
+        self,
+        plan: Any,
+        best_when: int,
+        vp_now: float,
+        cop_now: Any,
+        cop_later: Any,
+    ) -> int:
+        """Hvor mange minutter varmen bliver ved med at være dyrere end nu.
+
+        Det er det vindue baade huset og varmtvandet skal daekkes over, saa
+        det regnes ét sted og bruges to.
+        """
         minutes = best_when
         span = 0
         while minutes <= self.horizon_minutes:
@@ -408,11 +500,11 @@ class Planner:
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
-            if heat <= threshold:
+            if heat <= vp_now:
                 break
             span += SLOT_MINUTES
             minutes += SLOT_MINUTES
-        return demand_kw * span / 60
+        return span
 
 
     # ------------------------------------------------------------ fremskrivning

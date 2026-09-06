@@ -246,6 +246,113 @@ class HistoryTest(unittest.TestCase):
         self.assertEqual(back.history, [])
 
 
+class VesselProfileTest(unittest.TestCase):
+    """Døgnprofilen for varmt vand og spa.
+
+    Hidtil blev flagene kun brugt i øjeblikket og aldrig gemt, og derfor kunne
+    planlæggeren ikke svare på hvor meget varmt vand der kom i de dyre timer.
+    Spaen kører 12-17 efter en tidsplan, så formen skal kunne ses i profilen —
+    den er sin egen kontrol.
+    """
+
+    def midnight(self):
+        from datetime import datetime
+
+        today = datetime.now().astimezone().replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        return today.timestamp()
+
+    def run_day(self, profile, days=1, on_hours=range(12, 17), kw=3.5):
+        start = self.midnight()
+        for day in range(days):
+            for minute in range(24 * 60):
+                at = start + day * 86400 + minute * 60
+                hour = (minute // 60) % 24
+                on = hour in on_hours
+                profile.observe(at, on, kw if on else None)
+            # Sidste time skal ogsaa lukkes.
+            profile.observe(start + day * 86400 + 24 * 3600, False, None)
+
+    def test_the_schedule_shows_up_in_the_profile(self):
+        from varmeopt.houseload import VesselProfile
+
+        profile = VesselProfile()
+        self.run_day(profile, days=3)
+
+        for hour in range(12, 17):
+            self.assertAlmostEqual(profile.hour(hour).duty, 1.0, delta=0.05)
+            self.assertAlmostEqual(profile.hour(hour).kw, 3.5, delta=0.1)
+        for hour in (3, 9, 20):
+            self.assertAlmostEqual(profile.hour(hour).duty, 0.0, delta=0.05)
+
+    def test_it_answers_how_much_comes_in_a_window(self):
+        from varmeopt.houseload import VesselProfile
+
+        profile = VesselProfile()
+        self.run_day(profile, days=3)
+
+        # Fem timer a 3,5 kW er 17,5 kWh. Spurgt fra midnat over hele doegnet
+        # skal profilen give dem igen.
+        self.assertAlmostEqual(
+            profile.kwh_between(self.midnight(), 24.0), 17.5, delta=1.0
+        )
+        # Og fra kl. 18 er der ingenting tilbage af spaens vindue.
+        self.assertAlmostEqual(
+            profile.kwh_between(self.midnight() + 18 * 3600, 5.0), 0.0, delta=0.5
+        )
+
+    def test_an_unlearned_profile_says_nothing(self):
+        from varmeopt.houseload import VesselProfile
+
+        self.assertIsNone(VesselProfile().kwh_between(self.midnight(), 6.0))
+
+    def test_half_an_hour_is_not_an_hour(self):
+        # En genstart midt i timen maa ikke taelle som om vesslerne stod
+        # stille resten af den.
+        from varmeopt.houseload import VesselProfile
+
+        profile = VesselProfile()
+        start = self.midnight() + 13 * 3600 + 40 * 60
+        for minute in range(25):
+            profile.observe(start + minute * 60, False, None)
+        profile.observe(start + 25 * 60 + 3600, False, None)
+
+        self.assertIsNone(profile.hour(13))
+
+    def test_the_profile_survives_a_restart(self):
+        from varmeopt.houseload import HouseLoad, VesselProfile
+
+        load = HouseLoad()
+        self.run_day(load.vessels, days=2)
+
+        back = HouseLoad.from_raw(load.to_raw())
+
+        self.assertEqual(back.vessels.known_hours, load.vessels.known_hours)
+        self.assertAlmostEqual(back.vessels.hour(14).kw, 3.5, delta=0.1)
+
+    def test_rubbish_is_skipped(self):
+        from varmeopt.houseload import VesselProfile
+
+        back = VesselProfile.from_raw(
+            {"aeh": {"duty": 1}, "40": {"duty": 1, "kw": 3}, "5": {"duty": 9, "kw": 3}}
+        )
+
+        self.assertEqual(back.known_hours, 0)
+
+    def test_it_learns_from_the_minutes_the_measurement_throws_away(self):
+        # Vinduet kasseres naar der bades, og netop derfor skal profilen
+        # laere af de minutter - de er de eneste der ellers aldrig blev husket.
+        load = HouseLoad()
+        start = self.midnight() + 13 * 3600
+
+        for minute in range(70):
+            load.observe(start + minute * 60, 60.0, {}, dhw=True, vessel_kw=None)
+
+        self.assertIsNone(load.kw)
+        self.assertAlmostEqual(load.vessels.hour(13).duty, 1.0, delta=0.05)
+
+
 class CurveTest(unittest.TestCase):
     def test_it_learns_a_point_per_degree(self):
         curve = LoadCurve()

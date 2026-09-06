@@ -170,6 +170,14 @@ _DEFAULTS: dict[str, object] = {
     "spa_kw": 3.5,
     "vvb_kw_cold": 8.0,
     "vvb_kw_hot": 3.0,
+    # Under den her temperatur kan lageret ikke lade beholderen, og saa maa
+    # varmepumpen goere det - ogsaa hvis stroemmen er dyr netop da.
+    #
+    # Ikke det samme som ``tank_cascade_temp``, selv om de to tilfaeldigvis
+    # staar paa samme tal i dag: kaskaden styrer *ladningens* raekkefoelge
+    # mellem de to tanke, det her er hvad lageret kan *levere*. To
+    # spoergsmaal, to indstillinger.
+    "dhw_usable_temp": 55.0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     "entity_outdoor_temp": "",
     # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
@@ -322,6 +330,7 @@ class Options:
     spa_kw: float
     vvb_kw_cold: float
     vvb_kw_hot: float
+    dhw_usable_temp: float
     entity_cop_measured: str
     entity_outdoor_temp: str
     dhw_setpoint: float
@@ -428,6 +437,7 @@ class Options:
                     "spa_kw",
                     "vvb_kw_cold",
                     "vvb_kw_hot",
+                    "dhw_usable_temp",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i

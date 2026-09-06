@@ -206,6 +206,23 @@ class Buffer:
         """
         return sum(t.stored_kwh(0.0) for t in self.measured)
 
+    def usable_kwh(self, above: float) -> float:
+        """Den varme lageret kan levere ved mindst den her temperatur.
+
+        Nu er der tre tal om det samme vand, og de svarer på hvert sit
+        spørgsmål. ``stored_kwh`` er hvad der kan varme *huset* — alt over de
+        30 °C radiatorkredsen kører på. ``heat_kwh`` er hvad der overhovedet
+        er i vandet, til en energibalance. Og det her er hvad lageret kan
+        levere til en bestemt opgave.
+
+        Forskellen er ikke akademisk. Den 6. september stod tankene på
+        45/45/43 og 47/39/31 °C: 13,3 kWh over 30 grader, som fint kan varme
+        et gulv der beder om 31 — og **nul** over 50, altså ingenting til et
+        bad. Et regnestykke der lægger de to sammen, tror lageret kan noget
+        det ikke kan.
+        """
+        return sum(t.stored_kwh(above) for t in self.measured)
+
     @property
     def headroom_kwh(self) -> float:
         """Hvor meget varmepumpen kan nå at tilføre, før den løber tør for løft."""

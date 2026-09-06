@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 # Vinduet der regnes over. En halv time er langt nok til at faldet er
@@ -83,6 +84,15 @@ NEAR_ENOUGH_K = 2.0
 # form og en uges vejr, og lille nok til en fil der skrives hvert femte
 # minut.
 HISTORY_DAYS = 14.0
+
+# Saa meget af en time skal vaere set, foer den taeller med i doegnprofilen.
+# En genstart midt i timen maa ikke taelle som om beholderen stod stille
+# resten af den.
+MIN_HOUR_SECONDS = 1800.0
+
+# Under saa mange doegn bag en time flytter en ny dag den maerkbart; derover
+# er vanen kendt og skal ikke rykke sig paa én aften.
+_SETTLED_DAYS = 5.0
 
 
 def _finite(value: Any) -> bool:
@@ -243,6 +253,175 @@ class LoadCurve:
         return cls(points)
 
 
+@dataclass(frozen=True)
+class VesselHour:
+    """Én time af døgnet: hvor tit beholderen og spaen kører, og hvor hårdt."""
+
+    duty: float = 0.0
+    kw: float = 0.0
+    count: float = 0.0
+
+    @property
+    def kwh(self) -> float:
+        """Hvad de tager ud af tankene på en typisk sådan time."""
+        return self.duty * self.kw
+
+
+class VesselProfile:
+    """Døgnprofil for varmt vand og spa — hvornår de tapper lageret.
+
+    Hidtil blev ``dhw_active`` og ``spa_heating`` kun brugt i øjeblikket: til
+    at holde deres setpunkter ude af varmekurven, til at kassere et
+    målevindue, og til visningen. Intet blev gemt, og derfor kunne
+    planlæggeren ikke svare på det spørgsmål der afgør en opladning: *hvor
+    meget varmt vand kommer der i de dyre timer?*
+
+    Formen skal passe til anlægget. Spaen kører 12-17 efter en tidsplan i
+    UVR'en, og varmtvandet har sine egne vinduer, så ét gennemsnit over
+    døgnet ville sige «en fjerdedel af tiden» og ramme forkert i begge ender.
+    Én celle pr. time rammer skemaet.
+
+    Timen samles op mens den går og lægges først ind når den er forbi. Ellers
+    ville cellen følge *denne* time frem for at være et gennemsnit over dage,
+    og en enkelt lang spa-tur ville se ud som en vane.
+    """
+
+    def __init__(self, hours: dict[int, VesselHour] | None = None) -> None:
+        self._hours: dict[int, VesselHour] = dict(hours or {})
+        self._hour: int | None = None
+        self._last: float | None = None
+        self._seconds = 0.0
+        self._on_seconds = 0.0
+        self._kwh = 0.0
+
+    @property
+    def hours(self) -> dict[int, VesselHour]:
+        return dict(self._hours)
+
+    @property
+    def known_hours(self) -> int:
+        return len(self._hours)
+
+    def hour(self, of_day: int) -> VesselHour | None:
+        return self._hours.get(of_day % 24)
+
+    # -------------------------------------------------------------- læring
+
+    def observe(self, now: float, on: bool, kw: float | None) -> None:
+        """Ét skridt. ``on`` er om nogen af de to kører, ``kw`` deres træk."""
+        hour = _hour_of_day(now)
+        if hour is None:
+            return
+
+        gap = now - self._last if self._last is not None else 0.0
+        self._last = now
+        if self._hour is not None and hour != self._hour:
+            self._commit()
+        self._hour = hour
+        if gap <= 0 or gap > MAX_GAP_SECONDS:
+            # Et hul betyder at vi ikke ved hvad der skete imens. Timen taeller
+            # kun den tid vi faktisk har set.
+            return
+
+        self._seconds += gap
+        if on:
+            self._on_seconds += gap
+            self._kwh += (kw or 0.0) * gap / 3600
+
+    def _commit(self) -> None:
+        hour, seconds = self._hour, self._seconds
+        on_seconds, kwh = self._on_seconds, self._kwh
+        self._seconds = self._on_seconds = self._kwh = 0.0
+        if hour is None or seconds < MIN_HOUR_SECONDS:
+            # En halv time er ikke en time. En genstart midt i timen maa ikke
+            # taelle som om vesslerne stod stille resten af den.
+            return
+
+        duty = on_seconds / seconds
+        kw = kwh / (on_seconds / 3600) if on_seconds > 0 else None
+        old = self._hours.get(hour)
+        if old is None:
+            self._hours[hour] = VesselHour(duty=duty, kw=kw or 0.0, count=1.0)
+            return
+
+        count = old.count + 1
+        alpha = 0.3 if count < _SETTLED_DAYS else 0.15
+        self._hours[hour] = VesselHour(
+            duty=old.duty * (1 - alpha) + duty * alpha,
+            # Effekten laeres kun af timer hvor de faktisk koerte. Ellers ville
+            # en stille nat traekke den mod nul, og saa ville en time med
+            # halv drift se ud som en med fuld drift ved halv effekt.
+            kw=old.kw if kw is None else old.kw * (1 - alpha) + kw * alpha,
+            count=count,
+        )
+
+    # ---------------------------------------------------------- opslag frem
+
+    def kwh_between(self, now: float, hours: float) -> float | None:
+        """Hvad beholderen og spaen tager ud af lageret i de næste ``hours``.
+
+        Summen af profilen hen over vinduet, med de skæve ender regnet med.
+        ``None`` når der ikke er lært nok til at svare — og så skal den der
+        spørger, sige det i stedet for at regne på et nul.
+        """
+        if not self._hours or hours <= 0:
+            return None
+        start = _hour_of_day(now)
+        if start is None:
+            return None
+
+        offset = (now % 3600) / 3600
+        total = 0.0
+        left = hours
+        index = start
+        # Foerste time er kun delvis tilbage.
+        share = min(left, 1.0 - offset)
+        while left > 0:
+            cell = self._hours.get(index % 24)
+            if cell is not None:
+                total += cell.kwh * share
+            left -= share
+            index += 1
+            share = min(left, 1.0)
+        return total
+
+    # ------------------------------------------------------------------ lager
+
+    def to_raw(self) -> dict[str, dict[str, float]]:
+        return {
+            str(hour): {
+                "duty": round(cell.duty, 4),
+                "kw": round(cell.kw, 3),
+                "count": cell.count,
+            }
+            for hour, cell in sorted(self._hours.items())
+        }
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> VesselProfile:
+        hours: dict[int, VesselHour] = {}
+        if isinstance(raw, dict):
+            for key, cell in raw.items():
+                try:
+                    hour = int(key)
+                    duty = float(cell["duty"])
+                    kw = float(cell["kw"])
+                    count = float(cell.get("count", 0))
+                except (TypeError, ValueError, KeyError):
+                    continue
+                if 0 <= hour < 24 and 0 <= duty <= 1 and kw >= 0:
+                    hours[hour] = VesselHour(duty=duty, kw=kw, count=count)
+        return cls(hours)
+
+
+def _hour_of_day(at: float) -> int | None:
+    """Timen i lokal tid. Et ur der ikke giver mening, giver ingen time."""
+    try:
+        return datetime.fromtimestamp(at).astimezone().hour
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
 @dataclass
 class _Sample:
     at: float
@@ -255,6 +434,11 @@ class HouseLoad:
     """Husets forbrug målt på lagerets energiændring."""
 
     curve: LoadCurve = field(default_factory=LoadCurve)
+    # Hvornaar beholderen og spaen tapper lageret. Ikke en del af husets
+    # forbrug - tvaertimod det der skal trakkes fra for at finde det - men
+    # det er her flagene, effekten og tiden moedes, og derfor bor profilen
+    # her frem for i hovedloekken.
+    vessels: VesselProfile = field(default_factory=VesselProfile)
     kw: float | None = None
     measured_at: float | None = None
     note: str = "venter på første vindue"
@@ -288,6 +472,11 @@ class HouseLoad:
         vessel_kw: float | None = None,
     ) -> str:
         """Ét skridt. Returnerer en status der kan vises og logges."""
+        # Doegnprofilen foerst, og altid. Den skal netop laere af de minutter
+        # hvor der bliver badet - det er dem der bliver kasseret nedenfor, og
+        # de er dermed de eneste der ellers aldrig blev husket.
+        self.vessels.observe(now, bool(dhw or spa), vessel_kw)
+
         if (dhw or spa) and not _finite(vessel_kw):
             # Bad og spa tapper de samme tanke som huset, og en lagerbalance
             # kan ikke se forskel. Uden et bud paa hvor meget de tager,
@@ -440,6 +629,7 @@ class HouseLoad:
         # end at regne hen over hullet. Samme valg som staatabsmaalingen.
         return {
             "curve": self.curve.to_raw(),
+            "vessels": self.vessels.to_raw(),
             "error_sum": round(self.error_sum, 4),
             "error_n": self.error_n,
             "history": [
@@ -453,6 +643,7 @@ class HouseLoad:
         model = cls()
         if isinstance(raw, dict):
             model.curve = LoadCurve.from_raw(raw.get("curve"))
+            model.vessels = VesselProfile.from_raw(raw.get("vessels"))
             try:
                 model.error_sum = float(raw.get("error_sum", 0.0))
                 model.error_n = float(raw.get("error_n", 0.0))
