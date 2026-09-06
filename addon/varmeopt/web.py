@@ -407,7 +407,11 @@ class WebUI:
         for row in rows:
             changed = previous_source is not None and row.source != previous_source
             previous_source = row.source
-            if row.now:
+            if row.charging:
+                # Kort og godt, som Predbats egen plan. Hvorfor der lades,
+                # staar paa maalraekken; her staar bare at der bliver ladet.
+                why = f"{row.power} · lad op"
+            elif row.now:
                 why = f"{row.power} · {_now_note(decision, target)}"
             elif changed:
                 # Kilden skifter. Det er det eneste sted i tabellen hvor der
@@ -464,7 +468,7 @@ class WebUI:
             f"{summary}"
             f'<div class="scroll"><table class="plan">{head}'
             f"<tbody>{''.join(cells)}</tbody></table></div>"
-            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod.</p>'
+            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod, og «lad op» de halvtimer opladningen ventes at ligge i — en hensigt der regnes forfra hvert minut, ikke et skema.</p>'
         )
         return _page("Plan", "plan", body)
 

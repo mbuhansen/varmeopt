@@ -25,6 +25,7 @@ på; indtil da er den lig med nu.
 from __future__ import annotations
 
 import math
+from dataclasses import replace
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,6 +45,10 @@ class Decision:
     pellet_price: float
     charge: bool = False
     charge_kwh: float | None = None
+    # Hvad der skal lades i alt, ogsaa naar svaret er "vent". ``charge_kwh``
+    # er hvad der lades *nu*; det her er hensigten, og det er den planen
+    # tegner "lad op" efter.
+    planned_kwh: float | None = None
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
@@ -84,6 +89,10 @@ class Projection:
     state: str = ""
     soc_percent: float | None = None
     source: str = "varmepumpe"
+    # Regner planlaeggeren med at lade op i den her halvtime? Det er en
+    # hensigt og ikke et loefte: den regnes forfra hvert minut, og bliver
+    # lageret fuldt hurtigere end ventet, forsvinder maerkerne af sig selv.
+    charging: bool = False
     # Hvorfor *den kilde* - ikke hvor prisen kommer fra. Det er den
     # forklaring der hoerer hjemme paa en raekke hvor noget aendrer sig.
     note: str = ""
@@ -276,27 +285,6 @@ class Planner:
                 ),
             )
 
-        # Spoergsmaal 2b: er *nu* overhovedet det rigtige tidspunkt?
-        #
-        # Her stod intet, og det var en dyr tavshed. Loekken ovenfor finder
-        # den dyreste time forude, men spurgte aldrig om der laa en billigere
-        # halvtime imellem. Med priserne 1,00 -> 0,30 -> 0,30 -> 3,00 lader
-        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter paa 0,30 -
-        # 4,20 kr smidt vaek paa ét traek, og lageret er fuldt naar den
-        # billige time kommer.
-        cheaper = self._cheaper_moment_before(plan, best_when, vp_now, cop_now, cop_later)
-        if cheaper is not None:
-            when, price = cheaper
-            return _with(
-                decision,
-                window_minutes=best_when,
-                reason=(
-                    f"{why}; venter - om {when} min koster varmen {price:.2f} "
-                    f"mod {vp_now:.2f} nu, og der er stadig tid inden toppen "
-                    f"om {best_when} min"
-                ),
-            )
-
         # Spoergsmaal 3: hvor meget maa der lades?
         room = headroom_kwh if _finite(headroom_kwh) else 0.0
         if _finite(solar_expected_kwh):
@@ -365,6 +353,33 @@ class Planner:
         # mindstetraekket kan pumpen ikke levere, saa der rundes op til det;
         # gevinsten gaelder stadig kun den varme der faktisk fortraenges.
         want = room if need is None else min(room, max(need, self.min_charge_kwh))
+
+        # Spoergsmaal 3b: er *nu* overhovedet det rigtige tidspunkt?
+        #
+        # Her stod intet, og det var en dyr tavshed. Loekken ovenfor finder
+        # den dyreste time forude, men spurgte aldrig om der laa en billigere
+        # halvtime imellem. Med priserne 1,00 -> 0,30 -> 0,30 -> 3,00 lader
+        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter paa 0,30 -
+        # 4,20 kr smidt vaek paa ét traek, og lageret er fuldt naar den
+        # billige time kommer.
+        #
+        # Spoergsmaalet stod foer *foer* maengden blev regnet, og saa var
+        # hensigten ukendt mens den ventede. Planen kunne derfor ikke tegne
+        # "lad op" paa de halvtimer den ventede paa - og det er netop dem man
+        # vil se, inden styringen kobles til.
+        cheaper = self._cheaper_moment_before(plan, best_when, vp_now, cop_now, cop_later)
+        if cheaper is not None:
+            when, price = cheaper
+            return _with(
+                decision,
+                planned_kwh=want,
+                window_minutes=best_when,
+                reason=(
+                    f"{why}; venter - om {when} min koster varmen {price:.2f} "
+                    f"mod {vp_now:.2f} nu, og der er stadig tid inden toppen "
+                    f"om {best_when} min"
+                ),
+            )
         # Gevinsten gaelder det der faktisk bliver ladet. Her stod ``need``,
         # og naar pladsen var mindre end behovet, lovede den en besparelse paa
         # varme der aldrig kom i tanken: "lad 5,9 kWh nu og spar 13,02 kr" er
@@ -376,6 +391,7 @@ class Planner:
             decision,
             charge=True,
             charge_kwh=want,
+            planned_kwh=want,
             saving_kr=saving,
             window_minutes=best_when,
             reason=(
@@ -516,6 +532,7 @@ class Planner:
         cop_later: Any = None,
         target_minutes: int | None = None,
         grid: Any = None,
+        planned_kwh: float | None = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
 
@@ -554,7 +571,47 @@ class Planner:
                     target=target_minutes is not None and minutes == target_minutes,
                 )
             )
-        return rows
+        return self._mark_charging(rows, target_minutes, planned_kwh)
+
+    def _mark_charging(
+        self,
+        rows: list[Projection],
+        target_minutes: int | None,
+        planned_kwh: float | None,
+    ) -> list[Projection]:
+        """Saet «lad op» paa de halvtimer opladningen ventes at ligge i.
+
+        Planlæggeren har ingen tidsplan — den svarer på ét spørgsmål hvert
+        minut: skal pumpen lade op *nu*? Men den venter systematisk på den
+        billigste halvtime inden toppen, og dermed *er* der en underforstået
+        plan. Den skrives her ud, så den kan læses inden styringen kobles til.
+
+        Reglen er kodens egen: de billigste halvtimer inden toppen, og kun så
+        mange som opladningen tager ved pumpens ydelse. Bliver lageret fuldt
+        hurtigere end ventet, falder ``planned_kwh`` af sig selv næste minut,
+        og mærkerne forsvinder med den. Det er en hensigt, ikke et løfte.
+        """
+        if not rows or target_minutes is None or not _finite(planned_kwh):
+            return rows
+        if planned_kwh <= 0 or self.charge_kw <= 0:
+            return rows
+
+        hours = planned_kwh / self.charge_kw
+        slots = max(1, math.ceil(hours * 60 / SLOT_MINUTES))
+        before = [
+            row
+            for row in rows
+            if row.minutes < target_minutes and row.heat_price is not None
+        ]
+        if not before:
+            return rows
+
+        cheapest = sorted(before, key=lambda r: (r.heat_price, r.minutes))[:slots]
+        chosen = {row.minutes for row in cheapest}
+        return [
+            replace(row, charging=True) if row.minutes in chosen else row
+            for row in rows
+        ]
 
 
 def _with(decision: Decision, **changes: Any) -> Decision:

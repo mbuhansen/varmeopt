@@ -262,6 +262,7 @@ class Varmeopt:
             cop_later=self._cop_at,
             target_minutes=decision.window_minutes,
             grid=prices.get("grid"),
+            planned_kwh=decision.planned_kwh,
         )
 
         self.status.update(

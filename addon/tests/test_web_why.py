@@ -151,6 +151,19 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn("holdchrg", html)
         self.assertIn("16 %", html)
 
+    def test_a_charging_slot_just_says_lad_op(self):
+        # Kort, som Predbats egen plan. Hvorfor der lades, staar paa
+        # maalraekken; her staar bare at der bliver ladet.
+        html = self.html([self.row(charging=True)])
+
+        self.assertIn("lad op", html)
+
+    def test_it_says_lad_op_even_on_the_row_we_stand_in(self):
+        html = self.html([self.row(charging=True, minutes=0)])
+
+        self.assertIn("lad op", html)
+        self.assertNotIn("afventer", html)
+
     def test_the_why_column_names_the_source(self):
         # "net" saettes i roedt af _highlight_basis, saa ordet staar i sit
         # eget element - men det staar der, og det kommer fra kildefeltet.

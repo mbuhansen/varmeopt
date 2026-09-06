@@ -196,6 +196,80 @@ class DecideTest(unittest.TestCase):
         self.assertIn("kWh", decision.charging_note)
 
 
+class ChargingSlotsTest(unittest.TestCase):
+    """«Lad op» ud for de halvtimer opladningen ventes at ligge i.
+
+    Planlæggeren har ingen tidsplan — den svarer «nu?» hvert minut. Men den
+    venter systematisk på den billigste halvtime inden toppen, så der *er* en
+    underforstået plan, og den skal kunne læses inden styringen kobles til.
+    """
+
+    # Billigt i fire halvtimer midt i vinduet, dyrt fra slot 9.
+    RATES = [90, 90, 90, 90, 35, 35, 35, 35, 90, 155, 155, 155]
+
+    def project(self, planned_kwh, target=270):
+        p = planner(charge_kw=16.0)
+        return p.project(
+            plan(*self.RATES), cop_now=4.5, target_minutes=target,
+            planned_kwh=planned_kwh,
+        )
+
+    def marked(self, rows):
+        return [r.minutes for r in rows if r.charging]
+
+    def test_only_as_many_slots_as_the_charge_takes(self):
+        # 12 kWh ved 16 kW er 45 minutter: to halvtimer, ikke fire.
+        self.assertEqual(len(self.marked(self.project(12.0))), 2)
+
+    def test_and_they_are_the_cheapest_ones(self):
+        # De billige halvtimer ligger paa 120-210 min.
+        self.assertEqual(self.marked(self.project(12.0)), [120, 150])
+
+    def test_a_bigger_charge_spills_into_the_next_cheapest(self):
+        # 40 kWh er 2,5 time: de fire billige raekker ikke, saa den billigste
+        # af resten kommer med.
+        marked = self.marked(self.project(40.0))
+
+        self.assertEqual(len(marked), 5)
+        self.assertTrue({120, 150, 180, 210}.issubset(set(marked)))
+
+    def test_nothing_is_marked_after_the_target(self):
+        for minutes in self.marked(self.project(40.0)):
+            self.assertLess(minutes, 270)
+
+    def test_the_marks_disappear_as_the_store_fills(self):
+        # Det er hele pointen: markeringen regnes forfra hvert minut ud fra
+        # hvor meget der stadig mangler. Bliver lageret fuldt hurtigere end
+        # ventet, falder maerkerne af sig selv.
+        many = len(self.marked(self.project(40.0)))
+        few = len(self.marked(self.project(8.0)))
+
+        self.assertGreater(many, few)
+        self.assertEqual(few, 1)
+
+    def test_nothing_planned_marks_nothing(self):
+        self.assertEqual(self.marked(self.project(None)), [])
+        self.assertEqual(self.marked(self.project(0.0)), [])
+
+    def test_without_a_target_there_is_no_window_to_fill(self):
+        self.assertEqual(self.marked(self.project(40.0, target=None)), [])
+
+
+class WaitingStillHasAnIntentTest(unittest.TestCase):
+    def test_a_waiting_decision_still_says_how_much(self):
+        # Foer stod vent-grenen foer maengden blev regnet, og saa var
+        # hensigten ukendt mens den ventede - saa planen kunne ikke tegne
+        # "lad op" paa netop de halvtimer den ventede paa.
+        d = planner().decide(
+            plan(90, 30, 30, 300), cop_now=4.0, headroom_kwh=20, stored_kwh=0.0
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("venter", d.reason)
+        self.assertIsNotNone(d.planned_kwh)
+        self.assertGreater(d.planned_kwh, 0)
+
+
 class SolarRoomTest(unittest.TestCase):
     """Solen og varmepumpen konkurrerer kun om pladsen under 60 grader."""
 
