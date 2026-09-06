@@ -22,6 +22,7 @@ CURVE_FILE = "heat_curve.json"
 SOLAR_FILE = "solar.json"
 STANDBY_FILE = "standby.json"
 HOUSE_LOAD_FILE = "house_load.json"
+CAPACITY_FILE = "capacity.json"
 COMPARE_FILE = "compare.json"
 GUARD_FILE = "guard.json"
 

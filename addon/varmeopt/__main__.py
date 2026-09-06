@@ -20,6 +20,7 @@ from typing import Any
 import aiohttp
 
 from . import VERSION, selfupdate
+from .capacity import ChargeRate
 from .compare import Accuracy, Tally, normalise
 from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
@@ -33,6 +34,7 @@ from .migrate import (
     COP_TABLE_FILE,
     CURVE_FILE,
     COMPARE_FILE,
+    CAPACITY_FILE,
     GUARD_FILE,
     HOUSE_LOAD_FILE,
     SOLAR_FILE,
@@ -107,6 +109,9 @@ class Varmeopt:
         # Husets forbrug laest af lageret, som bagstopper naar
         # flowmaaleren ligger under sin bund - se houseload.py.
         self.house_load = HouseLoad()
+        # Typeskiltet siger 16 kW; maskinen bestemmer selv og lander omkring
+        # 12. Raten maales derfor frem for at gaettes - se capacity.py.
+        self.charge_rate = ChargeRate(nameplate_kw=options.hp_charge_kw)
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
@@ -190,6 +195,12 @@ class Varmeopt:
         )
         if self.house_load.measured_at is not None:
             self._dirty = True
+
+        # Hvor hurtigt pumpen faktisk fylder lageret. Planlaeggeren regner
+        # baade tid og maengde ud fra den, saa et typeskilt der lyver en
+        # tredjedel, faar den til at starte for sent.
+        self.charge_rate.observe(balance.heatpump_kw if balance is not None else None)
+        self.planner.charge_kw = self.charge_rate.effective_kw
 
         curve_note = None
         if flow_temp is not None and outdoor_temp is not None:
@@ -313,6 +324,8 @@ class Varmeopt:
                 if outdoor_temp is not None
                 else None
             ),
+            charge_rate=self.charge_rate.note,
+            charge_rate_kw=self.charge_rate.effective_kw,
             house_load_bias=self.house_load.bias_kw,
             house_load_points=self.house_load.curve.point_count,
             vessel_hours=self.house_load.vessels.known_hours,
@@ -1279,6 +1292,7 @@ class Varmeopt:
             )
             self.store.save(STANDBY_FILE, self.standby.to_raw())
             self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
+            self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(
                 COMPARE_FILE,
                 {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
@@ -1356,6 +1370,10 @@ async def run() -> None:
         app.guard.restore(store.load(GUARD_FILE, {}))
         app.standby = StandbyTest.from_raw(store.load(STANDBY_FILE, {}))
         app.house_load = HouseLoad.from_raw(store.load(HOUSE_LOAD_FILE, {}))
+        app.charge_rate = ChargeRate.from_raw(
+            store.load(CAPACITY_FILE, {}), options.hp_charge_kw
+        )
+        log.info("ladehastighed: %s", app.charge_rate.note)
         if app.house_load.curve.point_count:
             log.info(
                 "forbrugskurve fra eget lager: %d punkter, %.0f maalinger",

@@ -255,6 +255,45 @@ class ChargingSlotsTest(unittest.TestCase):
         self.assertEqual(self.marked(self.project(40.0, target=None)), [])
 
 
+class SlowerThanTheNameplateTest(unittest.TestCase):
+    """Pumpen bestemmer selv: 16 kW paa papiret, omkring 12 i praksis.
+
+    Raten staar fire steder i planlaegningen, og de traekker alle samme vej.
+    Saettes den for hoejt, tror planlaeggeren at den har bedre tid end den
+    har - og de dage hvor det gaelder, er netop dem hvor et billigt vindue
+    skal udnyttes inden en dyr aften.
+    """
+
+    RATES = [90, 90, 90, 90, 35, 35, 35, 35, 90, 155, 155, 155]
+
+    def marks(self, charge_kw, planned_kwh=40.0):
+        rows = planner(charge_kw=charge_kw).project(
+            plan(*self.RATES), cop_now=4.5, target_minutes=270,
+            planned_kwh=planned_kwh,
+        )
+        return [r.minutes for r in rows if r.charging]
+
+    def test_a_slower_pump_needs_more_half_hours(self):
+        # 40 kWh er 2,5 time ved 16 kW og 3,3 ved 12. Troede den paa
+        # typeskiltet, ville den saette to maerker for lidt og starte for
+        # sent til at naa det.
+        self.assertEqual(len(self.marks(16.0)), 5)
+        self.assertEqual(len(self.marks(12.0)), 7)
+
+    def test_and_it_can_fit_less_before_the_price_rises(self):
+        # Pladsen er der, men tiden er ikke: en halv time ved 12 kW er 6 kWh,
+        # ikke 8.
+        fast = planner(charge_kw=16.0).decide(
+            plan(40, 240), cop_now=4.0, headroom_kwh=40, stored_kwh=0.0
+        )
+        slow = planner(charge_kw=12.0).decide(
+            plan(40, 240), cop_now=4.0, headroom_kwh=40, stored_kwh=0.0
+        )
+
+        self.assertAlmostEqual(fast.charge_kwh, 8.0, places=6)
+        self.assertAlmostEqual(slow.charge_kwh, 6.0, places=6)
+
+
 class WaitingStillHasAnIntentTest(unittest.TestCase):
     def test_a_waiting_decision_still_says_how_much(self):
         # Foer stod vent-grenen foer maengden blev regnet, og saa var
