@@ -14,6 +14,7 @@ import logging
 import signal
 import sys
 import time
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -21,6 +22,7 @@ import aiohttp
 
 from . import VERSION, selfupdate
 from .capacity import ChargeRate
+from .charge import ChargePlan
 from .compare import Accuracy, Tally, normalise
 from .cop import CopTable, plausible_cop_range
 from .curve import HeatCurve
@@ -35,6 +37,7 @@ from .migrate import (
     CURVE_FILE,
     COMPARE_FILE,
     CAPACITY_FILE,
+    CHARGE_FILE,
     GUARD_FILE,
     HOUSE_LOAD_FILE,
     SOLAR_FILE,
@@ -112,6 +115,9 @@ class Varmeopt:
         # Typeskiltet siger 16 kW; maskinen bestemmer selv og lander omkring
         # 12. Raten maales derfor frem for at gaettes - se capacity.py.
         self.charge_rate = ChargeRate(nameplate_kw=options.hp_charge_kw)
+        # Opladningen som en blok: planlagt én gang, koert én gang. Se
+        # charge.py for hvorfor det ikke er en beslutning pr. minut.
+        self.charge_plan = ChargePlan()
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
@@ -173,6 +179,9 @@ class Varmeopt:
             outdoor_temp,
         )
 
+        # Udgangen naar den svarer, setpunktet naar den ikke goer.
+        dhw_fact = dhw_active if dhw_active is not None else is_dhw
+
         # Husets forbrug laest af lagerets energiaendring. Den koerer efter
         # brugsvandsflaget, for et bad tapper de samme tanke som huset, og en
         # energibalance kan ikke se forskel paa de to.
@@ -181,16 +190,28 @@ class Varmeopt:
             buffer.heat_kwh if buffer is not None else None,
             balance.sources if balance is not None else None,
             inputs_known=balance.inputs_known if balance is not None else False,
-            dhw=dhw_active,
+            # Samme kendsgerning som varmekurven bruger. Falder
+            # varmtvandsudgangen ud, er det raa flag None, vinduet kasseres
+            # ikke, og et bad paa op til 8 kW bogfoeres som husets forbrug -
+            # og laeres varigt ind i forbrugskurven. ``is_dhw`` genkender
+            # ogsaa setpunktet, saa der er noget at falde tilbage paa.
+            dhw=dhw_fact,
             spa=vessels.get("spa_heating"),
-            sensors=buffer.sensor_count if buffer is not None else None,
+            # De *maalte* foelere, ikke lagene. ``sensor_count`` taeller
+            # ``len(layers)``, og ``layers`` interpolerer det manglende lag og
+            # giver stadig tre - saa én doed foeler aendrede ikke tallet, og
+            # vagten mod at maale hen over et foelerskift kunne aldrig
+            # udloeses. Naar foeleren kommer igen, springer ``heat_kwh``
+            # naesten to kWh, og hældningen over vinduet bliver til flere kW
+            # husforbrug der laeres permanent ind i kurven.
+            sensors=buffer.sensors_lost if buffer is not None else None,
             outdoor=outdoor_temp,
             meter_kw=balance.load.kw if balance is not None and balance.load.trustworthy else None,
             standby_kw=self.standby.loss_kw_at(
                 buffer.mean_temp if buffer is not None else None, room_temp
             ),
             vessel_kw=self._vessel_kw(
-                dhw_active, vessels.get("spa_heating"), vessels.get("vvb_bottom")
+                dhw_fact, vessels.get("spa_heating"), vessels.get("vvb_bottom")
             ),
         )
         if self.house_load.measured_at is not None:
@@ -252,8 +273,19 @@ class Varmeopt:
                 if buffer is not None
                 else None
             ),
-            dhw_kwh_over=lambda hours: self.house_load.vessels.kwh_between(
-                time.time(), hours
+            # Varmtvandet i det dyre vindue, ikke i de naeste timer: profilen
+            # laeses fra vinduets begyndelse.
+            dhw_kwh_over=lambda start_min, hours: (
+                self.house_load.vessels.kwh_between(
+                    time.time() + start_min * 60, hours
+                )
+            ),
+            # Og hvad det koster at faa den varme til at *staa* der. Lagerets
+            # fysik hoerer hjemme i tank.py, ikke i planlaeggeren.
+            dhw_input_for=(
+                (lambda kwh: buffer.energy_to_reach(kwh, self.options.dhw_usable_temp))
+                if buffer is not None
+                else None
             ),
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
@@ -264,6 +296,18 @@ class Varmeopt:
         # bruger sin egen logik.
         # Vaegurstid, ikke monoton - kun den giver mening paa tvaers af en
         # genstart, og opholdstiden skal fortsaette hvor den slap.
+        # Opladningen er en blok, ikke en beslutning pr. minut. Den siger
+        # ja eller nej for hele sit forloeb, og beslutningens flag rettes ind
+        # efter den, saa flaget, attributterne og planen siger det samme.
+        charging = self.charge_plan.update(
+            time.time(),
+            decision,
+            prices.get("plan"),
+            self.charge_rate.effective_kw,
+            full=buffer is not None and buffer.headroom_kwh <= 0.01,
+        )
+        decision = replace(decision, charge=charging)
+
         command = self.guard.check(
             decision, lookup, prices.get("plan"), time.time()
         )
@@ -273,7 +317,7 @@ class Varmeopt:
             cop_later=self._cop_at,
             target_minutes=decision.window_minutes,
             grid=prices.get("grid"),
-            planned_kwh=decision.planned_kwh,
+            charge_window=self._charge_window(),
         )
 
         self.status.update(
@@ -324,6 +368,7 @@ class Varmeopt:
                 if outdoor_temp is not None
                 else None
             ),
+            charge_plan=self.charge_plan.note,
             charge_rate=self.charge_rate.note,
             charge_rate_kw=self.charge_rate.effective_kw,
             house_load_bias=self.house_load.bias_kw,
@@ -350,7 +395,7 @@ class Varmeopt:
                 decision.reason,
                 command.note,
             )
-            await self._publish_decision(ha, decision, command)
+            await self._safely("beslutning", self._publish_decision(ha, decision, command))
             await self._safely(
                 "opladningsflag", self._publish_charge(ha, decision, command)
             )
@@ -978,6 +1023,12 @@ class Varmeopt:
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
                 "vindue_min": decision.window_minutes,
+                # Blokken: hvornaar den ligger, og hvor meget den er sat til.
+                # Opladningen er planlagt én gang og koeres én gang - se
+                # charge.py - saa det her er et skema og ikke et oejebliksbud.
+                "plan": self.charge_plan.note,
+                "starter_om_min": _round(self._charge_minutes()[0], 0),
+                "slutter_om_min": _round(self._charge_minutes()[1], 0),
             },
         )
 
@@ -1161,6 +1212,20 @@ class Varmeopt:
             self._warned_hp_cop = True
         return implied
 
+    def _charge_minutes(self) -> tuple[float | None, float | None]:
+        """Blokkens start og slut i minutter frem, til attributterne."""
+        window = self._charge_window()
+        return (None, None) if window is None else (window[0], window[1])
+
+    def _charge_window(self) -> tuple[int, int] | None:
+        """Blokkens start og slut som minutter frem, til plan-tabellen."""
+        slots = self.charge_plan.slots()
+        if slots is None:
+            return None
+        now = time.time()
+        starts, ends = slots
+        return int((starts - now) / 60), int((ends - now) / 60)
+
     def _vessel_kw(
         self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None
     ) -> float | None:
@@ -1293,6 +1358,11 @@ class Varmeopt:
             self.store.save(STANDBY_FILE, self.standby.to_raw())
             self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
+            self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
+            # Vagtens binding. Den blev aldrig gemt, saa opholdstiden
+            # overlevede ikke en genstart og loglinjen "vagten genoptager
+            # binding" kunne aldrig udloeses.
+            self.store.save(GUARD_FILE, self.guard.to_raw())
             self.store.save(
                 COMPARE_FILE,
                 {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
@@ -1373,6 +1443,7 @@ async def run() -> None:
         app.charge_rate = ChargeRate.from_raw(
             store.load(CAPACITY_FILE, {}), options.hp_charge_kw
         )
+        app.charge_plan = ChargePlan.from_raw(store.load(CHARGE_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
         if app.house_load.curve.point_count:
             log.info(

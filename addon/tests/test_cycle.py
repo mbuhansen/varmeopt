@@ -406,6 +406,43 @@ class CycleTest(unittest.TestCase):
             self.app._vessel_kw(True, True, 55.0), o.vvb_kw_hot + o.spa_kw, places=6
         )
 
+    def test_the_guard_binding_is_actually_written_to_disk(self):
+        # ``to_raw`` blev aldrig kaldt, saa guard.json opstod aldrig,
+        # ``restore`` var altid en no-op, og opholdstiden overlevede ikke en
+        # genstart. Testene proevede to_raw og restore mod hinanden og
+        # opdagede det ikke - samme faelde som nedbruddet i 0.38.0.
+        from varmeopt.migrate import GUARD_FILE
+
+        self.cycle()
+        self.app.save()
+
+        self.assertTrue(self.app.store.exists(GUARD_FILE))
+
+    def test_the_charge_block_is_written_too(self):
+        from varmeopt.migrate import CHARGE_FILE
+
+        self.cycle()
+        self.app.save()
+
+        self.assertTrue(self.app.store.exists(CHARGE_FILE))
+
+    def test_a_missing_hot_water_flag_falls_back_to_the_setpoint(self):
+        # Falder udgangen ud, er det raa flag None. Uden en bagstopper bliver
+        # et bad paa op til 8 kW bogfoert som husets forbrug og laert varigt
+        # ind i kurven. Varmekurven genkender setpunktet; det skal
+        # husforbrugsmaalingen ogsaa.
+        o = self.app.options
+        self.ha._states.pop(o.entity_dhw_active, None)
+        self.ha._states[o.entity_flow_temp] = State(
+            o.entity_flow_temp, "56.0", {}, "flow-dhw"
+        )
+
+        self.cycle()
+
+        # Udgangen svarer ikke, men setpunktet siger varmt vand - og saa er
+        # det den kendsgerning baade varmekurven og lagermaalingen bruger.
+        self.assertIn("varmt vand", self.app.status["mode"])
+
     # -------------------------------------------- husets forbrug uden maaler
 
     def test_the_store_answers_when_the_flow_meter_cannot(self):

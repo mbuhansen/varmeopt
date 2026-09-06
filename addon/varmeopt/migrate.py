@@ -23,6 +23,7 @@ SOLAR_FILE = "solar.json"
 STANDBY_FILE = "standby.json"
 HOUSE_LOAD_FILE = "house_load.json"
 CAPACITY_FILE = "capacity.json"
+CHARGE_FILE = "charge.json"
 COMPARE_FILE = "compare.json"
 GUARD_FILE = "guard.json"
 

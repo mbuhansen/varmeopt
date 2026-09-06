@@ -195,6 +195,36 @@ class BufferTest(unittest.TestCase):
         self.assertIsNone(blind.charge_percent)
 
 
+
+class SensorGuardTest(unittest.TestCase):
+    """Hvilket tal der kan bruges til at opdage en død føler."""
+
+    def test_the_layer_count_does_not_notice_one_dead_sensor(self):
+        # ``layers`` interpolerer det manglende lag og giver stadig tre, saa
+        # ``sensor_count`` staar stille. Det er rigtigt til energiregnskabet
+        # og ubrugeligt som vagt.
+        whole = Buffer((Tank("A", 500.0, 60.0, 50.0, 40.0),), 30.0, 60.0)
+        dead = Buffer((Tank("A", 500.0, 60.0, 50.0, None),), 30.0, 60.0)
+
+        self.assertEqual(whole.sensor_count, dead.sensor_count)
+
+    def test_but_the_lost_count_does(self):
+        whole = Buffer((Tank("A", 500.0, 60.0, 50.0, 40.0),), 30.0, 60.0)
+        dead = Buffer((Tank("A", 500.0, 60.0, 50.0, None),), 30.0, 60.0)
+
+        self.assertEqual(whole.sensors_lost, 0)
+        self.assertEqual(dead.sensors_lost, 1)
+
+    def test_and_the_energy_really_does_jump(self):
+        # Det er derfor det betyder noget: naar foeleren falder ud, hopper
+        # energien - og en haeldning over vinduet ville laese det som et
+        # forbrug paa flere kW og laere det ind i kurven.
+        whole = Buffer((Tank("A", 500.0, 60.0, 50.0, 30.0),), 30.0, 60.0)
+        dead = Buffer((Tank("A", 500.0, 60.0, 50.0, None),), 30.0, 60.0)
+
+        self.assertGreater(abs(dead.heat_kwh - whole.heat_kwh), 1.5)
+
+
 if __name__ == "__main__":
     unittest.main()
 

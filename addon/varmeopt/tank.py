@@ -223,6 +223,50 @@ class Buffer:
         """
         return sum(t.stored_kwh(above) for t in self.measured)
 
+    def energy_to_reach(self, kwh_above: float, temp: float) -> float:
+        """Hvor meget der skal *ind*, før lageret kan levere ved den temperatur.
+
+        Det her er forskellen mellem at måle og at lade. ``usable_kwh`` siger
+        hvad der står klar over 55 °C; det her siger hvad det koster at få
+        noget til at stå der.
+
+        Regnestykket har to led, og det andet blev glemt. Vil man have 6 kWh
+        stående over 55 °C i et lager der er 45, skal man både betale løftet
+        fra 45 til 55 *og* de 6 kWh ovenpå. Den 6. september stod tankene på
+        45/45/43 og 47/39/31, og planen sagde «lad 6,0 kWh til varmt vand» —
+        men 6 kWh hæver de 1000 L omkring fem grader og efterlader stadig
+        nul over 55. Det rigtige tal er over tyve.
+
+        Lagene tages oppefra og ned, tank for tank, fordi det er sådan
+        anlægget lader: solvarmen kommer ind i bunden af tank ét, og
+        afspærringsventilen til tank to åbner først når tank ét er varm i
+        toppen. Et lag kan kun bære ``loft − temperatur`` over grænsen, så
+        når de øverste lag er fyldt, må de næste med — og et lager med et
+        loft på 60 °C kan i alt kun holde få kilowatt-timer over 55.
+        Rækker det ikke, er svaret det det koster at fylde helt op, og så
+        er det pladsen der binder frem for regnestykket.
+        """
+        missing = kwh_above - self.usable_kwh(temp)
+        if missing <= 0:
+            return 0.0
+
+        total = 0.0
+        for tank in self.measured:
+            per = tank._liters_per_layer * WH_PER_LITER_K / 1000
+            room_above = per * max(0.0, self.ceiling - temp)
+            for layer in tank.layers:
+                if layer >= temp:
+                    # Laget er allerede over graensen; det er talt med i
+                    # ``usable_kwh`` og skal ikke betales igen.
+                    continue
+                lift = per * (temp - layer)
+                take = min(missing, room_above)
+                total += lift + take
+                missing -= take
+                if missing <= 0:
+                    return total
+        return total
+
     @property
     def headroom_kwh(self) -> float:
         """Hvor meget varmepumpen kan nå at tilføre, før den løber tør for løft."""

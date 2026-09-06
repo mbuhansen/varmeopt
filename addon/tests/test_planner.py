@@ -197,101 +197,31 @@ class DecideTest(unittest.TestCase):
 
 
 class ChargingSlotsTest(unittest.TestCase):
-    """«Lad op» ud for de halvtimer opladningen ventes at ligge i.
+    """«Lad op» ud for blokkens egne halvtimer.
 
-    Planlæggeren har ingen tidsplan — den svarer «nu?» hvert minut. Men den
-    venter systematisk på den billigste halvtime inden toppen, så der *er* en
-    underforstået plan, og den skal kunne læses inden styringen kobles til.
-    """
-
-    # Billigt i fire halvtimer midt i vinduet, dyrt fra slot 9.
-    RATES = [90, 90, 90, 90, 35, 35, 35, 35, 90, 155, 155, 155]
-
-    def project(self, planned_kwh, target=270):
-        p = planner(charge_kw=16.0)
-        return p.project(
-            plan(*self.RATES), cop_now=4.5, target_minutes=target,
-            planned_kwh=planned_kwh,
-        )
-
-    def marked(self, rows):
-        return [r.minutes for r in rows if r.charging]
-
-    def test_only_as_many_slots_as_the_charge_takes(self):
-        # 12 kWh ved 16 kW er 45 minutter: to halvtimer, ikke fire.
-        self.assertEqual(len(self.marked(self.project(12.0))), 2)
-
-    def test_and_they_are_the_cheapest_ones(self):
-        # De billige halvtimer ligger paa 120-210 min.
-        self.assertEqual(self.marked(self.project(12.0)), [120, 150])
-
-    def test_a_bigger_charge_spills_into_the_next_cheapest(self):
-        # 40 kWh er 2,5 time: de fire billige raekker ikke, saa den billigste
-        # af resten kommer med.
-        marked = self.marked(self.project(40.0))
-
-        self.assertEqual(len(marked), 5)
-        self.assertTrue({120, 150, 180, 210}.issubset(set(marked)))
-
-    def test_nothing_is_marked_after_the_target(self):
-        for minutes in self.marked(self.project(40.0)):
-            self.assertLess(minutes, 270)
-
-    def test_the_marks_disappear_as_the_store_fills(self):
-        # Det er hele pointen: markeringen regnes forfra hvert minut ud fra
-        # hvor meget der stadig mangler. Bliver lageret fuldt hurtigere end
-        # ventet, falder maerkerne af sig selv.
-        many = len(self.marked(self.project(40.0)))
-        few = len(self.marked(self.project(8.0)))
-
-        self.assertGreater(many, few)
-        self.assertEqual(few, 1)
-
-    def test_nothing_planned_marks_nothing(self):
-        self.assertEqual(self.marked(self.project(None)), [])
-        self.assertEqual(self.marked(self.project(0.0)), [])
-
-    def test_without_a_target_there_is_no_window_to_fill(self):
-        self.assertEqual(self.marked(self.project(40.0, target=None)), [])
-
-
-class SlowerThanTheNameplateTest(unittest.TestCase):
-    """Pumpen bestemmer selv: 16 kW paa papiret, omkring 12 i praksis.
-
-    Raten staar fire steder i planlaegningen, og de traekker alle samme vej.
-    Saettes den for hoejt, tror planlaeggeren at den har bedre tid end den
-    har - og de dage hvor det gaelder, er netop dem hvor et billigt vindue
-    skal udnyttes inden en dyr aften.
+    Her stod et gaet: de N billigste halvtimer inden toppen, rekonstrueret af
+    maengden og pumpens ydelse. Nu laegger ``charge.py`` blokken, og tabellen
+    tegner den - saa det den viser, er den plan der faktisk koeres.
     """
 
     RATES = [90, 90, 90, 90, 35, 35, 35, 35, 90, 155, 155, 155]
 
-    def marks(self, charge_kw, planned_kwh=40.0):
-        rows = planner(charge_kw=charge_kw).project(
-            plan(*self.RATES), cop_now=4.5, target_minutes=270,
-            planned_kwh=planned_kwh,
+    def marked(self, window):
+        rows = planner().project(
+            plan(*self.RATES), cop_now=4.5, target_minutes=270, charge_window=window
         )
         return [r.minutes for r in rows if r.charging]
 
-    def test_a_slower_pump_needs_more_half_hours(self):
-        # 40 kWh er 2,5 time ved 16 kW og 3,3 ved 12. Troede den paa
-        # typeskiltet, ville den saette to maerker for lidt og starte for
-        # sent til at naa det.
-        self.assertEqual(len(self.marks(16.0)), 5)
-        self.assertEqual(len(self.marks(12.0)), 7)
+    def test_the_blocks_own_half_hours_are_marked(self):
+        # Blokken ligger 120-210 minutter frem: tre halvtimer.
+        self.assertEqual(self.marked((120, 210)), [120, 150, 180])
 
-    def test_and_it_can_fit_less_before_the_price_rises(self):
-        # Pladsen er der, men tiden er ikke: en halv time ved 12 kW er 6 kWh,
-        # ikke 8.
-        fast = planner(charge_kw=16.0).decide(
-            plan(40, 240), cop_now=4.0, headroom_kwh=40, stored_kwh=0.0
-        )
-        slow = planner(charge_kw=12.0).decide(
-            plan(40, 240), cop_now=4.0, headroom_kwh=40, stored_kwh=0.0
-        )
+    def test_a_block_that_starts_now_marks_the_row_we_stand_in(self):
+        self.assertIn(0, self.marked((0, 45)))
 
-        self.assertAlmostEqual(fast.charge_kwh, 8.0, places=6)
-        self.assertAlmostEqual(slow.charge_kwh, 6.0, places=6)
+    def test_no_block_marks_nothing(self):
+        self.assertEqual(self.marked(None), [])
+        self.assertEqual(self.marked((120, 120)), [])
 
 
 class WaitingStillHasAnIntentTest(unittest.TestCase):
@@ -307,6 +237,64 @@ class WaitingStillHasAnIntentTest(unittest.TestCase):
         self.assertIn("venter", d.reason)
         self.assertIsNotNone(d.planned_kwh)
         self.assertGreater(d.planned_kwh, 0)
+
+
+class ExportWindowTest(unittest.TestCase):
+    """Hele det dyre vindue skal daekkes, ikke kun toppen.
+
+    Formaalet med at lade op i forvejen er at holde varmepumpen ude af
+    eksportvinduet: koerer den mens der saelges til 1,57 kr/kWh, er det tabt
+    indtjening. Og koden har ingen «koer ikke»-udgang - kildevalget kan kun
+    vaelge mellem varmepumpe og pillefyr, og ved 1,57 vinder varmepumpen. Den
+    eneste vej udenom er et lager der raekker hele vinduet igennem.
+    """
+
+    # Billigt nu, 1,20 i to halvtimer, saa 1,57 i fire. Det dyre begynder
+    # altsaa 60 minutter frem og varer tre timer.
+    RATES = (37, 37, 120, 120, 157, 157, 157, 157, 37)
+
+    def window(self):
+        p = planner()
+        pl = plan(*self.RATES)
+        vp_now = p.heat_price(0.37, 4.5)
+        return p._dear_window(pl, vp_now, 4.5, None)
+
+    def test_it_begins_where_it_gets_dear_not_where_it_is_dearest(self):
+        # Her stod ``best_when`` - den dyreste halvtime - som startpunkt, og
+        # saa blev spaendet to timer i stedet for tre. Lageret blev ladet til
+        # to, toemt fra den foerste dyre time, og loeb toert midt i den
+        # dyreste eksport. Saa starter UVR'en pumpen selv.
+        starts, span = self.window()
+
+        self.assertEqual(starts, 60)
+        self.assertEqual(span, 180)
+
+    def test_a_single_cheap_half_hour_does_not_split_the_window(self):
+        # Huset traekker videre af lageret i den billige halvtime, saa
+        # vinduet er ét vindue.
+        p = planner()
+        pl = plan(37, 157, 157, 37, 157, 157, 37)
+        vp_now = p.heat_price(0.37, 4.5)
+
+        starts, span = p._dear_window(pl, vp_now, 4.5, None)
+
+        self.assertEqual(starts, 30)
+        self.assertEqual(span, 150)
+
+    def test_the_amount_is_sized_to_the_whole_window(self):
+        # Tre timers vindue ved 2 kW husforbrug er 6 kWh fortraengt varme -
+        # ikke de 4 to timer ville give.
+        d = planner().decide(
+            plan(*self.RATES),
+            cop_now=4.5,
+            cop_later=4.5,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertGreaterEqual(d.charge_kwh, 6.0)
 
 
 class SolarRoomTest(unittest.TestCase):
@@ -383,17 +371,20 @@ class SixthOfSeptemberTest(unittest.TestCase):
             peak_ceiling=90.0,
         )
 
-    def decide(self, buf, dhw_kwh):
-        # 0,37 kr/kWh nu mod 1,57 om aftenen, COP 4,47 som den var.
+    def decide(self, buf, dhw_kwh, rates=(37, 37, 37, 37, 37, 37, 157, 157, 157)):
+        # 0,37 kr/kWh formiddagen igennem mod 1,57 om aftenen, COP 4,47 som
+        # den var. Der er timer at lade i inden prisen stiger - det var der
+        # ogsaa den 6. september.
         return planner().decide(
-            plan(37, 157, 157, 157),
+            plan(*rates),
             cop_now=4.47,
             cop_later=4.47,
             headroom_kwh=buf.headroom_kwh,
             peak_headroom_kwh=buf.peak_headroom_kwh,
             stored_kwh=buf.stored_kwh,
             hot_kwh=buf.usable_kwh(55.0),
-            dhw_kwh_over=lambda hours: dhw_kwh,
+            dhw_kwh_over=lambda start_min, hours: dhw_kwh,
+            dhw_input_for=lambda kwh: buf.energy_to_reach(kwh, 55.0),
             demand_kw=0.37,
         )
 
@@ -412,6 +403,21 @@ class SixthOfSeptemberTest(unittest.TestCase):
 
         self.assertTrue(d.charge, d.reason)
         self.assertIn("til varmt vand", d.reason)
+        # Og maengden skal vaere den der faktisk giver 6 kWh over 55 grader.
+        # 6 kWh ind haever lageret fem grader og efterlader nul deroppe; det
+        # rigtige tal er hele pladsen.
+        self.assertGreater(d.charge_kwh, 15.0)
+
+    def test_it_says_so_when_it_cannot_cover_the_window(self):
+        # Bliver det dyrt om en halv time, er der kun tid til 8 kWh. Saa
+        # daekker opladningen ikke vinduet, og det skal staa der frem for at
+        # maengden bare bliver kappet.
+        morning = self.buffer((45.0, 45.0, 43.0), (47.0, 39.0, 31.0))
+
+        d = self.decide(morning, dhw_kwh=6.0, rates=(37, 157, 157, 157))
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertIn("daekker ikke vinduet", d.reason)
 
     def test_after_the_charge_the_tanks_are_simply_full(self):
         # Brugerens egen opladning kl. 15 gav 33,7 kWh i lageret, hvoraf

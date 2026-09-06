@@ -35,6 +35,11 @@ DEFAULT_HORIZON_MINUTES = 12 * 60
 
 SLOT_MINUTES = 30
 
+# Saa lang en billig pause maa der vaere midt i et dyrt vindue, foer det
+# taeller som to vinduer. Huset traekker videre af lageret i pausen, saa en
+# enkelt halvtime deler ikke en aften i to.
+MAX_GAP_IN_WINDOW = 60
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -49,6 +54,9 @@ class Decision:
     # er hvad der lades *nu*; det her er hensigten, og det er den planen
     # tegner "lad op" efter.
     planned_kwh: float | None = None
+    # Hvor mange minutter der er til det *bliver* dyrt - ikke til det er
+    # dyrest. Det er den frist en opladning skal vaere faerdig inden.
+    window_starts_in: int | None = None
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
@@ -216,6 +224,7 @@ class Planner:
         stored_kwh: float | None = None,
         hot_kwh: float | None = None,
         dhw_kwh_over: Any = None,
+        dhw_input_for: Any = None,
         solar_expected_kwh: float | None = None,
         grid: Any = None,
         demand_kw: float | None = None,
@@ -321,10 +330,12 @@ class Planner:
         # Varmt vand og spa over det samme spaend. Doegnprofilen ved hvornaar
         # de koerer; her spoerges den bare om de timer der er dyre.
         dhw_kwh = None
-        if dhw_kwh_over is not None:
-            span = self._dear_span(plan, best_when, vp_now, cop_now, cop_later)
-            if span > 0:
-                dhw_kwh = dhw_kwh_over(span / 60)
+        starts, span = self._dear_window(plan, vp_now, cop_now, cop_later)
+        if dhw_kwh_over is not None and span > 0:
+            # Profilen skal laeses over *vinduet*, ikke fra nu. Lades der kl.
+            # 11 mod en eksport kl. 18-20, er det de to timers varmtvand der
+            # skal daekkes - ikke de naeste to timers.
+            dhw_kwh = dhw_kwh_over(starts, span / 60)
 
         # Og kun den del af den varme der ikke allerede staar i tankene. Den
         # varme er lavet og betalt, og den bliver brugt foerst.
@@ -340,7 +351,7 @@ class Planner:
         driver = ""
         if displaced is not None:
             need, told, driver = self._shortfall(
-                displaced, stored_kwh, hot_kwh, dhw_kwh
+                displaced, stored_kwh, hot_kwh, dhw_kwh, dhw_input_for
             )
             if need <= 0:
                 return _with(
@@ -374,6 +385,7 @@ class Planner:
                 decision,
                 planned_kwh=want,
                 window_minutes=best_when,
+                window_starts_in=starts or best_when,
                 reason=(
                     f"{why}; venter - om {when} min koster varmen {price:.2f} "
                     f"mod {vp_now:.2f} nu, og der er stadig tid inden toppen "
@@ -387,16 +399,26 @@ class Planner:
         # pillefyret.
         saving = margin * (want if need is None else min(want, need))
 
+        # Raekker det ikke hele vejen, skal det staa der. Her blev maengden
+        # kappet i stilhed af pladsen eller af tiden inden prisen stiger, og
+        # saa saa en halv loesning ud som en hel: lageret loeber toert midt i
+        # det dyre vindue, og UVR'en starter varmepumpen selv - praecis det
+        # opladningen var sat i verden for at undgaa.
+        shortfall = ""
+        if need is not None and want + 0.05 < need:
+            shortfall = f" — daekker ikke vinduet, mangler {need - want:.1f} kWh"
+
         return _with(
             decision,
             charge=True,
             charge_kwh=want,
             planned_kwh=want,
+            window_starts_in=starts or best_when,
             saving_kr=saving,
             window_minutes=best_when,
             reason=(
                 f"{why}; lad {want:.1f} kWh{driver} nu og spar {saving:.2f} kr "
-                f"mod om {best_when} min"
+                f"mod om {best_when} min{shortfall}"
             ),
         )
 
@@ -431,6 +453,7 @@ class Planner:
         stored_kwh: float | None,
         hot_kwh: float | None,
         dhw_kwh: float | None,
+        dhw_input_for: Any = None,
     ) -> tuple[float, str, str]:
         """Hvor meget lageret mangler — talt ved hver sin temperatur.
 
@@ -450,7 +473,19 @@ class Planner:
         # er nul det eneste aerlige - men saa siger begrundelsen det ogsaa.
         dhw = dhw_kwh if _finite(dhw_kwh) else 0.0
 
-        dhw_short = max(0.0, dhw - hot)
+        # Varmtvandets underskud maales over 55 grader, men det der skal
+        # lades, er energi *ind i* lageret - og de to er ikke det samme tal.
+        # Vil man have 6 kWh staaende over 55 i et lager paa 45, skal man
+        # baade betale loeftet fra 45 til 55 og de 6 kWh ovenpaa. Her stod
+        # forskellen, og opladningen blev derfor systematisk for lille
+        # praecis naar varmt vand var det der drev den.
+        missing = max(0.0, dhw - hot)
+        if missing <= 0:
+            dhw_short = 0.0
+        elif dhw_input_for is not None:
+            dhw_short = max(missing, dhw_input_for(dhw))
+        else:
+            dhw_short = missing
         # Den varme del taeller med i den lune: bruges den til bad, er den
         # ikke ogsaa til raadighed for gulvet.
         space_have = max(0.0, warm - min(dhw, hot))
@@ -492,35 +527,53 @@ class Planner:
         """
         if not _finite(demand_kw) or demand_kw <= 0:
             return None
-        return demand_kw * self._dear_span(plan, best_when, vp_now, cop_now, cop_later) / 60
+        _, span = self._dear_window(plan, vp_now, cop_now, cop_later)
+        return demand_kw * span / 60
 
-    def _dear_span(
+    def _dear_window(
         self,
         plan: Any,
-        best_when: int,
         vp_now: float,
         cop_now: Any,
         cop_later: Any,
-    ) -> int:
-        """Hvor mange minutter varmen bliver ved med at være dyrere end nu.
+    ) -> tuple[int, int]:
+        """Hvornår bliver det dyrt, og hvor længe bliver det ved?
 
-        Det er det vindue baade huset og varmtvandet skal daekkes over, saa
-        det regnes ét sted og bruges to.
+        Returnerer (minutter frem til det bliver dyrt, vinduets længde).
+
+        Her stod ``best_when`` som startpunkt, altså den *dyreste* halvtime —
+        og det er ikke der det bliver dyrt, det er der det er dyrest. Med
+        eksport til 1,20 kl. 17-18 og 1,57 kl. 18-20 begyndte spændet kl. 18
+        og blev to timer i stedet for tre. Lageret blev ladet til to timer,
+        tømt fra sytten, og løb tørt omkring nitten — midt i den dyreste
+        eksport. Så starter UVR'en varmepumpen selv, og hele øvelsen er
+        spildt: strømmen sælges til 1,57 samtidig med at den bruges.
+
+        En enkelt billig halvtime midt i et vindue afslutter det heller ikke.
+        Huset trækker jo videre af lageret i den, og et eksportvindue delt af
+        en halv time blev ellers halveret.
         """
-        minutes = best_when
-        span = 0
-        while minutes <= self.horizon_minutes:
+        first = last = None
+        gap = 0
+        for minutes in range(SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
-            if heat <= vp_now:
-                break
-            span += SLOT_MINUTES
-            minutes += SLOT_MINUTES
-        return span
+            if heat > vp_now:
+                if first is None:
+                    first = minutes
+                last = minutes
+                gap = 0
+            elif first is not None:
+                gap += SLOT_MINUTES
+                if gap > MAX_GAP_IN_WINDOW:
+                    break
+        if first is None or last is None:
+            return 0, 0
+        return first, last - first + SLOT_MINUTES
 
 
     # ------------------------------------------------------------ fremskrivning
@@ -532,7 +585,7 @@ class Planner:
         cop_later: Any = None,
         target_minutes: int | None = None,
         grid: Any = None,
-        planned_kwh: float | None = None,
+        charge_window: tuple[int, int] | None = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
 
@@ -571,45 +624,29 @@ class Planner:
                     target=target_minutes is not None and minutes == target_minutes,
                 )
             )
-        return self._mark_charging(rows, target_minutes, planned_kwh)
+        return self._mark_charging(rows, charge_window)
 
     def _mark_charging(
         self,
         rows: list[Projection],
-        target_minutes: int | None,
-        planned_kwh: float | None,
+        charge_window: tuple[int, int] | None,
     ) -> list[Projection]:
-        """Saet «lad op» paa de halvtimer opladningen ventes at ligge i.
+        """Sæt «lad op» på blokkens egne halvtimer.
 
-        Planlæggeren har ingen tidsplan — den svarer på ét spørgsmål hvert
-        minut: skal pumpen lade op *nu*? Men den venter systematisk på den
-        billigste halvtime inden toppen, og dermed *er* der en underforstået
-        plan. Den skrives her ud, så den kan læses inden styringen kobles til.
-
-        Reglen er kodens egen: de billigste halvtimer inden toppen, og kun så
-        mange som opladningen tager ved pumpens ydelse. Bliver lageret fuldt
-        hurtigere end ventet, falder ``planned_kwh`` af sig selv næste minut,
-        og mærkerne forsvinder med den. Det er en hensigt, ikke et løfte.
+        Her stod et gæt: de N billigste halvtimer inden toppen, rekonstrueret
+        af mængden og pumpens ydelse. Nu findes den rigtige liste — blokken
+        er lagt, og den her tegner den. Samme tekst, men det er ikke længere
+        en hensigt der genskabes, det er den plan der faktisk køres.
         """
-        if not rows or target_minutes is None or not _finite(planned_kwh):
+        if not rows or charge_window is None:
             return rows
-        if planned_kwh <= 0 or self.charge_kw <= 0:
+        starts, ends = charge_window
+        if ends <= starts:
             return rows
-
-        hours = planned_kwh / self.charge_kw
-        slots = max(1, math.ceil(hours * 60 / SLOT_MINUTES))
-        before = [
-            row
-            for row in rows
-            if row.minutes < target_minutes and row.heat_price is not None
-        ]
-        if not before:
-            return rows
-
-        cheapest = sorted(before, key=lambda r: (r.heat_price, r.minutes))[:slots]
-        chosen = {row.minutes for row in cheapest}
         return [
-            replace(row, charging=True) if row.minutes in chosen else row
+            replace(row, charging=True)
+            if starts - SLOT_MINUTES < row.minutes < ends
+            else row
             for row in rows
         ]
 
