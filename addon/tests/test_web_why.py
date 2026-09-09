@@ -171,11 +171,10 @@ class PlanTableTest(unittest.TestCase):
 
         self.assertIn(">net</span> ·", html)
 
-    def test_a_battery_row_that_must_be_bought_back_says_both(self):
-        # Predbat staar paa demand og inverteren leverer, saa stroemmen
-        # kommer fra batteriet - det er hvad raekken skal sige. At den saa
-        # koster importprisen i bunden, er en anden oplysning, og den hoerer
-        # ogsaa til: uden den ser 2,23 kr ud som en fejl.
+    def test_a_plain_row_says_the_source_and_nothing_else(self):
+        # Ét ord. Begrundelsen kan vaere en anden - stroemmen kommer fra
+        # batteriet og er dyr fordi den skal koebes tilbage - men den hoerer
+        # i fejlsoegningsfilen. Kolonnen skal kunne skimmes.
         html = self.html([
             self.row(),
             self.row(
@@ -187,15 +186,8 @@ class PlanTableTest(unittest.TestCase):
             ),
         ])
 
-        self.assertIn("batteri · koebes tilbage", html)
-
-    def test_a_row_where_the_two_agree_says_the_word_once(self):
-        html = self.html([
-            self.row(),
-            self.row(minutes=30, power="batteri", reason="batteri"),
-        ])
-
-        self.assertNotIn("batteri · batteri", html)
+        self.assertIn('<td class="why">batteri</td>', html)
+        self.assertNotIn("koebes tilbage", html)
 
     def test_a_row_without_a_plan_state_leaves_a_dash(self):
         html = self.html([self.row(state="", soc_percent=None)])

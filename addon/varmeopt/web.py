@@ -427,17 +427,14 @@ class WebUI:
                 # hvorfor der lades.
                 why = f"{row.power} · dyreste time, der regnes herimod"
             else:
-                # Kilden alene - medmindre begrundelsen siger noget andet.
-                # En halvtime hvor stroemmen kommer fra batteriet og er dyr
-                # fordi den skal saelges, eller fordi den skal koebes tilbage
-                # naar planen naar bunden, fortaeller ikke sin historie med
-                # ét ord. Saa staar begge: hvor stroemmen kommer fra, og
-                # hvorfor den koster det den koster.
-                why = (
-                    row.power
-                    if row.reason == row.power
-                    else f"{row.power} · {row.reason}"
-                )
+                # Kilden, og kun den. Her stod et forsoeg paa at skrive
+                # begrundelsen med - "batteri · koebes tilbage" - saa en dyr
+                # batteriraekke kunne forklare sig selv. Men en raekke der
+                # skal laeses, er en raekke der ikke bliver skimmet, og
+                # kolonnen skal kunne skimmes: hvor kommer stroemmen fra.
+                # Prisen staar ved siden af og siger resten; hele
+                # regnestykket staar i fejlsoegningsfilen.
+                why = row.power
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
             width = max(2.0, 100 * row.electricity / top)
             colour = _SOURCE_INK["varmepumpe" if row.source == "varmepumpe" else "pillefyr"]
