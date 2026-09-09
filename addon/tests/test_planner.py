@@ -6,12 +6,12 @@ from varmeopt.prices import Plan
 PELLET = 0.706
 
 
-def plan(*rates, battery_average=1.0):
+def plan(*rates):
     """En plan hvor batteriet er bundet, saa importprisen gaelder direkte."""
     rows = [
         {"state": "holdchrg", "import_rate": rate, "export_rate": 50} for rate in rates
     ]
-    return Plan.from_predbat({"raw": {"rows": rows}}, battery_average=battery_average)
+    return Plan.from_predbat({"raw": {"rows": rows}})
 
 
 def planner(**over):

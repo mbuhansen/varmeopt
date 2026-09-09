@@ -3,11 +3,12 @@
 Tabellen er indlært på det kørende anlæg og indekseret som
 ``table[fremløbstemperatur][udetemperatur] -> Cell``, begge i hele grader.
 
-Node-RED-udgaven havde en fejl her: alle interpolerede opslag returnerede
-``count: 0``, hvorfor både ``count >= 5``- og ``count > 0``-grenene fejlede og
-opslaget faldt tilbage på TA-kurven. Kun eksakte celletræf blev reelt brugt.
-Denne udgave fører et *effektivt* målingsantal med gennem interpolationen, så
-en interpoleret værdi vejer efter hvor godt de celler den kom fra er belagt.
+Den udgave tabellen kom fra havde en fejl her: alle interpolerede opslag
+returnerede ``count: 0``, hvorfor både ``count >= 5``- og ``count > 0``-grenene
+fejlede og opslaget faldt tilbage på TA-kurven. Kun eksakte celletræf blev
+reelt brugt. Denne udgave fører et *effektivt* målingsantal med gennem
+interpolationen, så en interpoleret værdi vejer efter hvor godt de celler den
+kom fra er belagt.
 """
 
 from __future__ import annotations
@@ -259,28 +260,6 @@ class CopTable:
         return f"F{f}/U{u} = {row[u].cop:.2f} (n={count:.0f})"
 
     # ----------------------------------------------------------------- opslag
-
-    def nodered_lookup(self, flow: float, outdoor: float) -> float:
-        """Genskab Node-REDs opslag — fejlen inklusive.
-
-        Ikke for at gøre nar. Skal de to udgaver sammenlignes mod anlæggets
-        egen måling, må modparten være den rigtige og ikke en stråmand: hvor
-        Node-RED faktisk rammer en celle eksakt, bruger den den lærte værdi,
-        og der er den lige så god som os.
-
-        Fejlen er at ``getLearnedCop()`` sætter ``count: 0`` på alt den
-        interpolerer, hvorved begge tillidsgrene fejler og opslaget falder
-        tilbage på fabrikkens kurve. Her efterlignes det ved kun at slå op i
-        den eksakte celle — for det er reelt alt hvad den udgave bruger.
-        """
-        curve = ta_curve_cop(flow, outdoor)
-        cell = self.row(round(flow)).get(round(outdoor))
-        if cell is None or cell.count <= 0:
-            return curve
-        if cell.count >= FULL_TRUST_COUNT:
-            return cell.cop
-        weight = cell.count / FULL_TRUST_COUNT
-        return curve * (1 - weight) + cell.cop * weight
 
     def lookup(self, flow: float, outdoor: float) -> Lookup:
         curve = ta_curve_cop(flow, outdoor)

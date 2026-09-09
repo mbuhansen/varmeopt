@@ -19,7 +19,7 @@ from varmeopt.planner import Planner
 from varmeopt.prices import Grid, Plan
 from varmeopt.store import Store
 
-from tests.test_cycle import COP, FLOW, FakeHa, FakeNodeRed, options
+from tests.test_cycle import COP, FLOW, OUT, FakeHa, options
 from varmeopt.ha import State
 
 PELLET = 0.706
@@ -29,6 +29,9 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
     """Beslutningen skal bruge den samme pris som sensoren viser."""
 
     def setUp(self):
+        # Nu koster nettet 3,50; om en halv time er der import til 0,67, og
+        # det er den pris batteriets energi skal laegges tilbage til - 0,67 /
+        # 0,832 = 0,80 leveret.
         self.plan = Plan.from_predbat(
             {
                 "raw": {
@@ -38,17 +41,22 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
                             "import_rate": 350,
                             "export_rate": 60,
                             "soc_percent": 50,
-                        }
+                        },
+                        {
+                            "state": "",
+                            "import_rate": 67,
+                            "export_rate": 60,
+                            "soc_percent": 50,
+                        },
                     ]
                 }
             },
-            battery_average=0.80,
         )
         self.planner = Planner(pellet_price=PELLET, charge_kw=16.0)
 
     def test_the_decision_prices_now_the_same_way_the_sensor_does(self):
         # Foer rettelsen: sensoren sagde 3,50 "net: import", beslutningen
-        # regnede paa 0,80 "batteri: frit" — i samme cyklus.
+        # regnede paa batteriets 0,80 — i samme cyklus.
         grid = Grid(grid_power=9000)
 
         sensor_price = self.plan.marginal(0, grid=grid).kr_per_kwh
@@ -93,12 +101,12 @@ class ReleaseOnShutdownTest(unittest.TestCase):
             {
                 FLOW: State(FLOW, "31.0", {}, "f"),
                 COP: State(COP, "4.4", {}, "m"),
+                OUT: State(OUT, "17.2", {}, "u"),
             }
         )
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def test_releasing_publishes_a_false_flag(self):
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
         self.ha.published.clear()
 
         asyncio.run(self.app.release_control(self.ha))
@@ -115,7 +123,7 @@ class ReleaseOnShutdownTest(unittest.TestCase):
     def test_a_failing_decision_release_still_drops_the_charge_flag(self):
         # Laa de to i samme forsoeg, ville en fejl paa det ene efterlade det
         # andet frosset - praecis den tilstand det hele er til for at undgaa.
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
         self.ha.published.clear()
         self.ha.fail_on = SENSOR_DECISION
 
@@ -126,7 +134,7 @@ class ReleaseOnShutdownTest(unittest.TestCase):
     def test_releasing_also_drops_the_guard_commitment(self):
         self.app.guard.enabled = True
         self.app.guard.warmup_minutes = 0.0
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         asyncio.run(self.app.release_control(self.ha))
 
@@ -182,13 +190,20 @@ class TimeoutTest(unittest.TestCase):
                     raise HaError("timeout")
                 return self._states.get(entity_id)
 
-        ha = FlakyHa({COP: State(COP, "4.4", {}, "m")})
+        ha = FlakyHa(
+            {
+                COP: State(COP, "4.4", {}, "m"),
+                OUT: State(OUT, "17.2", {}, "u"),
+            }
+        )
 
-        # _state fanger HaError og giver None; cyklussen skal koere videre og
-        # falde tilbage paa Node-REDs flowTemp.
-        asyncio.run(app.cycle(ha, FakeNodeRed({"udeTemp": 17.2, "flowTemp": 31.0})))
+        # _state fanger HaError og giver None. Uden setpunkt er der intet at
+        # slaa op paa - men cyklussen skal koere videre og stadig udgive en
+        # beslutning i stedet for at rejse.
+        asyncio.run(app.cycle(ha))
 
-        self.assertIsNotNone(app.status["lookup"])
+        self.assertIsNone(app.status["lookup"])
+        self.assertIn(SENSOR_DECISION, dict(ha.published))
 
 
 
@@ -207,12 +222,12 @@ class PublishOrderTest(unittest.TestCase):
                 o.entity_tank_a_top: State(o.entity_tank_a_top, "55", {}, "t"),
                 o.entity_tank_a_mid: State(o.entity_tank_a_mid, "45", {}, "t"),
                 o.entity_tank_a_bottom: State(o.entity_tank_a_bottom, "35", {}, "t"),
+                OUT: State(OUT, "17.2", {}, "u"),
             }
         )
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def test_the_flag_is_published_before_everything_else(self):
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         first = self.ha.published[0][0]
         self.assertEqual(first, SENSOR_DECISION)
@@ -226,7 +241,7 @@ class PublishOrderTest(unittest.TestCase):
             raise HaError("HA svarer ikke")
 
         self.app._publish_tank = boom
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
         self.app._publish_tank = original
 
         published = dict(self.ha.published)
@@ -304,7 +319,6 @@ class StalePlanTest(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
         self.app = Varmeopt(options(), Store(tmp))
         self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def _ha_with_plan(self, age_minutes):
         o = self.app.options
@@ -313,6 +327,7 @@ class StalePlanTest(unittest.TestCase):
             {
                 FLOW: State(FLOW, "31.0", {}, "f"),
                 COP: State(COP, "4.4", {}, "m"),
+                OUT: State(OUT, "17.2", {}, "u"),
                 o.entity_predbat_plan: State(
                     o.entity_predbat_plan,
                     "ok",
@@ -326,14 +341,14 @@ class StalePlanTest(unittest.TestCase):
 
     def test_a_fresh_plan_is_used(self):
         ha = self._ha_with_plan(age_minutes=5)
-        asyncio.run(self.app.cycle(ha, self.nodered))
+        asyncio.run(self.app.cycle(ha))
 
         self.assertIsNotNone(self.app.status.get("price_now"))
 
     def test_a_stale_plan_is_dropped(self):
         # Priserne ser gyldige ud, men de er fra et andet tidspunkt.
         ha = self._ha_with_plan(age_minutes=180)
-        asyncio.run(self.app.cycle(ha, self.nodered))
+        asyncio.run(self.app.cycle(ha))
 
         self.assertIsNone(self.app.status.get("price_now"))
 
@@ -341,7 +356,7 @@ class StalePlanTest(unittest.TestCase):
         self.app.guard.enabled = True
         self.app.guard.warmup_minutes = 0.0
         ha = self._ha_with_plan(age_minutes=180)
-        asyncio.run(self.app.cycle(ha, self.nodered))
+        asyncio.run(self.app.cycle(ha))
 
         self.assertFalse(self.app.status["command"].acting)
 
@@ -373,6 +388,7 @@ class ChargeFlagTest(unittest.TestCase):
             {
                 FLOW: State(FLOW, "31.0", {}, "f"),
                 COP: State(COP, "4.4", {}, "m"),
+                OUT: State(OUT, "17.2", {}, "u"),
             }
         )
         # Uden tanke er der ingen plads at lade op i, og saa vil
@@ -385,7 +401,6 @@ class ChargeFlagTest(unittest.TestCase):
             (o.entity_tank_b_mid, 38.0), (o.entity_tank_b_bottom, 33.0),
         ):
             self.ha._states[entity] = State(entity, str(temp), {}, "t")
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def plan(self, *rates):
         entity = self.app.options.entity_predbat_plan
@@ -406,14 +421,14 @@ class ChargeFlagTest(unittest.TestCase):
     def test_it_is_off_when_there_is_nothing_to_gain(self):
         # Flad pris: intet at hente ved at flytte varmen.
         self.plan(80, 80, 80, 80)
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         self.assertEqual(self.flag(), "off")
 
     def test_it_is_on_when_the_planner_wants_to_charge(self):
         # Billigt nu, dyrt om lidt.
         self.plan(40, 40, 300, 300)
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         self.assertEqual(self.flag(), "on")
 
@@ -421,7 +436,7 @@ class ChargeFlagTest(unittest.TestCase):
         # Tilstanden er hvad planlaeggeren vil; "styrer" siger om det maa
         # foelges. De to skal aldrig kunne sige hver sit.
         self.plan(40, 40, 300, 300)
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         self.assertEqual(
             self.ha.attributes[SENSOR_CHARGE]["styrer"],
@@ -430,7 +445,7 @@ class ChargeFlagTest(unittest.TestCase):
 
     def test_the_numbers_ride_along_for_those_who_want_them(self):
         self.plan(40, 40, 300, 300)
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
         attrs = self.ha.attributes[SENSOR_CHARGE]
 
         self.assertGreater(attrs["lad_kwh"], 0)

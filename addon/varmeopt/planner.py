@@ -233,8 +233,8 @@ class Planner:
 
         ``grid`` er den fysiske strømretning. Den gælder kun indeværende
         halvtime, og den *skal* med: uden den falder prissætningen af nu-timen
-        tilbage på batteriets gennemsnit, og beslutningen ville så bruge en
-        anden pris end den sensoren viser.
+        tilbage på batteriets genanskaffelsespris, og beslutningen ville så
+        bruge en anden pris end den sensoren viser.
         """
         price_now = plan.marginal(0, grid=grid) if plan is not None else None
         now = price_now.kr_per_kwh if price_now is not None else None
@@ -277,8 +277,8 @@ class Planner:
         # Her stod intet, og saa var enhver positiv forskel nok. En margin
         # paa 0,04 kr/kWh mod en halvtime ti timer ude satte 13 kWh i
         # bevaegelse - og de 0,04 er mindre end usikkerheden paa de tal de er
-        # regnet af: batteriets snitpris, en COP fra en tabel og Predbats
-        # plan for i morgen tidlig.
+        # regnet af: batteriets genanskaffelsespris, en COP fra en tabel og
+        # Predbats plan for i morgen tidlig.
         #
         # Snittet er det samme som kildevalget bruger. Under det kan tallene
         # ikke skelne de to muligheder, og en plan der handler paa stoej,

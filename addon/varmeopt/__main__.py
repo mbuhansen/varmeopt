@@ -1,9 +1,10 @@
 """Varmeopt — hovedløkke.
 
-Fase 0: add-on'en overtager COP-læringen og gør den efterprøvelig. Den læser
-de samme temperaturer som Node-RED regner på, lærer i sin egen tabel, slår op
-med den rettede interpolation og udstiller resultatet. **Der styres intet.**
-Node-RED bliver ved med at træffe alle beslutninger indtil fase 4.
+Add-on'en er den der regner: den læser sine målinger fra Home Assistant, lærer
+i sin egen COP-tabel, slår op med den rettede interpolation og træffer valget.
+Node-RED står tilbage som den hånd der rører anlægget — den følger
+beslutningen når flaget siger ja — men den regner ikke med, og der læses
+ingenting fra den.
 """
 
 from __future__ import annotations
@@ -23,8 +24,7 @@ import aiohttp
 from . import VERSION, selfupdate
 from .capacity import ChargeRate
 from .charge import ChargePlan
-from .compare import Accuracy, Tally, normalise
-from .cop import CopTable, plausible_cop_range
+from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
 from .forecast import Forecast
@@ -35,7 +35,6 @@ from .journal import install as install_journal
 from .migrate import (
     COP_TABLE_FILE,
     CURVE_FILE,
-    COMPARE_FILE,
     CAPACITY_FILE,
     CHARGE_FILE,
     GUARD_FILE,
@@ -46,10 +45,19 @@ from .migrate import (
     load_heat_curve,
     load_solar,
 )
-from .nodered import NodeRed
 from .options import Options
 from .planner import Planner
-from .prices import DISCHARGE, EXPORT, LOCKED, Grid, Plan
+from .prices import (
+    BATTERY_LOSS,
+    BATTERY_LOSS_DISCHARGE,
+    DISCHARGE,
+    EXPORT,
+    INVERTER_LOSS,
+    LOCKED,
+    Grid,
+    Plan,
+    round_trip,
+)
 from .solar import DayTracker, SolarModel
 from .store import Store
 from .standby import StandbyTest
@@ -89,8 +97,6 @@ class Varmeopt:
         self.solar_day = DayTracker()
         self.forecast = Forecast()
         self._forecast_at: float | None = None
-        self.tally = Tally()
-        self.accuracy = Accuracy()
         self.guard = Guard(
             enabled=options.control_enabled,
             min_dwell_minutes=options.control_min_dwell_minutes,
@@ -122,6 +128,7 @@ class Varmeopt:
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
         self._warned_limit_unit = False
+        self._warned_losses = False
         self._warned_hp_cop = False
         self._hp_cop: float | None = None
         self._last_save = 0.0
@@ -129,7 +136,7 @@ class Varmeopt:
 
     # ------------------------------------------------------------------ cyklus
 
-    async def cycle(self, ha: HomeAssistant | None, nodered: NodeRed) -> None:
+    async def cycle(self, ha: HomeAssistant | None) -> None:
         flow_temp = outdoor_temp = measured_cop = measured_stamp = None
         flow_measured = hp_flow = hp_return = None
 
@@ -143,15 +150,6 @@ class Varmeopt:
             if measured is not None:
                 measured_cop = measured.as_float()
                 measured_stamp = measured.last_changed
-
-        # Flow-contexten hentes hver cyklus. Udetemperaturen kommer fra MQTT
-        # direkte ind i Node-RED og findes ikke som HA-entitet, og batteriets
-        # gennemsnitspris er regnet af Node-RED — begge dele skal vi bruge.
-        context = await nodered.flow_context()
-        if outdoor_temp is None:
-            outdoor_temp = _as_number(context.get("udeTemp"))
-        if flow_temp is None:
-            flow_temp = _as_number(context.get("flowTemp"))
 
         buffer = await self._read_tank(ha)
         # Bagstopperen er forrige cyklus' maaling. Den er hoejst et minut
@@ -236,25 +234,12 @@ class Varmeopt:
                     flow_temp, outdoor_temp, measured_cop, measured_stamp
                 )
             lookup = self.table.lookup(flow_temp, outdoor_temp)
-            # Anlaegget maaler selv sin COP. Den maaling er dommer mellem
-            # vores opslag og Node-REDs - og i modsaetning til at taelle
-            # uenigheder kraever det ikke at nogen af os har ret paa
-            # forhaand.
-            if measured_cop is not None:
-                low, high = plausible_cop_range(flow_temp, outdoor_temp)
-                if low <= measured_cop <= high:
-                    self.accuracy.observe(
-                        measured=measured_cop,
-                        ours=lookup.cop,
-                        theirs=self.table.nodered_lookup(flow_temp, outdoor_temp),
-                    )
-                    self._dirty = True
         else:
             lookup = None
             learn_note = "ignoreret: mangler temperaturdata"
 
         await self._refresh_forecast(ha)
-        prices = await self._read_prices(ha, context, lookup)
+        prices = await self._read_prices(ha, lookup)
 
         # Planlaeggeren binder pris, COP, lager og sol sammen. Den svarer
         # ogsaa uden en plan - saa er det bare kildevalget.
@@ -292,8 +277,8 @@ class Varmeopt:
             demand_kw=balance.load.kw if balance is not None else None,
         )
         # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
-        # det. Siger den nej, staar beslutningen der stadig, og Node-RED
-        # bruger sin egen logik.
+        # det. Siger den nej, staar beslutningen der stadig, men flaget
+        # siger nej, og Node-RED bruger sin egen logik.
         # Vaegurstid, ikke monoton - kun den giver mening paa tvaers af en
         # genstart, og opholdstiden skal fortsaette hvor den slap.
         # Opladningen er en blok, ikke en beslutning pr. minut. Den siger
@@ -333,8 +318,6 @@ class Varmeopt:
             decision=decision,
             command=command,
             forecast=self.forecast,
-            tally=self.tally,
-            accuracy=self.accuracy,
             projection=projection,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
@@ -399,7 +382,6 @@ class Varmeopt:
             await self._safely(
                 "opladningsflag", self._publish_charge(ha, decision, command)
             )
-            await self._safely("sammenligning", self._compare(ha, decision, balance))
 
         if lookup is not None:
             log.info(
@@ -642,6 +624,38 @@ class Varmeopt:
         unit = str(state.attributes.get("unit_of_measurement", "")).strip().lower()
         return value / 1000 if unit in ("w", "watt") else value
 
+    async def _round_trip(self, ha: HomeAssistant) -> float:
+        """Hvor stor en del af en koebt kWh der naar ud af batteriet igen.
+
+        Tabene laeses af Predbats egne indstillinger i stedet for at skrives
+        af. Saa er der ét sted de staar, og aendrer man dem dér, foelger
+        genanskaffelsesprisen med. Svarer entiteterne ikke, gaelder
+        ``prices.py``s standardvaerdier - det er et par procent, ikke en
+        anden beslutning, saa det maa ikke standse en cyklus.
+        """
+        losses: list[float] = []
+        for entity, fallback in (
+            (self.options.entity_inverter_loss, INVERTER_LOSS),
+            (self.options.entity_battery_loss, BATTERY_LOSS),
+            (self.options.entity_battery_loss_discharge, BATTERY_LOSS_DISCHARGE),
+        ):
+            value = await self._number(ha, entity) if entity else None
+            # Et tab er en broekdel, ikke en procent. Melder entiteten 4 i
+            # stedet for 0,04, ville rundturen blive negativ - og et
+            # batteri der leverer mere end det faar, er ikke en pris vi
+            # skal regne videre paa.
+            if value is None or not 0 <= value < 1:
+                if not self._warned_losses:
+                    log.warning(
+                        "kunne ikke laese Predbats tab fra %s - regner med "
+                        "add-on'ens egne tal",
+                        entity or "(ikke sat)",
+                    )
+                    self._warned_losses = True
+                value = fallback
+            losses.append(value)
+        return round_trip(*losses)
+
     async def _charge_limit(self, ha: HomeAssistant) -> float | None:
         """Predbats graense, som en ladetilstand i procent.
 
@@ -747,14 +761,9 @@ class Varmeopt:
     # ---------------------------------------------------------------- pris
 
     async def _read_prices(
-        self, ha: HomeAssistant | None, context: dict[str, Any], lookup: Any
+        self, ha: HomeAssistant | None, lookup: Any
     ) -> dict[str, Any]:
-        """Marginalprisen nu og fremad, og hvad varmen dermed koster.
-
-        Det er her add-on'en for foerste gang regner den *samme* beslutning som
-        Node-RED - men paa den rettede COP. Den styrer stadig intet; forskellen
-        mellem de to svar er praecis det fase 1 skal vurderes paa.
-        """
+        """Marginalprisen nu og fremad, og hvad varmen dermed koster."""
         if ha is None:
             return {}
 
@@ -772,10 +781,9 @@ class Varmeopt:
             )
             return {}
 
-        battery_average = _as_number(context.get("battery_avg_price")) or 0.0
         plan = Plan.from_predbat(
             state.attributes,
-            battery_average=battery_average,
+            trip=await self._round_trip(ha),
             empty_percent=self.options.battery_empty_percent,
         )
         if not len(plan):
@@ -891,41 +899,6 @@ class Varmeopt:
             attributes["billigste_vindue_pris"] = round(average, 3)
 
         await ha.set_state(SENSOR_PRICE, round(price.kr_per_kwh, 3), attributes)
-
-    async def _compare(
-        self, ha: HomeAssistant, decision: Any, balance: Balance | None
-    ) -> None:
-        """Foer regnskab over hvor tit vi er uenige med Node-RED.
-
-        Uden tallet kan man kun *se* uenighederne. Og det er taellingen der
-        afgoer om det naeste skridt er vaerd at tage: staar der to kroner om
-        maaneden paa spil, er det ikke vaerd at lade add-on'en styre.
-        """
-        state = await self._state(ha, self.options.entity_nodered_decision)
-        theirs = normalise(state.state) if state is not None else None
-        if theirs is None:
-            return
-
-        demand_kw = balance.load.kw if balance is not None else None
-        before = self.tally.disagreed
-        self.tally.observe(
-            ours=decision.source,
-            theirs=theirs,
-            heat_price=decision.heat_price,
-            pellet_price=decision.pellet_price,
-            demand_kw=demand_kw,
-            minutes=self.options.cycle_seconds / 60,
-            today=datetime.now().astimezone().strftime("%Y-%m-%d"),
-        )
-        self._dirty = True
-
-        if self.tally.disagreed > before:
-            log.info(
-                "uenig med Node-RED: vi siger %s, den siger %s | %s",
-                decision.source,
-                theirs,
-                self.tally.summary(),
-            )
 
     async def _safely(self, what: str, coro: Any) -> None:
         """Kør en udgivelse, men lad den ikke vælte de andre.
@@ -1053,15 +1026,6 @@ class Varmeopt:
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
                 "vindue_min": decision.window_minutes,
-                "enighed_pct": _round(self.tally.agreement_percent, 1),
-                "sammenlignet": round(self.tally.compared),
-                "uenige": round(self.tally.disagreed),
-                "paa_spil_kr": round(self.tally.stake_kr, 2),
-                "maalt_siden": self.tally.since,
-                "cop_traef_pct": _round(self.accuracy.ours_closer_percent, 1),
-                "cop_fejl_vores": _round(self.accuracy.ours_mean_error, 3),
-                "cop_fejl_nodered": _round(self.accuracy.theirs_mean_error, 3),
-                "cop_forbedring_pct": _round(self.accuracy.improvement_percent, 1),
             },
         )
 
@@ -1363,10 +1327,6 @@ class Varmeopt:
             # overlevede ikke en genstart og loglinjen "vagten genoptager
             # binding" kunne aldrig udloeses.
             self.store.save(GUARD_FILE, self.guard.to_raw())
-            self.store.save(
-                COMPARE_FILE,
-                {"tally": self.tally.to_raw(), "accuracy": self.accuracy.to_raw()},
-            )
             self._dirty = False
             log.debug(
                 "gemt: %d COP-celler, %d kurvepunkter",
@@ -1401,17 +1361,25 @@ async def run() -> None:
 
     async with aiohttp.ClientSession() as session:
         await _self_update_on_start(session, options)
-        nodered = NodeRed(session, options.nodered_url)
 
         try:
             ha: HomeAssistant | None = HomeAssistant(session)
         except HaError as exc:
-            # Uden HA kan vi stadig læse Node-RED og lære videre — vi kan bare
-            # ikke udstille noget. Det gør lokal afprøvning mulig.
+            # Uden HA er der ingen maalinger at laere af og intet at udstille.
+            # Add-on'en koerer videre, saa den kan proeves lokalt.
             log.warning("kører uden Home Assistant: %s", exc)
             ha = None
 
-        app.table, note = await load_cop_table(store, nodered)
+        if not options.entity_outdoor_temp:
+            # Uden udetemperatur kan hverken varmekurven eller COP-tabellen
+            # slaa op, og hver cyklus springer over. Det skal staa i loggen
+            # ved opstart og ikke opdages som en tavs raekke advarsler.
+            log.error(
+                "entity_outdoor_temp er ikke sat - uden udetemperatur kan der "
+                "hverken laeres eller slaas op, og hver cyklus springes over"
+            )
+
+        app.table, note = load_cop_table(store)
         app.status["note"] = note
         log.info(note)
 
@@ -1454,12 +1422,6 @@ async def run() -> None:
         if app.guard.committed:
             log.info("vagten genoptager binding: %s", app.guard.committed)
 
-        saved = store.load(COMPARE_FILE, {}) or {}
-        app.tally = Tally.from_raw(saved.get("tally"))
-        app.accuracy = Accuracy.from_raw(saved.get("accuracy"))
-        log.info("mod Node-RED: %s", app.tally.summary())
-        log.info("COP-traefsikkerhed: %s", app.accuracy.summary())
-
         loop = asyncio.get_running_loop()
 
         async def update() -> str:
@@ -1498,7 +1460,7 @@ async def run() -> None:
         try:
             while not stopping.is_set():
                 try:
-                    await app.cycle(ha, nodered)
+                    await app.cycle(ha)
                 except Exception:
                     # En enkelt dårlig cyklus må aldrig vælte add-on'en.
                     log.exception("cyklus fejlede")
@@ -1583,16 +1545,6 @@ def _tank_summary(buffer: Buffer) -> str:
         outlet = f" afg {tank.outlet:.0f}" if tank.outlet is not None else ""
         parts.append(f"{tank.name} {temps}°{outlet}")
     return "  ".join(parts)
-
-
-def _as_number(value: Any) -> float | None:
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return None
-    return number if number == number else None
 
 
 if __name__ == "__main__":

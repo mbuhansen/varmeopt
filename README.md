@@ -11,36 +11,39 @@ Node-RED er protokol-gateway mellem UVR'en, varmepumpen og Home Assistant.
 tankene op i ét sammenhængende blok når prisen er lav, så den lagrede varme
 dækker de dyre timer og aftenens varme vand.
 
-## Status: skyggedrift
+## Status
 
-Add-on'en **styrer intet.** Den regner det samme valg som Node-RED hvert minut,
-på rettet COP, og fører regnskab over hvor tit de to er uenige. Node-RED træffer
-alle beslutninger.
+Add-on'en er den der regner. Den læser alle sine målinger fra Home Assistant,
+lærer i sin egen COP-tabel og træffer valget. Node-RED står tilbage som den
+hånd der rører anlægget — og der læses ikke længere noget fra den.
 
-Køreplanen frem herfra er fire skridt, i den rækkefølge:
+Sammenligningen mod Node-RED er væk, og med vilje: Node-RED kan ikke regne en
+horisont, en blokopladning eller en marginalpris, så en optælling af hvor tit
+de to er uenige måler ikke hvem der har ret. Den ville kun sige hvor langt
+add-on'en er fra en modpart der ikke prøver på det samme.
 
-1. **Tæl uenighederne.** Uden et tal kan man kun se dem. Regnskabet står på
-   Nu-siden: hvor tit, i hvilken retning, og hvad forskellen var værd. Det er dét
-   tal der afgør om resten er værd at bygge. ✔ bygget
-2. **`guard.py`** — afgør om beslutningen må handles på. ✔ bygget
-3. **Kobl den til.** Add-on'en skriver ikke selv til UVR'en: den udstiller sin
+Køreplanen frem herfra:
+
+1. **`guard.py`** — afgør om beslutningen må handles på. ✔ bygget
+2. **Kobl den til.** Add-on'en skriver ikke selv til UVR'en: den udstiller sin
    beslutning og et flag, `styrer`, og Node-RED følger den kun når flaget siger
    ja. Dermed er der ét sted der styrer, og det sted kan altid sige nej til os.
    Mangler kun en `server-state-changed` på `sensor.varmeopt_beslutning`.
-4. **Blokopladning.** Den nye evne, og den farligste: at starte varmepumpen når
+3. **Blokopladning.** Den nye evne, og den farligste: at starte varmepumpen når
    ingen har bedt om varme. Bør vente til ståtabet er målt — med to kroners
    margin kan det led vende fortegnet.
 
 Hvad der virker nu:
 
-- Migrerer den indlærte COP-tabel ud af Node-REDs context til `/data` — 333
-  celler og godt 17.000 målinger, med de defekte `NaN`-nøgler renset fra.
+- Fører den indlærte COP-tabel i `/data` — 333 celler og godt 17.000
+  målinger, flyttet ud af Node-RED dengang og siden holdt ved lige her, med de
+  defekte `NaN`-nøgler renset fra.
 - Lærer videre i sin egen tabel, med et delta-T-afhængigt plausibilitetsfilter
-  i stedet for det flade 1,0–7,0 Node-RED bruger. Hver måling tælles **én
-  gang**: add-on'en poller, hvor Node-RED lyttede på hændelser, så uden det
-  ville en stillestående aflæsning blive lært om igen hvert minut og `count`
-  tælle minutter i stedet for målinger.
-- Slår COP op med **rettet 2D-interpolation.** Node-RED-udgaven satte
+  i stedet for det flade 1,0–7,0 tabellen kom fra. Hver måling tælles **én
+  gang**: add-on'en poller, hvor den gamle læring lyttede på hændelser, så uden
+  det ville en stillestående aflæsning blive lært om igen hvert minut og
+  `count` tælle minutter i stedet for målinger.
+- Slår COP op med **rettet 2D-interpolation.** Den gamle udgave satte
   `count: 0` på alt interpoleret, hvorfor blandingsgrenene aldrig udløste og
   opslaget faldt tilbage på fabrikkens TA-kurve overalt undtagen ved eksakte
   celletræf. Her føres et effektivt målingsantal med gennem interpolationen.
@@ -60,12 +63,19 @@ Hvad der virker nu:
 - Regner **marginalprisen** på strøm — nu og i hver halvtime fremad — af
   Predbats plan, læst direkte fra HA. Spotprisen er ikke svaret: strøm fra
   nettet, strøm fra et batteri der alligevel lades billigt om to timer, og
-  strøm man kunne have solgt er tre forskellige tal i det samme minut. Node-REDs
-  syv prisgrene er generaliseret fra «hvad koster den nu» til «hvad koster den
-  kl. 18» — og uden det kan man vælge kilde, men ikke lægge en blok.
-- Træffer **det samme valg som Node-RED**, men på den rettede COP, og udstiller
-  det side om side. Add-on'en styrer stadig intet; forskellen mellem de to svar
-  er præcis det fase 1 skal vurderes på.
+  strøm man kunne have solgt er tre forskellige tal i det samme minut. De syv
+  prisgrene fra Node-RED er generaliseret fra «hvad koster den nu» til «hvad
+  koster den kl. 18» — og uden det kan man vælge kilde, men ikke lægge en blok.
+- Prissætter **batteriet på hvad energien koster at lægge tilbage**, ikke på
+  hvad den kostede engang. Gennemsnitsprisen er sunk cost: en kilowatt-time
+  solen lagde i batteriet gratis, er ikke gratis at *bruge*, for den skal
+  skaffes igen. Prisen er derfor den billigste import der er tilbage i
+  horisonten, ganget op med tabet hele vejen rundt — 0,832 med anlæggets egne
+  tab, læst fra Predbats indstillinger — og aldrig dyrere end at købe den
+  samme kilowatt-time nu. Det er den samme definition Predbat selv regner
+  efter i `battery_value_rate`.
+- **Træffer valget selv**, på den rettede COP og hele horisonten, og udstiller
+  det sammen med begrundelsen. Om nogen handler på det, afgøres af `styrer`.
 - Giver **hver time i planen sin egen COP** af Home Assistants vejrudsigt.
   Kæden bruger alt det andet: forudsagt temperatur → varmekurven giver
   setpunktet → COP-tabellen giver virkningsgraden. Uden den arvede alle
@@ -212,8 +222,8 @@ ekstreme priser.
 **Men marginen er lille.** Bufferen fra 44 til 56 °C er 13,8 kWh varme, altså
 3,4 kWh strøm ved COP 4,07, og den frigør 3,6 kWh inverterkapacitet om aftenen.
 Ved 0,50 kr/kWh ind og 1,00 kr/kWh eksport er det knap to kroner. Kommer
-middagsstrømmen derimod fra batteriet til dets gennemsnitspris, er det et
-nulsumsspil. Derfor er `P_nu` ikke en pris man slår op, men en man udleder af
+middagsstrømmen derimod fra batteriet, koster den hvad den koster at lægge
+tilbage — og så er det tæt på et nulsumsspil. Derfor er `P_nu` ikke en pris man slår op, men en man udleder af
 Predbats plan.
 
 Og derfor er **ståtabet ikke en detalje.** Med to kroners margin kan seks timers
@@ -228,22 +238,25 @@ Add-on'en installeres som et eget add-on-repository:
 2. Tilføj URL'en til dette repo
 3. Installér **Varmeopt** og start den
 
-Den henter selv COP-tabellen fra Node-RED første gang den starter. Node-RED
-røres ikke — der læses kun.
+Add-on'en læser ikke fra Node-RED. Alt hvad den regner på, kommer fra Home
+Assistant, og alt hvad den har lært, ligger i `/data`.
+
+**`entity_outdoor_temp` skal være sat.** Uden udetemperatur kan hverken
+varmekurven eller COP-tabellen slå op, og hver cyklus springes over — det
+siges i loggen ved opstart.
 
 ### Indstillinger
 
 | Nøgle | Standard | Betydning |
 |-------|----------|-----------|
 | `cycle_seconds` | 60 | Hvor ofte der læres og slås op |
-| `nodered_url` | `http://192.168.1.159:1880` | Node-REDs admin-API |
 | `entity_flow_temp` | `sensor.node_1_analog_logging_13` | UVR'ens **beregnede** fremløbssetpunkt. Det er den akse COP-tabellen er indekseret på |
 | `entity_flow_measured` | `sensor.node_1_dl_bus_1` | Centralvarmens fremløb ud mod huset, målt **efter** tankene. Forbrugsside, ikke kildeside |
 | `entity_hp_flow` | `sensor.nibe_eb101_ep14_bt12_condensor_out` | Varmepumpens kondensatorafgang |
 | `entity_hp_return` | `sensor.nibe_eb101_ep14_bt3_return_temp` | Varmepumpens retur |
 | `entity_cop_measured` | `sensor.node_1_analog_logging_12` | COP beregnet i UVR'en af to følere og en flowmåler, placeret **før** tankene. Måler derfor varmepumpens egen ydelse, urørt af solvarmen |
 | `dhw_setpoint` | 56 | Setpunktet varmtvandsbeholder og spabad kalder med. Målinger derpå holdes ude af varmekurven |
-| `entity_outdoor_temp` | *(tom)* | Udetemperatur. Er den tom, læses `udeTemp` fra Node-REDs flow-context, hvor MQTT-værdien fra Nibe lander i dag |
+| `entity_outdoor_temp` | `sensor.nibe_bt1_average` | Udetemperatur — Nibes BT1, midlet. **Skal være sat**: uden den er der intet at slå op på, og hver cyklus springes over |
 | `entity_tank_a_*` / `entity_tank_b_*` | *(udfyldt)* | Tre dybdefølere pr. tank — `top`, `mid`, `bottom` — plus `outlet` på afgangsrøret. Rækkefølgen bærer betydning: lagdelingen kan ikke regnes uden at vide hvilken føler der sidder hvor |
 | `tank_liters` | 1000 | Samlet volumen, fordelt ligeligt på tankene |
 | `tank_reference_temp` | 30 | Under den er varmen ikke til nogen nytte — radiatorkredsen kører på godt 31 °C |
@@ -261,8 +274,8 @@ røres ikke — der læses kun.
 | `solar_scale` | 0,43 | Startværdi for skalafaktoren, kalibreret på 24. august 2026. Modellen retter den selv |
 | `entity_dhw_active` | `binary_sensor.node_1_output_7` | Kører varmepumpen for brugsvandet? En kendsgerning frem for et gæt ud fra setpunktet |
 | `entity_spa_*` | `sensor.tub_temperature` m.fl. | Spabadets tilstand. Det kalder med samme setpunkt som brugsvandet og forklarer hvorfor kurven springer til 56 °C |
-| `entity_nodered_decision` | `sensor.varme_styring` | Node-REDs egen beslutning, så de to kan sammenlignes |
 | `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
+| `entity_inverter_loss`, `entity_battery_loss`, `entity_battery_loss_discharge` | Predbats tre `input_number` | Tabene ind i og ud af batteriet, læst fra Predbat så de kun står ét sted. Tilsammen 0,832 hele vejen rundt. Svarer de ikke, gælder `prices.py`s egne tal |
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
@@ -320,11 +333,12 @@ til at logikken ligger her og ikke i Node-RED-funktionsnoder: en fortegnsfejl i
 varmeøkonomi koster penge og opdages først efter dage, så den skal kunne fanges
 af en test i stedet for af en regning.
 
-Kørsel uden for HA (læser Node-RED, publicerer intet):
+Kørsel uden for HA (læser intet, publicerer intet — den siger det i loggen og
+kører videre):
 
 ```bash
 cd addon
-VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
+VARMEOPT_DATA_DIR=./data python -m varmeopt
 ```
 
 ## Opbygning
@@ -335,7 +349,6 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `curve.py` | UVR'ens varmekurve: udetemperatur → setpunkt. Ren, testet |
 | `demand.py` | Effektbalancen: husets forbrug mod de fire kilder. Ren, testet |
 | `prices.py` | Marginalpris pr. halvtime af Predbats plan. Ren, testet |
-| `compare.py` | Regnskab over uenigheder med Node-RED. Ren, testet |
 | `guard.py` | Om beslutningen må handles på. Ren, testet |
 | `forecast.py` | Udetemperatur time for time fra HA's vejrudsigt. Ren, testet |
 | `journal.py` | De sidste loglinjer, til fejlsøgningsfilen |
@@ -345,8 +358,7 @@ VARMEOPT_NODERED_URL=http://192.168.1.159:1880 python -m varmeopt
 | `selfupdate.py` | Henter kode fra master, med oversættelses- og boot-kontrol |
 | `bootstrap.py` | Startskal i imaget; rydder op efter en mislykket selvopdatering |
 | `store.py` | Atomisk JSON-lager i `/data` |
-| `nodered.py` | Read-only klient mod Node-REDs admin-API |
-| `migrate.py` | Engangsflytning af COP-tabellen |
+| `migrate.py` | Indlæsning af det lærte fra `/data` |
 | `ha.py` | HA REST-klient via `supervisor/core` |
 | `web.py` | Web-UI gennem ingress |
 | `__main__.py` | Hovedløkken |

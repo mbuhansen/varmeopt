@@ -20,7 +20,6 @@ DEFAULT_OPTIONS_PATH = Path("/data/options.json")
 _DEFAULTS: dict[str, object] = {
     "log_level": "info",
     "cycle_seconds": 60,
-    "nodered_url": "http://192.168.1.159:1880",
     # UVR'ens beregnede setpunkt, ikke en måling: det er kurven anlægget
     # styrer efter, og den akse COP-tabellen er indekseret på.
     "entity_flow_temp": "sensor.node_1_analog_logging_13",
@@ -69,13 +68,10 @@ _DEFAULTS: dict[str, object] = {
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
     # Predbats plan, laest direkte fra HA. Vi bruger raw.rows, den
     # strukturerede udgave - ikke HTML-tabellen, som ville vaere skroebelig.
-    # Node-REDs egen beslutning, saa de to kan sammenlignes. Sensoren
-    # hedder "Varme Styring" i Node-REDs ha-entity-config.
     # Home Assistants egen vejrudsigt. Med den faar hver time i planen sin
     # egen COP i stedet for at arve den vi har nu.
     "entity_weather": "weather.hjem",
     "forecast_refresh_minutes": 30,
-    "entity_nodered_decision": "sensor.varme_styring",
     "entity_predbat_plan": "predbat.plan_html",
     # Predbats nuvaerende tilstand. Planens raekker bruger samme ordforraad
     # pr. halvtime, saa den her er den eneste maade at se hvad anlaeggets
@@ -106,6 +102,12 @@ _DEFAULTS: dict[str, object] = {
     "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
     "entity_pv_power": "sensor.hostname_scb_5313dd_sum_power_of_all_pv_dc_inputs",
     "entity_inverter_ac": "sensor.hostname_scb_5313dd_ac_power",
+    # Tabene ind i og ud af batteriet, laest af Predbats egne indstillinger.
+    # De staar dermed ét sted: aendrer man dem i Predbat, foelger
+    # genanskaffelsesprisen med. Svarer de ikke, gaelder prices.py's egne tal.
+    "entity_inverter_loss": "input_number.predbat_inverter_loss",
+    "entity_battery_loss": "input_number.predbat_battery_loss",
+    "entity_battery_loss_discharge": "input_number.predbat_battery_loss_discharge",
     # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
     # kalibrerer hinanden: solfangerne og cellerne ser samme sol.
     "entity_solar_today": "sensor.solvarme_produktion_idag",
@@ -179,7 +181,14 @@ _DEFAULTS: dict[str, object] = {
     # spoergsmaal, to indstillinger.
     "dhw_usable_temp": 55.0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
-    "entity_outdoor_temp": "",
+    # Udetemperaturen. Den er ikke til pynt: uden den kan hverken varmekurven
+    # eller COP-tabellen slaa op, og cyklussen springer over. Den kom foer fra
+    # Node-REDs flow-context som bagstopper; den vej findes ikke mere, saa den
+    # her *skal* vaere sat.
+    #
+    # Nibes egen BT1, midlet. Middelvaerdien er med vilje: den raa foeler
+    # svinger med solen paa vaeggen, og tabellen er indekseret paa hele grader.
+    "entity_outdoor_temp": "sensor.nibe_bt1_average",
     # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
     # dette setpunkt. De målinger hører ikke til i kurven.
     "dhw_setpoint": 56,
@@ -240,7 +249,6 @@ def _as_bool(value: object) -> bool:
 class Options:
     log_level: str
     cycle_seconds: int
-    nodered_url: str
     entity_flow_temp: str
     entity_flow_measured: str
     entity_hp_flow: str
@@ -256,7 +264,6 @@ class Options:
     entity_boiler_power: str
     entity_weather: str
     forecast_refresh_minutes: float
-    entity_nodered_decision: str
     entity_predbat_plan: str
     entity_predbat_status: str
     entity_predbat_charge_limit: str
@@ -266,6 +273,9 @@ class Options:
     entity_grid_power: str
     entity_pv_power: str
     entity_inverter_ac: str
+    entity_inverter_loss: str
+    entity_battery_loss: str
+    entity_battery_loss_discharge: str
     entity_solar_today: str
     entity_solcast_remaining: str
     entity_solcast_tomorrow: str
@@ -407,7 +417,6 @@ class Options:
         return cls(
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
-            nodered_url=str(values["nodered_url"]).rstrip("/"),
             auto_update=_as_bool(values["auto_update"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),

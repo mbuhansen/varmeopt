@@ -8,10 +8,14 @@ from varmeopt.__main__ import Varmeopt
 from varmeopt.cop import Cell, CopTable
 from varmeopt.ha import HaError, State
 from varmeopt.options import Options
+from varmeopt.prices import BATTERY_ROUND_TRIP
 from varmeopt.store import Store
 
 FLOW = "sensor.flow"
 COP = "sensor.cop"
+# Udetemperaturen har sin egen entitet. Den kom foer fra Node-REDs
+# flow-context; den vej findes ikke mere.
+OUT = "sensor.ude"
 
 
 def options(**over):
@@ -22,7 +26,7 @@ def options(**over):
         base,
         entity_flow_temp=FLOW,
         entity_cop_measured=COP,
-        entity_outdoor_temp="",
+        entity_outdoor_temp=OUT,
         **over,
     )
 
@@ -58,16 +62,6 @@ class FakeHa:
         return self.forecast_response
 
 
-class FakeNodeRed:
-    """Udetemperaturen findes kun i Node-REDs flow-context, ikke som entitet."""
-
-    def __init__(self, context: dict) -> None:
-        self._context = context
-
-    async def flow_context(self) -> dict:
-        return dict(self._context)
-
-
 class CycleTest(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
@@ -78,13 +72,13 @@ class CycleTest(unittest.TestCase):
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
                 COP: State(COP, "4.4", {}, "maaling-1"),
+                OUT: State(OUT, "17.2", {}, "ude-1"),
             }
         )
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def cycle(self, times: int = 1):
         for _ in range(times):
-            asyncio.run(self.app.cycle(self.ha, self.nodered))
+            asyncio.run(self.app.cycle(self.ha))
 
     @property
     def samples(self) -> float:
@@ -202,33 +196,38 @@ class CycleTest(unittest.TestCase):
         # Men kildevalget staar stadig - det kraever ingen plan.
         self.assertEqual(self.app.status["decision"].source, "varmepumpe")
 
-    def test_battery_average_comes_from_nodered(self):
+    def test_the_battery_price_is_computed_from_the_plan(self):
         o = self.app.options
-        self.nodered = FakeNodeRed({"udeTemp": 17.2, "battery_avg_price": 1.35})
         # Batteriet aflader maalbart - ellers staar anlaegget i balance, og saa
         # er det den billigste af net og batteri der gaelder, ikke batteriet.
         self.ha._states[o.entity_battery_power] = State(o.entity_battery_power, "3000", {}, "b")
         self.ha._states[o.entity_predbat_plan] = State(
             o.entity_predbat_plan,
             "ok",
-            {"raw": {"rows": [{"state": "", "import_rate": 300, "export_rate": 50}]}},
+            {
+                "raw": {
+                    "rows": [
+                        {"state": "", "import_rate": 300, "export_rate": 50},
+                        {"state": "", "import_rate": 100, "export_rate": 50},
+                    ]
+                }
+            },
             "plan-1",
         )
         self.cycle()
 
-        # 1,35 er hvad energien kostede pr. lagret kWh; leveret igen koster
-        # den 1/0,85 af det, for inverteren taber 15 % hele vejen rundt.
+        # Ingen entitet spurgt: den billigste import der er tilbage er 1,00,
+        # og der skal koebes 1/0,832 for at have den kilowatt-time igen.
         self.assertAlmostEqual(
-            self.app.status["price_now"].kr_per_kwh, 1.35 / 0.85, places=3
+            self.app.status["price_now"].kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=3
         )
-        self.assertIn("batteri", self.app.status["price_now"].reason)
+        self.assertIn("genanskaffelse", self.app.status["price_now"].reason)
 
     def test_a_balanced_plant_runs_on_the_battery_at_the_grid_s_price(self):
         # Ingen maalbar stroem nogen vej. Kilden er inverteren - det er
         # anlaeggets regel - og prisen er loftet af hvad nettet tager for den
         # samme kilowatt-time.
         o = self.app.options
-        self.nodered = FakeNodeRed({"udeTemp": 17.2, "battery_avg_price": 1.35})
         self.ha._states[o.entity_predbat_plan] = State(
             o.entity_predbat_plan,
             "ok",
@@ -239,7 +238,7 @@ class CycleTest(unittest.TestCase):
 
         self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 0.40, places=3)
         self.assertEqual(self.app.status["price_now"].source, "batteri")
-        self.assertIn("frit", self.app.status["price_now"].reason)
+        self.assertIn("genanskaffelse", self.app.status["price_now"].reason)
 
     # ------------------------------------------------- Predbats egen status
 
@@ -467,14 +466,14 @@ class CycleTest(unittest.TestCase):
 
         self.assertNotIn("sensor.varmeopt_behov", dict(self.ha.published))
 
-    def test_outdoor_temp_falls_back_to_nodered(self):
+    def test_the_temperatures_come_from_their_entities(self):
         self.cycle()
 
         self.assertEqual(self.app.status["outdoor_temp"], 17.2)
         self.assertEqual(self.app.status["flow_temp"], 31.0)
 
     def test_missing_temperatures_skip_the_cycle_without_raising(self):
-        self.nodered = FakeNodeRed({})
+        self.ha._states.pop(OUT)
         self.ha._states.pop(FLOW)
         self.cycle()
 
@@ -500,7 +499,9 @@ class ForecastTest(unittest.TestCase):
         from varmeopt.curve import HeatCurve, Point
 
         self.app.curve = HeatCurve({5: Point(44.0, 500.0), 15: Point(32.0, 500.0)})
-        self.ha = FakeHa({FLOW: State(FLOW, "32.0", {}, "f")})
+        self.ha = FakeHa(
+            {FLOW: State(FLOW, "32.0", {}, "f"), OUT: State(OUT, "15.0", {}, "u")}
+        )
         now = datetime.now(timezone.utc)
         self.ha.forecast_response = {
             self.app.options.entity_weather: {
@@ -510,18 +511,17 @@ class ForecastTest(unittest.TestCase):
                 ]
             }
         }
-        self.nodered = FakeNodeRed({"udeTemp": 15.0})
 
     def test_the_forecast_is_fetched_once_and_then_cached(self):
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
+        asyncio.run(self.app.cycle(self.ha))
 
         # Udsigten aendrer sig i timer, ikke i minutter.
         self.assertEqual(self.ha.services, [("weather", "get_forecasts")])
         self.assertGreater(len(self.app.forecast), 0)
 
     def test_a_colder_evening_gives_a_lower_cop_six_hours_out(self):
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         # 15 grader nu -> setpunkt 32 -> COP 4,6.
         # 5 grader om seks timer -> setpunkt 44 -> COP 3,9.
@@ -530,7 +530,7 @@ class ForecastTest(unittest.TestCase):
 
     def test_without_a_forecast_there_is_no_answer(self):
         self.ha.forecast_response = {}
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
         # Planlaeggeren falder saa tilbage paa den COP vi har nu.
         self.assertIsNone(self.app._cop_at(360))
@@ -552,6 +552,7 @@ class ControlTest(unittest.TestCase):
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
                 COP: State(COP, "4.4", {}, "maaling-1"),
+                OUT: State(OUT, "17.2", {}, "ude-1"),
                 # Uden en plan er der ingen pris, og uden en pris ingen
                 # varmepris - saa naegter vagten med rette at styre.
                 o.entity_predbat_plan: State(
@@ -563,10 +564,9 @@ class ControlTest(unittest.TestCase):
                 ),
             }
         )
-        self.nodered = FakeNodeRed({"udeTemp": 17.2})
 
     def cycle(self):
-        asyncio.run(self.app.cycle(self.ha, self.nodered))
+        asyncio.run(self.app.cycle(self.ha))
 
     def test_control_is_off_by_default(self):
         self.cycle()

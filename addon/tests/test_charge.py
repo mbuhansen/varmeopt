@@ -27,7 +27,7 @@ def plan(*rates):
     rows = [
         {"state": "holdchrg", "import_rate": rate, "export_rate": 50} for rate in rates
     ]
-    return Plan.from_predbat({"raw": {"rows": rows}}, battery_average=1.0)
+    return Plan.from_predbat({"raw": {"rows": rows}})
 
 
 # Dyrt nu, billigt i slot 4-7, dyrt igen fra slot 8.

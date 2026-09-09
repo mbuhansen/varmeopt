@@ -83,12 +83,6 @@ class OptionsTest(unittest.TestCase):
 
         self.assertEqual(Options.load(path).cycle_seconds, 60)
 
-    def test_trailing_slash_stripped_from_url(self):
-        path = self.tmp / "options.json"
-        path.write_text(json.dumps({"nodered_url": "http://x:1880/"}), encoding="utf-8")
-
-        self.assertEqual(Options.load(path).nodered_url, "http://x:1880")
-
 
 if __name__ == "__main__":
     unittest.main()

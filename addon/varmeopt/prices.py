@@ -33,22 +33,11 @@ EXPORT_FLOOR = 0.80
 # det bliver alligevel fyldt op igen.
 CHARGE_SOON_MINUTES = 120
 
-# Er der planlagt eksport inden for det her, vaerdisaettes batteriets energi
-# mod den eksport i stedet for mod sit eget gennemsnit.
-EXPORT_SOON_MINUTES = 180
-
 # Rabat paa den fremtidige eksportpris. Uden den ville en energi der lige
 # akkurat kunne saelges, altid slaa enhver anden anvendelse - og det er for
 # skarpt et snit til et tal der er et gaet om fremtiden. Samme vaerdi som
 # Node-RED bruger.
 EXPORT_DISCOUNT = 0.90
-
-# Under denne ladetilstand vaerdisaettes batteriet ikke mod en kommende
-# eksport. Kan planens egen reserve laeses, bruges den i stedet: Predbat
-# eksporterer ikke under sin reserve, saa energien dernede *kan* ikke saelges,
-# og saa er eksporten ikke et alternativ. Konstanten her er kun det skoen der
-# staar tilbage naar reserven ikke kan laeses.
-MIN_SOC_FOR_EXPORT = 40.0
 
 # Hvor tomt batteriet er, naar det er tomt. Det her er anlaeggets eget tal og
 # ikke Predbats reserve - se ``Plan.reserve`` for forskellen. Under det kan
@@ -68,13 +57,39 @@ FLOOR_TOLERANCE = 0.5
 # stille paa 70 %, er det fordi solen daekker huset. En reserve er et lavt tal.
 MAX_RESERVE = 25.0
 
-# Tillaeg paa genanskaffelsesprisen: tab ved at koere en kWh ind og ud af
-# batteriet igen. Anlaeggets inverter taber omkring 15 % hele vejen rundt,
-# saa 1 kWh koebt fra nettet giver 0,85 kWh tilbage til varmepumpen - og en
-# kWh taget fra batteriet nu koster derfor 1/0,85 gange hvad paafyldningen
-# koster. Node-RED brugte 1,10, hvilket var et skoen; det her er anlaeggets.
-BATTERY_ROUND_TRIP = 0.85
-CHARGE_LOSS_MARKUP = 1 / BATTERY_ROUND_TRIP
+# Tabene ind i og ud af batteriet. Det er de samme tre tal Predbat regner
+# med - ``input_number.predbat_inverter_loss``,
+# ``input_number.predbat_battery_loss`` og
+# ``input_number.predbat_battery_loss_discharge`` - og add-on'en laeser dem
+# levende derfra. Vaerdierne her gaelder kun naar entiteterne ikke svarer.
+INVERTER_LOSS = 0.05
+BATTERY_LOSS = 0.04
+BATTERY_LOSS_DISCHARGE = 0.04
+
+
+def round_trip(
+    inverter_loss: float = INVERTER_LOSS,
+    charge_loss: float = BATTERY_LOSS,
+    discharge_loss: float = BATTERY_LOSS_DISCHARGE,
+) -> float:
+    """Hvor stor en del af en koebt kilowatt-time der naar ud igen.
+
+    Stroemmen gennem inverteren to gange, plus batteriets eget tab hver vej.
+    Med anlaeggets tal - 5 % i inverteren, 4 % ind og 4 % ud - naar 0,832 kWh
+    ud til varmepumpen af hver kWh der blev koebt.
+
+    Det er ikke en detalje. Det er praecis grunden til at det kan betale sig
+    at lade *tankene* op mens Predbat lader batteriet: varme lagret i vand
+    taber en broekdel over en aften, hvor den samme kWh gennem batteriet
+    taber en sjettedel hver eneste gang.
+    """
+    into = (1 - inverter_loss) * (1 - charge_loss)
+    out_of = (1 - inverter_loss) * (1 - discharge_loss)
+    trip = into * out_of
+    return trip if 0 < trip <= 1 else 0.85
+
+
+BATTERY_ROUND_TRIP = round_trip()
 
 # Kender vi ikke ladetilstanden, antages den samme vaerdi som Node-RED bruger.
 ASSUMED_SOC = 50.0
@@ -298,31 +313,56 @@ class Plan:
     def __init__(
         self,
         slots: tuple[Slot, ...],
-        battery_average: float = 0.0,
+        trip: float = BATTERY_ROUND_TRIP,
         export_floor: float = EXPORT_FLOOR,
         empty_percent: float = BATTERY_EMPTY_PERCENT,
     ) -> None:
         self.slots = slots
         # Hvornaar batteriet er tomt. Anlaeggets tal, ikke Predbats reserve.
         self.empty_percent = empty_percent
-        # Batteriets gennemsnitspris, men aldrig under eksportgulvet: der er
-        # altid muligheden for at sælge i stedet for at bruge.
-        # Batteriets snitpris er hvad energien kostede *ved elmåleren*, pr.
-        # kWh der landede i batteriet — Node-REDs node vejer importprisen med
-        # den SOC-stigning den gav, og regner hverken lade- eller afladetab
-        # med. Skal den kWh ud til varmepumpen igen, koster den derfor
-        # 1/virkningsgraden af det tal.
-        #
-        # Det er ikke en detalje. Det er præcis grunden til at det kan betale
-        # sig at lade *tankene* op mens Predbat lader batteriet: varme lagret
-        # i vand taber en brøkdel over en aften, hvor den samme kWh gennem
-        # batteriet taber 15 % hver eneste gang.
-        self.battery_average = max(
-            battery_average / BATTERY_ROUND_TRIP, export_floor
-        )
+        self.round_trip = trip if 0 < trip <= 1 else BATTERY_ROUND_TRIP
         self.export_floor = export_floor
         # Predbats reserve staar ikke i planen, men den kan laeses af den.
         self.reserve = self._find_reserve()
+        # Billigste importpris fra hver halvtime og resten af horisonten ud.
+        # Regnet én gang bagfra; genanskaffelsesprisen slaar op i den.
+        self._cheapest_ahead = self._suffix_min_import()
+
+    def _suffix_min_import(self) -> tuple[float | None, ...]:
+        cheapest: list[float | None] = [None] * len(self.slots)
+        best: float | None = None
+        for index in range(len(self.slots) - 1, -1, -1):
+            price = self.slots[index].import_price
+            if price is not None and (best is None or price < best):
+                best = price
+            cheapest[index] = best
+        return tuple(cheapest)
+
+    def replacement_cost(self, index: int = 0) -> float:
+        """Hvad en kilowatt-time fra batteriet koster at lægge tilbage.
+
+        Ikke hvad energien kostede engang. Det tal — gennemsnitsprisen — er
+        sunk cost, og det var kilden til de fleste forkerte valg vi har set:
+        en kWh solen lagde i batteriet gratis, er ikke gratis at *bruge*, for
+        den skal skaffes igen.
+
+        Prisen er derfor den billigste import der er tilbage i horisonten,
+        ganget op med tabet hele vejen rundt: bruger vi en kWh nu, skal der
+        købes 1/0,832 for at have den igen. Det er den samme tanke som
+        grenene «lades om 40 min» og «købes tilbage om 90 min» bygger på —
+        her er den bare uden en bestemt begivenhed at hænge den op på.
+
+        Aldrig under eksportgulvet: der er altid den mulighed at sælge.
+
+        Salgssiden ligger med vilje ikke her. At energien er mere værd fordi
+        den kan eksporteres, gælder kun hvis den stadig er der når salget
+        kommer, og over reserven — de betingelser hører hjemme i
+        ``_battery_price``, hvor de kan stilles.
+        """
+        cheapest = self._cheapest_ahead[index] if 0 <= index < len(self._cheapest_ahead) else None
+        if cheapest is None:
+            return self.export_floor
+        return max(cheapest / self.round_trip, self.export_floor)
 
     def __len__(self) -> int:
         return len(self.slots)
@@ -337,7 +377,7 @@ class Plan:
     def from_predbat(
         cls,
         attributes: Any,
-        battery_average: float = 0.0,
+        trip: float = BATTERY_ROUND_TRIP,
         export_floor: float = EXPORT_FLOOR,
         empty_percent: float = BATTERY_EMPTY_PERCENT,
     ) -> Plan:
@@ -367,7 +407,7 @@ class Plan:
                     soc_percent=_number(row.get("soc_percent")),
                 )
             )
-        plan = cls(tuple(slots), battery_average, export_floor, empty_percent)
+        plan = cls(tuple(slots), trip, export_floor, empty_percent)
         unknown = sorted({s.state for s in plan.slots if not s.understood})
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
@@ -383,7 +423,8 @@ class Plan:
     def to_raw(self) -> dict[str, Any]:
         """Planen som almindelige tal — til debug-filen."""
         return {
-            "battery_average": self.battery_average,
+            "replacement_cost": self.replacement_cost(),
+            "round_trip": self.round_trip,
             "export_floor": self.export_floor,
             "reserve": self.reserve,
             "empty_percent": self.empty_percent,
@@ -622,42 +663,70 @@ class Plan:
             )
         return price
 
+    def _best_export(self, after: int, next_charge: Slot | None) -> Slot | None:
+        """Den bedst betalte eksport der er tilbage, før batteriet lades op.
+
+        Ikke den første. Den marginale kilowatt-time bliver solgt i den bedste
+        halvtime der er tilbage, så det er den pris der er alternativet til at
+        bruge den — og en tidlig, dårligt betalt eksport siger ikke noget om
+        hvad energien er værd.
+
+        Grænsen er opladningen, ikke uret: fyldes batteriet inden, er det ikke
+        *den her* kilowatt-time der bliver solgt bagefter. Der stod før en
+        grænse på tre timer, som kom fra den første portering og aldrig havde
+        nogen begrundelse — planen kender salget tolv timer i forvejen, og om
+        det ligger to eller elleve timer ude, er energien lige meget lovet væk.
+        """
+        best: Slot | None = None
+        for candidate in self.slots[after:]:
+            if next_charge is not None and candidate.index >= next_charge.index:
+                break
+            if not candidate.exporting or candidate.export_price is None:
+                continue
+            if best is None or candidate.export_price > best.export_price:
+                best = candidate
+        return best
+
     def _battery_price(self, slot: Slot) -> Price | None:
         """Hvad batteriets energi er værd, når det står frit."""
         after = slot.index + 1
         next_export = self._next_where(lambda s: s.exporting, after)
         next_charge = self._next_where(lambda s: s.refills, after)
+        best_export = self._best_export(after, next_charge)
 
-        # Venter der eksport snart, og bliver batteriet ikke fyldt inden, er
-        # energien mere vaerd end sit gennemsnit: den kan saelges.
+        # Bliver energien solgt inden batteriet lades op igen, er den lovet
+        # væk: den kilowatt-time vi bruger nu, er en der ikke bliver solgt.
         #
         # Bemaerk at det er en *vaerdisaettelse*, ikke en beslutning. Om
         # energien faktisk bliver gemt, afgoeres af hvad den saa bruges til:
         # kan varmepumpen lave varme til under pillefyrets pris af den, er
         # det bedre at bruge den end at saelge den, og saa bliver den brugt.
-        if next_export is not None and next_export.export_price is not None:
+        if best_export is not None and best_export.export_price is not None:
             soc = slot.soc_percent if slot.soc_percent is not None else ASSUMED_SOC
-            soon = next_export.minutes_ahead - slot.minutes_ahead <= EXPORT_SOON_MINUTES
-            no_charge_first = next_charge is None or next_charge.index > next_export.index
             # Sammenligningen skal ske paa det tal der faktisk returneres.
             # Stod den paa den urabatterede pris, vendte grenen sit formaal
             # paa hovedet i baandet snit < eksport < snit/0,90: snit 1,00 og
             # eksport 1,05 gav 0,945 - energien blev *billigere* af at have
             # et salg i vente.
-            worth_it = next_export.export_price * EXPORT_DISCOUNT > self.battery_average
-            # Under Predbats reserve bliver energien aldrig solgt - Predbat
-            # eksporterer ikke derunder - og saa er en kommende eksport ikke
-            # et alternativ til at bruge den. Reserven er anlaeggets eget tal
-            # naar den kan laeses af planen; ellers staar skoennet tilbage.
+            worth_it = (
+                best_export.export_price * EXPORT_DISCOUNT
+                > self.replacement_cost(slot.index)
+            )
+            # Under bunden bliver energien aldrig solgt, og saa er eksporten
+            # ikke et alternativ til at bruge den. Bunden er Predbats reserve
+            # naar den kan laeses af planen - Predbat eksporterer ikke
+            # derunder - ellers anlaeggets eget nulpunkt.
             #
-            # Her stod ``MIN_SOC_FOR_EXPORT`` alene, og de 40 % var langt over
-            # den reserve anlaegget faktisk koerer med.
-            floor_for_sale = self.reserve if self.reserve is not None else MIN_SOC_FOR_EXPORT
-            enough = soc > floor_for_sale
-            if soon and no_charge_first and worth_it and enough:
-                minutes = next_export.minutes_ahead - slot.minutes_ahead
+            # Her stod ``MIN_SOC_FOR_EXPORT = 40`` som skoen, og de 40 % slog
+            # netop vaerdisaettelsen fra naar batteriet var lavt: saa blev
+            # energien *billigere* af at vaere knap.
+            floor_for_sale = (
+                self.reserve if self.reserve is not None else self.empty_percent
+            )
+            if worth_it and soc > floor_for_sale:
+                minutes = best_export.minutes_ahead - slot.minutes_ahead
                 return Price(
-                    next_export.export_price * EXPORT_DISCOUNT,
+                    best_export.export_price * EXPORT_DISCOUNT,
                     f"batteri: værdisat mod eksport om {minutes} min "
                     f"(SOC {soc:.0f} %)",
                     BATTERY,
@@ -668,16 +737,11 @@ class Plan:
         if next_charge is not None and next_charge.import_price is not None:
             soon = next_charge.minutes_ahead - slot.minutes_ahead <= CHARGE_SOON_MINUTES
             if soon:
-                # Genanskaffelsesprisen, ikke gennemsnittet. Bruger vi en kWh
-                # nu og fylder den paa igen om en time, koster den hvad
-                # paafyldningen koster - hvad den energi der ligger der i
-                # forvejen kostede engang, er sunk cost.
-                #
-                # Der stod ``max(gennemsnit, ...)``, og da Predbat netop
-                # vaelger de billige timer til ladning, vandt gennemsnittet
-                # naesten altid. Grenen var i praksis doed.
+                # Den kendte paafyldning, ikke bare den billigste i
+                # horisonten: sker den om en halv time, er det *den* pris den
+                # kWh vi bruger nu, bliver lagt tilbage til.
                 return Price(
-                    next_charge.import_price * CHARGE_LOSS_MARKUP,
+                    next_charge.import_price / self.round_trip,
                     f"batteri: lades om {next_charge.minutes_ahead - slot.minutes_ahead} min",
                     BATTERY,
                 )
@@ -726,20 +790,22 @@ class Plan:
                     BATTERY,
                 )
 
-        # Aldrig dyrere end at koebe den samme kilowatt-time fra nettet i
-        # den samme halvtime. Paastaar gennemsnittet andet, er gennemsnittet
-        # forældet - importprisen er det tal vi faktisk kender.
+        # Ingen bestemt begivenhed at haenge prisen op paa. Saa er det
+        # genanskaffelsen i al almindelighed: den billigste import der er
+        # tilbage, ganget op med tabet hele vejen rundt.
         #
-        # Loftet er det eneste der overlever fra den gamle "balanceret"-gren.
-        # Den tog ``min(importpris, gennemsnit)`` og kaldte resultatet et navn
-        # der ikke var en kilde; her staar kilden rigtigt, og loftet bliver.
+        # Aldrig dyrere end at koebe den samme kilowatt-time fra nettet i den
+        # samme halvtime. Er den billigste fremtidige import dyrere end
+        # prisen nu, giver batteriet ingenting - og saa er loftet svaret.
+        # Det er det eneste der overlever fra den gamle "balanceret"-gren.
+        value = self.replacement_cost(slot.index)
         if slot.import_price is not None:
             return Price(
-                min(self.battery_average, slot.import_price),
-                "batteri: frit",
+                min(value, slot.import_price),
+                "batteri: genanskaffelse",
                 BATTERY,
             )
-        return Price(self.battery_average, "batteri: frit", BATTERY)
+        return Price(value, "batteri: genanskaffelse", BATTERY)
 
     # -------------------------------------------------------------- planlaeg
 
