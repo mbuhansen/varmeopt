@@ -254,6 +254,11 @@ class Price:
     # hvor stroemmen fysisk kommer fra, og de to er ikke det samme. En
     # halvtime hvor der eksporteres, henter stroemmen i batteriet og koster
     # den mistede indtaegt - kilde ``BATTERY``, begrundelse "eksport".
+    #
+    # "Fysisk" er over hele horisonten og ikke i det sekund kablet maales.
+    # Loeber planen toer inden batteriet fyldes igen, leverer inverteren godt
+    # nok kilowatt-timen nu, men den bliver koebt fra nettet naar bunden
+    # naas - saa er kilden nettet. Batteriet var kun en omvej.
     source: str = NET
     # Regnestykket bag. Kun til fejlsoegningsfilen.
     detail: str = ""
@@ -519,6 +524,39 @@ class Plan:
             return False
         return slot.soc_percent <= self.empty_percent
 
+    def _depleted(self, slot: Slot) -> bool:
+        """Er planen naaet ned til sit gulv i den halvtime?
+
+        Gulvet er Predbats reserve naar den kan laeses af planen, ellers
+        anlaeggets eget nulpunkt. Forskellen paa den her og ``_at_bottom`` er
+        hvem der spoerger: ``_at_bottom`` spoerger om inverteren kan levere
+        *nu*, og der er 5 % svaret. Den her spoerger om planen har mere at
+        give af, og der er reserven svaret - Predbat planlaegger ikke at gaa
+        under den, saa naar kurven rammer den, er der ikke mere tilbage af den
+        energi der ligger i batteriet i dag.
+        """
+        if slot.soc_percent is None:
+            return False
+        floor = self.reserve if self.reserve is not None else self.empty_percent
+        return slot.soc_percent <= floor + FLOOR_TOLERANCE
+
+    def _runs_dry(self, slot: Slot) -> Slot | None:
+        """Hvornaar planen bruger den energi der ligger i batteriet nu.
+
+        Energi kan ikke krydse en bund. Falder ladetilstanden ned til gulvet
+        inden batteriet fyldes igen, er den kilowatt-time der ligger der nu,
+        allerede lovet til huset foer da - og hvad der sker paa den anden side
+        af bunden, er en anden energi.
+
+        Ligger vi *allerede* paa gulvet, loeber der ikke noget toert forude:
+        saa er der ingen nedstigning at datere, og prisen hoerer til de andre
+        grene. Det er ogsaa det der holder reserven fra at blive en mur -
+        se ``_find_reserve``.
+        """
+        if slot.soc_percent is None or self._depleted(slot):
+            return None
+        return self._next_where(self._depleted, slot.index + 1)
+
     def _may_still_discharge(self, slot: Slot, floor: float | None) -> bool:
         """Er «bundet» alligevel ikke helt bundet?
 
@@ -686,7 +724,12 @@ class Plan:
             price = replace(price, detail=f"{price.detail} (solen daekker huset)")
         return price
 
-    def _best_export(self, after: int, next_charge: Slot | None) -> Slot | None:
+    def _best_export(
+        self,
+        after: int,
+        next_charge: Slot | None,
+        runs_dry: Slot | None = None,
+    ) -> Slot | None:
         """Den bedst betalte eksport der er tilbage, før batteriet lades op.
 
         Ikke den første. Den marginale kilowatt-time bliver solgt i den bedste
@@ -699,10 +742,20 @@ class Plan:
         grænse på tre timer, som kom fra den første portering og aldrig havde
         nogen begrundelse — planen kender salget tolv timer i forvejen, og om
         det ligger to eller elleve timer ude, er energien lige meget lovet væk.
+
+        Bunden er den anden grænse, og den manglede. Natten til den 9.
+        september lå batteriet på 32 % kl. 03:20, og planen kørte det ned til
+        reserven på 9 % kl. 07:20 — men grenen her fandt et salg kl. 21:20 til
+        1,31, atten timer og en bund senere, og prissatte hele døgnet til
+        1,18. Det salg er solens energi, ikke nattens: den kilowatt-time der
+        lå der kl. 03:20, var brugt længe før. Et salg på den anden side af
+        bunden er ikke et alternativ til at bruge energien nu.
         """
         best: Slot | None = None
         for candidate in self.slots[after:]:
             if next_charge is not None and candidate.index >= next_charge.index:
+                break
+            if runs_dry is not None and candidate.index > runs_dry.index:
                 break
             if not candidate.exporting or candidate.export_price is None:
                 continue
@@ -715,7 +768,8 @@ class Plan:
         after = slot.index + 1
         next_export = self._next_where(lambda s: s.exporting, after)
         next_charge = self._next_where(lambda s: s.refills, after)
-        best_export = self._best_export(after, next_charge)
+        runs_dry = self._runs_dry(slot)
+        best_export = self._best_export(after, next_charge, runs_dry)
 
         # Bliver energien solgt inden batteriet lades op igen, er den lovet
         # væk: den kilowatt-time vi bruger nu, er en der ikke bliver solgt.
@@ -775,8 +829,14 @@ class Plan:
 
         # Loeber batteriet toert inden det lades op igen, er dets energi fuldt
         # disponeret: den kWh vi bruger nu, er praecis den kWh der mangler i
-        # den halvtime hvor batteriet staar i bund, og den koeber vi fra
-        # nettet til den halvtimes importpris.
+        # den halvtime hvor planen naar sit gulv, og den koeber vi fra nettet
+        # til den halvtimes importpris.
+        #
+        # Gulvet er planens eget - reserven - og ikke anlaeggets nulpunkt paa
+        # 5 %. Det er ikke en mur under varmepumpen, som det ville vaere hvis
+        # den stod i ``_at_bottom``: den siger stadig at inverteren gerne maa
+        # aflade ned til 5 %. Den siger kun hvornaar planen ikke har mere at
+        # give af, og det er dér den manglende kilowatt-time bliver koebt.
         #
         # Gennemsnittet nedenfor er hvad energien kostede engang. Det tal maa
         # kun bruges naar batteriet bliver fyldt igen inden det skal bruges -
@@ -784,7 +844,7 @@ class Plan:
         # priser bogfoeres. Det er den samme genanskaffelsestanke som i
         # ladegrenen ovenfor; forskellen er kun hvor energien kommer tilbage
         # fra, og her er svaret nettet.
-        empty = self._next_where(self._at_bottom, slot.index + 1)
+        empty = runs_dry
         if empty is not None and next_charge is not None and next_charge.index <= empty.index:
             empty = None
         if empty is not None:
@@ -812,11 +872,18 @@ class Plan:
                 )
             if empty.import_price is not None:
                 minutes = empty.minutes_ahead - slot.minutes_ahead
+                # Kilden er nettet, ikke batteriet - og det er ikke en
+                # smagssag. Inverteren leverer godt nok den kilowatt-time i
+                # det sekund den bruges, men den bliver koebt fra nettet naar
+                # planen naar bunden, og det er den koebspris varmen skal
+                # baere. Stod der "batteri" paa raekken, ville planen love
+                # billig varme paa energi der allerede er lovet vaek.
                 return Price(
                     empty.import_price,
-                    BATTERY,
-                    BATTERY,
-                    detail=f"koebes tilbage om {minutes} min",
+                    NET,
+                    NET,
+                    detail=f"koebes tilbage om {minutes} min "
+                    f"til {empty.import_price:.2f}",
                 )
 
         # Ingen bestemt begivenhed at haenge prisen op paa. Saa er det

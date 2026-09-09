@@ -405,6 +405,48 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 1.85, places=9)
         self.assertIn("koebes tilbage", price.detail)
 
+    def test_a_sale_on_the_other_side_of_the_bottom_is_not_an_alternative(self):
+        # Natten til den 9. september laa batteriet paa 32 % kl. 03:20, og
+        # planen koerte det ned til reserven paa 9 % fire timer senere. Solen
+        # fyldte det op igen, og om aftenen solgte Predbat til 1,31. Uden
+        # bunden som graense fandt vaerdisaettelsen *det* salg atten timer
+        # ude og prissatte hele natten til 1,18 - og saa saa en opladning
+        # kl. 03:20 billig ud paa energi der var brugt laenge inden. Den
+        # kilowatt-time nattens varmepumpe tager, koeber huset tilbage fra
+        # nettet naar planen rammer bunden.
+        p = plan(
+            row(soc=32, import_rate=159),
+            row(soc=20, import_rate=158),
+            row(soc=9, import_rate=223),
+            row(soc=9, import_rate=222),
+            row(soc=45, import_rate=100),
+            row(state="exp", soc=83, export_rate=131),
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertEqual(p.reserve, 9)
+        self.assertEqual(price.source, NET)
+        self.assertAlmostEqual(price.kr_per_kwh, 2.23, places=9)
+        self.assertIn("koebes tilbage om 60 min", price.detail)
+
+    def test_a_bottom_after_the_sale_does_not_block_it(self):
+        # Bunden spaerrer kun for det der ligger bagved den. Kommer salget
+        # foerst, er energien lovet vaek dertil, og prisen er den mistede
+        # indtaegt - ikke importprisen i en bund der ligger endnu senere.
+        p = plan(
+            row(soc=60),
+            row(state="exp", soc=40, export_rate=210),
+            row(soc=9, import_rate=250),
+            row(soc=9, import_rate=250),
+            cheapest=1.00,
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertEqual(price.source, BATTERY)
+        self.assertAlmostEqual(price.kr_per_kwh, 2.10 * 0.90, places=9)
+
     def test_a_charge_before_the_bottom_leaves_the_replacement_alone(self):
         # Fyldes batteriet inden det loeber toert, er energien ikke
         # disponeret - saa skal den ikke koebes tilbage i bunden, og prisen
