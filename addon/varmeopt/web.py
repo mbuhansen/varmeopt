@@ -980,7 +980,7 @@ def _price_section(status: dict[str, Any]) -> str:
 
     rows = [
         ("Marginal elpris", f"{price.kr_per_kwh:.2f} kr/kWh"),
-        ("Hvorfor", _esc(price.reason)),
+        ("Kommer fra", _esc(price.reason)),
         ("Varmepumpevarme", _fmt(heat, "kr/kWh", 3)),
         ("Pillevarme", _fmt(pellet, "kr/kWh", 3)),
     ]

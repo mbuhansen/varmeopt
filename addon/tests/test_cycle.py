@@ -180,7 +180,8 @@ class CycleTest(unittest.TestCase):
         self.assertAlmostEqual(published["sensor.varmeopt_elpris"], 1.80, places=3)
 
         status = self.app.status
-        self.assertEqual(status["price_now"].reason, "net: afladning er slaaet fra")
+        self.assertEqual(status["price_now"].reason, "net")
+        self.assertIn("afladning", status["price_now"].detail)
         # 1,80 delt med den lærte COP mod pillefyrets 0,706.
         self.assertIsNotNone(status["heat_price"])
         self.assertIn(status["decision"].source, ("varmepumpe", "pillefyr"))
@@ -221,7 +222,8 @@ class CycleTest(unittest.TestCase):
         self.assertAlmostEqual(
             self.app.status["price_now"].kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=3
         )
-        self.assertIn("genanskaffelse", self.app.status["price_now"].reason)
+        self.assertEqual(self.app.status["price_now"].reason, "batteri")
+        self.assertIn("genanskaffelse", self.app.status["price_now"].detail)
 
     def test_a_balanced_plant_runs_on_the_battery_at_the_grid_s_price(self):
         # Ingen maalbar stroem nogen vej. Kilden er inverteren - det er
@@ -238,7 +240,8 @@ class CycleTest(unittest.TestCase):
 
         self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 0.40, places=3)
         self.assertEqual(self.app.status["price_now"].source, "batteri")
-        self.assertIn("genanskaffelse", self.app.status["price_now"].reason)
+        self.assertEqual(self.app.status["price_now"].reason, "batteri")
+        self.assertIn("genanskaffelse", self.app.status["price_now"].detail)
 
     # ------------------------------------------------- Predbats egen status
 

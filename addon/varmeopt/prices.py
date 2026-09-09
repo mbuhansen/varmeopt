@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import logging
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -231,11 +231,20 @@ class Slot:
 
 @dataclass(frozen=True)
 class Price:
-    """En marginalpris med begrundelsen. Begrundelsen er ikke pynt.
+    """En marginalpris med to begrundelser, en kort og en lang.
 
-    Uden den kan man ikke se forskel på "0,26 kr fordi batteriet er billigt" og
-    "0,26 kr fordi vi lige nu smider strøm ud til den pris" — og de to fører
-    til helt forskellige beslutninger en time senere.
+    ``reason`` er det ene ord der skal stå på skærmen: hvor kilowatt-timen
+    kommer fra, eller — når det er derfor den er dyr — at den kan sælges.
+    Ordforrådet er med vilje lille, for en plan man skal læse en forklaring
+    for at forstå, bliver ikke læst:
+
+    ``net`` · ``net, lader op`` · ``batteri`` · ``sol`` · ``eksport``
+
+    ``detail`` er regnestykket bag: hvilken gren der svarede, og med hvilket
+    tal. Den står i fejlsøgningsfilen og ingen andre steder. Uden den kan man
+    ikke bagefter se forskel på "0,26 kr fordi batteriet lades billigt om en
+    time" og "0,26 kr fordi vi smider strøm ud til den pris netop nu" — og de
+    to fører til helt forskellige beslutninger en time senere.
     """
 
     kr_per_kwh: float
@@ -246,6 +255,8 @@ class Price:
     # halvtime hvor der eksporteres, henter stroemmen i batteriet og koster
     # den mistede indtaegt - kilde ``BATTERY``, begrundelse "eksport".
     source: str = NET
+    # Regnestykket bag. Kun til fejlsoegningsfilen.
+    detail: str = ""
 
 
 @dataclass(frozen=True)
@@ -412,8 +423,8 @@ class Plan:
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
             log.warning(
-                "ukendte Predbat-tilstande i planen: %s - de prissættes som "
-                "et frit batteri, hvilket de måske ikke er",
+                "ukendte Predbat-tilstande i planen: %s - batteriet laases "
+                "konservativt, og prisen kan derfor vaere for hoej",
                 ", ".join(repr(u) for u in unknown),
             )
         return plan
@@ -570,7 +581,13 @@ class Plan:
         if physical_export or slot.exporting:
             if slot.export_price is not None:
                 sold = SUN if slot.frozen else BATTERY
-                return Price(slot.export_price, "eksport: mistet indtjening", sold)
+                return Price(
+                    slot.export_price,
+                    "eksport",
+                    sold,
+                    detail="der saelges i den halvtime - prisen er den "
+                    "indtaegt vi giver afkald paa",
+                )
 
         # 2. Batteriet er bundet. Varmepumpen koerer paa nettet.
         #
@@ -583,21 +600,23 @@ class Plan:
         #    batterigrenen - de point ned til gulvet er rigtig energi.
         if slot.locked and not self._may_still_discharge(slot, floor):
             if slot.import_price is not None:
-                why = (
-                    "net: batteriet lades"
+                # Lades der fra nettet, kommer ekstra forbrug ogsaa derfra -
+                # solen gaar jo i batteriet. Er afladningen bare slaaet fra,
+                # kan solen daekke huset saa langt den raekker.
+                source = NET if slot.refills else self._grid_or_sun(grid)
+                why = "net, lader op" if slot.refills else source
+                detail = (
+                    "batteriet lades fra nettet"
                     if slot.refills
-                    else "net: afladning er slaaet fra"
+                    else "afladning er slaaet fra"
                 )
                 if not slot.understood:
                     # En tilstand vi ikke kender, laases - men saa skal det
                     # ogsaa staa der, i stedet for at se ud som en beslutning
                     # Predbat har truffet.
-                    why = f"net: ukendt tilstand «{slot.state}»"
-                # Lades der fra nettet, kommer ekstra forbrug ogsaa derfra -
-                # solen gaar jo i batteriet. Er afladningen bare slaaet fra,
-                # kan solen daekke huset saa langt den raekker.
-                source = NET if slot.refills else self._grid_or_sun(grid)
-                return Price(slot.import_price, why, source)
+                    why = f"{source}, ukendt tilstand"
+                    detail = f"ukendt Predbat-tilstand «{slot.state}» - laast"
+                return Price(slot.import_price, why, source, detail=detail)
 
         # 3. Koeber vi allerede fra nettet, kommer den naeste kWh derfra.
         #
@@ -607,7 +626,12 @@ class Plan:
         #    sit loft: batteriet giver alt hvad det kan, og *ekstra* forbrug
         #    kan kun komme fra nettet.
         if physical_import and slot.import_price is not None:
-            return Price(slot.import_price, "net: import", NET)
+            return Price(
+                slot.import_price,
+                NET,
+                NET,
+                detail="maaleren ser import - inverteren staar paa sit loft",
+            )
 
         # 3b. Er batteriet i bund, kommer den naeste kWh fra nettet - og det
         #     er ligegyldigt hvad der er planlagt senere.
@@ -624,10 +648,12 @@ class Plan:
         #     energiens vaerdi der er spoergsmaalet, naar der ikke er nogen
         #     energi at tage af.
         if self._at_bottom(slot) and slot.import_price is not None:
+            source = self._grid_or_sun(grid)
             return Price(
                 slot.import_price,
-                f"net: batteriet er tomt ({slot.soc_percent:.0f} %)",
-                self._grid_or_sun(grid),
+                source,
+                source,
+                detail=f"batteriet er tomt ({slot.soc_percent:.0f} %)",
             )
 
         # 4. Tilbage er der kun én mulighed: inverteren maa aflade, og der er
@@ -649,18 +675,15 @@ class Plan:
         price = self._battery_price(slot)
         if price is None:
             return None
+        # De to her hoerer til regnestykket, ikke til skaermen: de aendrer
+        # hverken prisen eller hvor stroemmen kommer fra.
         if slot.locked and floor is not None:
-            price = Price(
-                price.kr_per_kwh,
-                f"{price.reason} (hold charge ned til {floor:.0f} %)",
-                price.source,
+            price = replace(
+                price,
+                detail=f"{price.detail} (hold charge ned til {floor:.0f} %)",
             )
         if grid is not None and grid.solar_covering:
-            price = Price(
-                price.kr_per_kwh,
-                f"{price.reason} (solen daekker huset)",
-                price.source,
-            )
+            price = replace(price, detail=f"{price.detail} (solen daekker huset)")
         return price
 
     def _best_export(self, after: int, next_charge: Slot | None) -> Slot | None:
@@ -727,9 +750,10 @@ class Plan:
                 minutes = best_export.minutes_ahead - slot.minutes_ahead
                 return Price(
                     best_export.export_price * EXPORT_DISCOUNT,
-                    f"batteri: værdisat mod eksport om {minutes} min "
-                    f"(SOC {soc:.0f} %)",
+                    "eksport",
                     BATTERY,
+                    detail=f"vaerdisat mod eksport om {minutes} min "
+                    f"(SOC {soc:.0f} %)",
                 )
 
         # Fyldes batteriet billigt snart, kan det bruges frit - det bliver
@@ -742,8 +766,11 @@ class Plan:
                 # kWh vi bruger nu, bliver lagt tilbage til.
                 return Price(
                     next_charge.import_price / self.round_trip,
-                    f"batteri: lades om {next_charge.minutes_ahead - slot.minutes_ahead} min",
                     BATTERY,
+                    BATTERY,
+                    detail="lades om "
+                    f"{next_charge.minutes_ahead - slot.minutes_ahead} min "
+                    f"til {next_charge.import_price:.2f}",
                 )
 
         # Loeber batteriet toert inden det lades op igen, er dets energi fuldt
@@ -779,15 +806,17 @@ class Plan:
                 minutes = sold.minutes_ahead - slot.minutes_ahead
                 return Price(
                     sold.export_price * EXPORT_DISCOUNT,
-                    f"batteri: sælges ellers om {minutes} min",
+                    "eksport",
                     BATTERY,
+                    detail=f"saelges ellers om {minutes} min",
                 )
             if empty.import_price is not None:
                 minutes = empty.minutes_ahead - slot.minutes_ahead
                 return Price(
                     empty.import_price,
-                    f"batteri: købes tilbage om {minutes} min",
                     BATTERY,
+                    BATTERY,
+                    detail=f"koebes tilbage om {minutes} min",
                 )
 
         # Ingen bestemt begivenhed at haenge prisen op paa. Saa er det
@@ -799,13 +828,20 @@ class Plan:
         # prisen nu, giver batteriet ingenting - og saa er loftet svaret.
         # Det er det eneste der overlever fra den gamle "balanceret"-gren.
         value = self.replacement_cost(slot.index)
-        if slot.import_price is not None:
+        if slot.import_price is not None and slot.import_price < value:
             return Price(
-                min(value, slot.import_price),
-                "batteri: genanskaffelse",
+                slot.import_price,
                 BATTERY,
+                BATTERY,
+                detail="genanskaffelsen er dyrere end at koebe den nu - "
+                f"loftet svarer ({slot.import_price:.2f})",
             )
-        return Price(value, "batteri: genanskaffelse", BATTERY)
+        return Price(
+            value,
+            BATTERY,
+            BATTERY,
+            detail=f"genanskaffelse: billigste import forude / {self.round_trip:.3f}",
+        )
 
     # -------------------------------------------------------------- planlaeg
 

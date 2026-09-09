@@ -87,7 +87,7 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
         )
 
         self.assertAlmostEqual(rows[0].electricity, 3.50, places=9)
-        self.assertEqual(rows[0].reason, "net: import")
+        self.assertEqual(rows[0].reason, "net")
 
 
 class ReleaseOnShutdownTest(unittest.TestCase):
