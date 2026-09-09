@@ -147,6 +147,11 @@ NET = "net"
 BATTERY = "batteri"
 SUN = "sol"
 
+# Ikke en kilde, men en begrundelse - som "eksport". Stroemmen kommer fra
+# batteriet, og den er dyr fordi den skal koebes fra nettet igen naar planen
+# naar sin bund.
+BOUGHT_BACK = "koebes tilbage"
+
 
 def _number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
@@ -238,7 +243,8 @@ class Price:
     Ordforrådet er med vilje lille, for en plan man skal læse en forklaring
     for at forstå, bliver ikke læst:
 
-    ``net`` · ``net, lader op`` · ``batteri`` · ``sol`` · ``eksport``
+    ``net`` · ``net, lader op`` · ``batteri`` · ``sol`` · ``eksport`` ·
+    ``koebes tilbage``
 
     ``detail`` er regnestykket bag: hvilken gren der svarede, og med hvilket
     tal. Den står i fejlsøgningsfilen og ingen andre steder. Uden den kan man
@@ -253,12 +259,9 @@ class Price:
     # Begrundelsen forklarer *hvorfor* den koster det den koster; kilden er
     # hvor stroemmen fysisk kommer fra, og de to er ikke det samme. En
     # halvtime hvor der eksporteres, henter stroemmen i batteriet og koster
-    # den mistede indtaegt - kilde ``BATTERY``, begrundelse "eksport".
-    #
-    # "Fysisk" er over hele horisonten og ikke i det sekund kablet maales.
-    # Loeber planen toer inden batteriet fyldes igen, leverer inverteren godt
-    # nok kilowatt-timen nu, men den bliver koebt fra nettet naar bunden
-    # naas - saa er kilden nettet. Batteriet var kun en omvej.
+    # den mistede indtaegt - kilde ``BATTERY``, begrundelse "eksport". Det
+    # samme gaelder "koebes tilbage": stroemmen kommer fra batteriet, og den
+    # er dyr fordi den skal koebes fra nettet naar planen naar bunden.
     source: str = NET
     # Regnestykket bag. Kun til fejlsoegningsfilen.
     detail: str = ""
@@ -878,16 +881,21 @@ class Plan:
                 )
             if empty.import_price is not None:
                 minutes = empty.minutes_ahead - slot.minutes_ahead
-                # Kilden er nettet, ikke batteriet - og det er ikke en
-                # smagssag. Inverteren leverer godt nok den kilowatt-time i
-                # det sekund den bruges, men den bliver koebt fra nettet naar
-                # planen naar bunden, og det er den koebspris varmen skal
-                # baere. Stod der "batteri" paa raekken, ville planen love
-                # billig varme paa energi der allerede er lovet vaek.
+                # Kilden er batteriets, begrundelsen er nettets, og de to
+                # skal ikke slaas sammen til ét ord.
+                #
+                # Her stod NET i begge felter en dag, og paa skaermen var det
+                # forkert: Predbat staar paa demand, ladetilstanden er 30 %,
+                # og inverteren leverer. Det *er* batteriet den naeste
+                # kilowatt-time kommer fra. At den saa koster importprisen i
+                # bunden, er en anden oplysning, og det er praecis derfor de
+                # to felter findes - prisen siger hvad den koster, kilden
+                # hvor den kommer fra, og begrundelsen hvorfor de to ikke
+                # foelges ad.
                 return Price(
                     empty.import_price,
-                    NET,
-                    NET,
+                    BOUGHT_BACK,
+                    BATTERY,
                     detail=f"koebes tilbage om {minutes} min "
                     f"til {empty.import_price:.2f}",
                 )

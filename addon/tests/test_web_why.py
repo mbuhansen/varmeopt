@@ -171,6 +171,32 @@ class PlanTableTest(unittest.TestCase):
 
         self.assertIn(">net</span> ·", html)
 
+    def test_a_battery_row_that_must_be_bought_back_says_both(self):
+        # Predbat staar paa demand og inverteren leverer, saa stroemmen
+        # kommer fra batteriet - det er hvad raekken skal sige. At den saa
+        # koster importprisen i bunden, er en anden oplysning, og den hoerer
+        # ogsaa til: uden den ser 2,23 kr ud som en fejl.
+        html = self.html([
+            self.row(),
+            self.row(
+                minutes=30,
+                power="batteri",
+                reason="koebes tilbage",
+                state="demand",
+                soc_percent=30.0,
+            ),
+        ])
+
+        self.assertIn("batteri · koebes tilbage", html)
+
+    def test_a_row_where_the_two_agree_says_the_word_once(self):
+        html = self.html([
+            self.row(),
+            self.row(minutes=30, power="batteri", reason="batteri"),
+        ])
+
+        self.assertNotIn("batteri · batteri", html)
+
     def test_a_row_without_a_plan_state_leaves_a_dash(self):
         html = self.html([self.row(state="", soc_percent=None)])
 

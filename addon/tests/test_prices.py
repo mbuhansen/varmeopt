@@ -426,9 +426,13 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertEqual(p.reserve, 9)
-        self.assertEqual(price.source, NET)
         self.assertAlmostEqual(price.kr_per_kwh, 2.23, places=9)
         self.assertIn("koebes tilbage om 60 min", price.detail)
+        # Kilden er stadig batteriets: Predbat staar paa demand, og
+        # inverteren leverer. Det er *prisen* der kommer fra nettet, og den
+        # oplysning hoerer til i begrundelsen - ikke i kilden.
+        self.assertEqual(price.source, BATTERY)
+        self.assertEqual(price.reason, "koebes tilbage")
 
     def test_a_bottom_after_the_sale_does_not_block_it(self):
         # Bunden spaerrer kun for det der ligger bagved den. Kommer salget
@@ -677,15 +681,26 @@ class WindowTest(unittest.TestCase):
 
 
 class ReasonVocabularyTest(unittest.TestCase):
-    """Begrundelsen er ét ord, og der er kun fem af dem.
+    """Begrundelsen er ét ord, og der er kun seks af dem.
 
     En plan man skal laese en forklaring for at forstaa, bliver ikke laest.
     Regnestykket bag staar i ``detail`` og gaar til fejlsoegningsfilen.
+
+    To af de seks er ikke kilder men grunde: "eksport" og "koebes tilbage".
+    Begge staar paa en raekke hvor stroemmen kommer fra batteriet, og begge
+    siger hvorfor den energi ikke er gratis at bruge.
     """
 
-    WORDS = {"net", "net, lader op", "batteri", "sol", "eksport"}
+    WORDS = {
+        "net",
+        "net, lader op",
+        "batteri",
+        "sol",
+        "eksport",
+        "koebes tilbage",
+    }
 
-    def test_every_reason_is_one_of_the_five_words(self):
+    def test_every_reason_is_one_of_the_words(self):
         plans = [
             plan(row()),
             plan(row(import_rate=300), row(import_rate=100)),
