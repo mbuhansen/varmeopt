@@ -59,7 +59,10 @@ class FakeHa:
 
     async def call_service(self, domain, service, data):
         self.services.append((domain, service))
-        return self.forecast_response
+        # Som Home Assistants REST-API svarer: service-svaret ligger inde i
+        # en indpakning. Attrappen svarede foer uden den, og saa kunne den
+        # ikke se at udsigten var ulaeselig paa det koerende anlaeg.
+        return {"changed_states": [], "service_response": self.forecast_response}
 
 
 class CycleTest(unittest.TestCase):

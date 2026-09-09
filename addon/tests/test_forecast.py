@@ -115,5 +115,39 @@ class ChainTest(unittest.TestCase):
         self.assertAlmostEqual(evening, 3.9, places=1)
 
 
+class RestEnvelopeTest(unittest.TestCase):
+    """REST-API'et pakker svaret ind én gang mere end attrappen gjorde.
+
+    Det var den indpakning der gjorde udsigten ulaeselig paa det koerende
+    anlaeg: hver halve time en advarsel, og en planlaegger der regnede hele
+    horisonten paa den temperatur der var *nu*.
+    """
+
+    def envelope(self, inner):
+        return {"changed_states": [], "service_response": inner}
+
+    def test_the_service_response_is_unwrapped(self):
+        raw = self.envelope(response((0, 15.0), (1, 13.0)))
+
+        f = Forecast.from_response(raw, ENTITY, NOW)
+
+        self.assertEqual([m for m, _ in f.points], [0.0, 60.0])
+
+    def test_it_still_works_without_the_envelope(self):
+        # Attrapper og aeldre udgaver svarer uden.
+        f = Forecast.from_response(response((0, 15.0)), ENTITY, NOW)
+
+        self.assertEqual(len(f), 1)
+
+    def test_an_envelope_without_the_entity_id_is_still_read(self):
+        raw = self.envelope({"forecast": response((0, 15.0))[ENTITY]["forecast"]})
+
+        self.assertEqual(len(Forecast.from_response(raw, ENTITY, NOW)), 1)
+
+    def test_an_empty_envelope_gives_an_empty_forecast(self):
+        for junk in (self.envelope({}), self.envelope(None), {"changed_states": []}):
+            self.assertEqual(len(Forecast.from_response(junk, ENTITY, NOW)), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

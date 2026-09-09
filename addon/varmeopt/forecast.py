@@ -44,7 +44,19 @@ class Forecast:
         Formen er ``{"weather.x": {"forecast": [{"datetime": ..., "temperature":
         ...}]}}``. Punkter der ligger bag os springes over — en udsigt der
         begynder i går siger intet om i aften.
+
+        Men REST-API'et pakker det ind én gang mere::
+
+            {"changed_states": [...], "service_response": {"weather.x": {...}}}
+
+        Det er den indpakning der gjorde udsigten ulæselig i praksis. Attrappen
+        i testene svarede uden den, så fejlen kunne kun ses på det kørende
+        anlæg — som en advarsel hver halve time og en planlægger der regnede
+        hele horisonten på den temperatur der var *nu*.
         """
+        if isinstance(response, dict) and "service_response" in response:
+            response = response.get("service_response")
+
         block = response.get(entity_id) if isinstance(response, dict) else None
         if not isinstance(block, dict):
             # Nogle udgaver svarer uden at gentage entitets-id'et.

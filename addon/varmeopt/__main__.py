@@ -739,8 +739,14 @@ class Varmeopt:
                 max(t for _, t in forecast.points),
             )
         else:
+            # Sig hvad der kom tilbage. Stod der bare "kunne ikke laeses",
+            # var det umuligt at se om entiteten var forkert, eller om svaret
+            # havde en anden form end den vi pakker ud.
+            keys = sorted(response) if isinstance(response, dict) else type(response).__name__
             log.warning(
-                "vejrudsigten fra %s kunne ikke laeses", self.options.entity_weather
+                "vejrudsigten fra %s kunne ikke laeses - svaret indeholdt %s",
+                self.options.entity_weather,
+                keys,
             )
 
     def _cop_at(self, minutes: int) -> float | None:
