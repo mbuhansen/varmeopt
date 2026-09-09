@@ -1,7 +1,8 @@
+import time
 import unittest
 
-from varmeopt.planner import Decision, Planner, source_now
-from varmeopt.prices import Plan
+from varmeopt.planner import Decision, Planner, minutes_until_hour, source_now
+from varmeopt.prices import Grid, Plan
 
 PELLET = 0.706
 
@@ -565,3 +566,127 @@ class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
         self.assertTrue(d.charge)
         self.assertGreater(d.saving_kr, 0.0)
 
+
+
+class DeadlineTest(unittest.TestCase):
+    """Fristen paa uret: lageret skal vaere fyldt kl. 17.
+
+    Prisen kender ikke badetiden. Den ser kun at aftenen er dyrere end nu,
+    og den slutning kommer for sent hvis den billigste halvtime ligger lige
+    inden - eller lige efter - det tidspunkt tankene skal vaere fulde.
+    """
+
+    def setUp(self):
+        # 1,00 nu og de naeste to halvtimer, saa 0,30 kl. 90 min, og
+        # 3,00 kl. 120. COP 3: varmen koster 0,48 nu og 0,25 i den billige.
+        self.plan = plan(100, 100, 100, 30, 300)
+        self.planner = planner()
+
+    def test_without_a_deadline_it_waits_for_the_cheap_half_hour(self):
+        # Den billige halvtime ligger foer toppen, og der er tid nok. Saa
+        # venter den - og det er rigtigt, naar uret ikke siger andet.
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("venter", d.reason)
+        self.assertEqual(d.window_starts_in, 120)
+
+    def test_the_clock_can_be_stricter_than_the_price(self):
+        # Skal lageret vaere fyldt om 90 minutter, er den billige halvtime
+        # der ligger *paa* fristen uden vaerdi: varmen naar ikke i tankene
+        # inden der bades. Saa lades der nu.
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            deadline_minutes=90,
+        )
+
+        self.assertTrue(d.charge)
+        self.assertEqual(d.window_starts_in, 90)
+
+    def test_a_deadline_beyond_the_price_changes_nothing(self):
+        # Ligger fristen laengere ude end det tidspunkt hvor det bliver
+        # dyrt, er det stadig prisen der binder.
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            deadline_minutes=600,
+        )
+
+        self.assertFalse(d.charge)
+        self.assertEqual(d.window_starts_in, 120)
+
+    def test_the_sun_does_not_wait_for_a_cheaper_hour(self):
+        # Er det solen der baerer huset, er der ikke en billigere time at
+        # vente paa - tankene skal bare vaere fulde inden fristen. Det er
+        # kun naar der lades fra nettet at timen skal vaere den billigste.
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            grid=Grid(pv_power=3000.0),
+        )
+
+        self.assertTrue(d.charge)
+
+
+    def test_the_bath_is_counted_from_the_deadline_and_not_from_the_peak(self):
+        # Badet ligger kl. 19 uanset hvornaar stroemmen er dyrest. Har uret
+        # sat fristen, skal doegnprofilen derfor laeses fra fristen og frem -
+        # ellers skal lageret kun kunne lave badevand fra det tidspunkt
+        # prisen tilfaeldigvis topper, og saa staar man med kolde tanke kl. 19.
+        asked = []
+
+        def profile(start_min, hours):
+            asked.append((start_min, hours))
+            return 5.0
+
+        self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            stored_kwh=0.0, hot_kwh=0.0, demand_kw=3.0,
+            dhw_kwh_over=profile, deadline_minutes=90,
+        )
+
+        # Vinduet er dyrt fra 120; fristen er 90. Profilen skal laeses fra 90.
+        self.assertEqual(asked[0][0], 90)
+
+    def test_without_a_deadline_the_bath_is_counted_over_the_dear_window(self):
+        asked = []
+
+        def profile(start_min, hours):
+            asked.append((start_min, hours))
+            return 5.0
+
+        self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            stored_kwh=0.0, hot_kwh=0.0, demand_kw=3.0,
+            dhw_kwh_over=profile,
+        )
+
+        self.assertEqual(asked[0][0], 120)
+
+
+class DeadlineOnTheClockTest(unittest.TestCase):
+    """``minutes_until_hour`` - fristen som minutter, i lokal tid."""
+
+    def test_a_time_later_today_is_the_hours_between(self):
+        now = time.time()
+        local = time.localtime(now)
+        ahead = minutes_until_hour((local.tm_hour + 2) % 24, now)
+
+        self.assertGreater(ahead, 60)
+        self.assertLessEqual(ahead, 120)
+
+    def test_a_time_already_passed_is_tomorrows(self):
+        # Fristen binder kun den del af doegnet hvor den er foran os. Er den
+        # passeret, ligger den laengere ude end nogen horisont.
+        now = time.time()
+        local = time.localtime(now)
+        ahead = minutes_until_hour((local.tm_hour - 1) % 24, now)
+
+        self.assertGreater(ahead, 22 * 60)
+
+    def test_a_time_outside_the_day_turns_the_deadline_off(self):
+        now = time.time()
+
+        self.assertIsNone(minutes_until_hour(-1, now))
+        self.assertIsNone(minutes_until_hour(24, now))
+        self.assertIsNone(minutes_until_hour(None, now))

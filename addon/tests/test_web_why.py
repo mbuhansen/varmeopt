@@ -356,6 +356,16 @@ class ChargeCardTest(unittest.TestCase):
         self.assertIn("fra kl. ", card)
         self.assertNotIn("210 min", card)
 
+    def test_a_deadline_on_the_clock_does_not_claim_the_price_rises(self):
+        # Fristen kan komme fra uret i stedet for fra prisraekken. Saa er
+        # "stroemmen bliver dyr kl. 17" en paastand ingen har efterproevet -
+        # tidspunktet kommer fra at der bades om aftenen.
+        card = self.card(deadline_on_the_clock=True)
+
+        self.assertIn("Lageret skal være fyldt", card)
+        self.assertNotIn("Strømmen bliver dyr", card)
+        self.assertIn("dyrest kl. ", card)
+
     def test_it_also_answers_when_it_does_not_charge(self):
         card = self.card(
             charge=False,

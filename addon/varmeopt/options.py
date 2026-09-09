@@ -144,6 +144,19 @@ _DEFAULTS: dict[str, object] = {
     # Hvor langt frem det giver mening at gemme varme. Ud over det aeder
     # staatabet gevinsten, og prisprognosen bliver for usikker.
     "planner_horizon_hours": 12,
+    # Klokkeslaettet lageret skal vaere fyldt til. Det er en frist paa uret
+    # og ikke et prisargument: der bades om aftenen, og huset koerer paa
+    # restvarmen natten igennem. Prisraekken kender hverken badetiden eller
+    # at UVR'en starter varmepumpen selv naar tankene er kolde - den ser kun
+    # at aftenen er dyrere end nu, og den slutning kan vaere for svag til at
+    # handle paa i tide.
+    #
+    # Om vinteren passer den sig selv: er natten den billige tid, er
+    # tankene alligevel toemt naar den kommer, og saa lades der dér.
+    #
+    # Et tal uden for doegnet slaar fristen fra - saa er det prisen alene
+    # der bestemmer hvornaar opladningen skal vaere faerdig.
+    "store_full_by_hour": 17,
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
@@ -293,6 +306,7 @@ class Options:
     hp_charge_kw: float
     hp_wear_kr_per_kwh: float
     planner_horizon_hours: float
+    store_full_by_hour: float
     pellet_price_per_kg: float
     pellet_kwh_per_kg: float
     pellet_efficiency: float
@@ -447,6 +461,7 @@ class Options:
                     "vvb_kw_cold",
                     "vvb_kw_hot",
                     "dhw_usable_temp",
+                    "store_full_by_hour",
                 )
             },
             # Alle entity_*-felter er strenge, så de kan tages under ét i

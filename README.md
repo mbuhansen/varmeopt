@@ -280,6 +280,7 @@ siges i loggen ved opstart.
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
 | `planner_horizon_hours` | 12 | Hvor langt frem det giver mening at gemme varme |
+| `store_full_by_hour` | 17 | Klokkeslættet lageret skal være fyldt til. En frist på uret, ikke et prisargument: der bades om aftenen, og huset kører på restvarmen natten igennem. Et tal uden for døgnet slår fristen fra |
 | `entity_weather` | `weather.hjem` | Home Assistants egen vejrudsigt. Uden den arver hver time i planen den COP vi har nu |
 | `forecast_refresh_minutes` | 30 | Udsigten ændrer sig i timer, ikke i minutter |
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |

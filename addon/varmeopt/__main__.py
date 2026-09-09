@@ -46,7 +46,7 @@ from .migrate import (
     load_solar,
 )
 from .options import Options
-from .planner import Planner
+from .planner import Planner, minutes_until_hour
 from .prices import (
     BATTERY_LOSS,
     BATTERY_LOSS_DISCHARGE,
@@ -275,6 +275,12 @@ class Varmeopt:
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
+            # Fristen paa uret. Den regnes her og ikke i planlaeggeren:
+            # planlaeggeren faar minutter, ikke et klokkeslaet, saa den kan
+            # proeves af uden at nogen skal stille en systemklokke.
+            deadline_minutes=minutes_until_hour(
+                self.options.store_full_by_hour, time.time()
+            ),
         )
         # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
         # det. Siger den nej, staar beslutningen der stadig, men flaget

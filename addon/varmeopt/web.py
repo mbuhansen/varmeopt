@@ -1231,10 +1231,20 @@ def _charge_card(status: dict[str, Any], dhw_temp: float | None = None) -> str:
             )
         )
     if decision.window_starts_in is not None:
-        when = f"fra kl. {_clock(decision.window_starts_in)}"
-        if decision.window_minutes is not None:
-            when += f", dyrest kl. {_clock(decision.window_minutes)}"
-        rows.append(("Strømmen bliver dyr", when))
+        # Fristen kan komme to steder fra, og raekken skal sige hvilket. Er
+        # det uret der har sat den, er "strømmen bliver dyr kl. 17" en
+        # påstand om priserne som ingen har efterprøvet - tidspunktet kommer
+        # fra at der bades om aftenen.
+        if decision.deadline_on_the_clock:
+            when = f"kl. {_clock(decision.window_starts_in)}"
+            if decision.window_minutes is not None:
+                when += f" — dyrest kl. {_clock(decision.window_minutes)}"
+            rows.append(("Lageret skal være fyldt", when))
+        else:
+            when = f"fra kl. {_clock(decision.window_starts_in)}"
+            if decision.window_minutes is not None:
+                when += f", dyrest kl. {_clock(decision.window_minutes)}"
+            rows.append(("Strømmen bliver dyr", when))
     elif decision.window_minutes is not None:
         rows.append(("Dyreste time", f"kl. {_clock(decision.window_minutes)}"))
     if decision.saving_kr is not None:
