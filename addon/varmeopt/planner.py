@@ -707,9 +707,12 @@ class Planner:
         lageret tomt fra sytten, midt i badetiden, og UVR'en startede
         varmepumpen selv.
         """
-        if _finite(deadline_minutes) and 0 < deadline_minutes < priced:
-            return int(deadline_minutes)
-        return priced
+        # ``None`` foerst og for sig: ``_finite`` svarer rigtigt paa den, men
+        # den er en almindelig funktion, saa hverken en typetjekker eller en
+        # laeser faar noget at vide om hvad der staar tilbage bagefter.
+        if deadline_minutes is None or not _finite(deadline_minutes):
+            return priced
+        return int(deadline_minutes) if 0 < deadline_minutes < priced else priced
 
     def _displaced_kwh(self, span: int, demand_kw: float | None) -> float | None:
         """Hvor meget varme der faktisk bliver hentet fra lageret i det dyre.
@@ -717,7 +720,7 @@ class Planner:
         Uden et behov at regne med kan spoergsmaalet ikke besvares, og saa
         siger vi det i stedet for at gaette.
         """
-        if not _finite(demand_kw) or demand_kw <= 0:
+        if demand_kw is None or not _finite(demand_kw) or demand_kw <= 0:
             return None
         return demand_kw * span / 60
 

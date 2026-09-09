@@ -751,16 +751,22 @@ class Plan:
         lå der kl. 03:20, var brugt længe før. Et salg på den anden side af
         bunden er ikke et alternativ til at bruge energien nu.
         """
+        # Prisen foelger med som sit eget tal. Den staar i ``best.export_price``
+        # og kan ikke vaere ``None`` naar ``best`` er sat - men den invariant
+        # ligger i et ``continue`` en omgang tidligere, og hverken en
+        # typetjekker eller en laeser kan se den derfra.
         best: Slot | None = None
+        best_price: float | None = None
         for candidate in self.slots[after:]:
             if next_charge is not None and candidate.index >= next_charge.index:
                 break
             if runs_dry is not None and candidate.index > runs_dry.index:
                 break
-            if not candidate.exporting or candidate.export_price is None:
+            price = candidate.export_price
+            if not candidate.exporting or price is None:
                 continue
-            if best is None or candidate.export_price > best.export_price:
-                best = candidate
+            if best_price is None or price > best_price:
+                best, best_price = candidate, price
         return best
 
     def _battery_price(self, slot: Slot) -> Price | None:
