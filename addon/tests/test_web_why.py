@@ -309,5 +309,71 @@ class VesselCardTest(unittest.TestCase):
         self.assertEqual(_vessel_section({"dhw_active": False}), "")
 
 
+class ChargeCardTest(unittest.TestCase):
+    """Kortet paa lagersiden: hvorfor den vil lade op."""
+
+    def card(self, **over):
+        from varmeopt.planner import Decision
+        from varmeopt.web import _charge_card
+
+        fields = dict(
+            source="varmepumpe",
+            heat_price=0.42,
+            pellet_price=0.706,
+            charge=True,
+            charge_kwh=21.3,
+            saving_kr=12.40,
+            window_starts_in=210,
+            window_minutes=300,
+            charge_state="lader 21,3 kWh op nu",
+            dhw_need_kwh=6.0,
+            dhw_have_kwh=0.0,
+            dhw_short_kwh=21.3,
+            space_need_kwh=5.2,
+            space_have_kwh=13.3,
+            space_short_kwh=0.0,
+        )
+        fields.update(over)
+        return _charge_card({"decision": Decision(**fields)}, dhw_temp=55.0)
+
+    def test_it_says_what_the_charge_is_for(self):
+        card = self.card()
+
+        self.assertIn("Varmt vand og spa", card)
+        self.assertIn("skal bruge 6.0 kWh", card)
+        self.assertIn("lageret har 0.0 over 55°", card)
+        self.assertIn("mangler 21.3", card)
+
+    def test_what_is_covered_says_so_instead_of_a_number(self):
+        # Rumvarmen er daekket: 5,2 kWh mod 13,3 i lageret.
+        self.assertIn("dækket", self.card())
+
+    def test_the_window_is_a_clock_not_a_countdown(self):
+        # «om 210 min» skal regnes; «kl. 17:30» kan laeses.
+        card = self.card()
+
+        self.assertIn("Strømmen bliver dyr", card)
+        self.assertIn("fra kl. ", card)
+        self.assertNotIn("210 min", card)
+
+    def test_it_also_answers_when_it_does_not_charge(self):
+        card = self.card(
+            charge=False,
+            charge_kwh=None,
+            saving_kr=None,
+            charge_state="lageret rækker - der er ikke noget at lade op til",
+            dhw_have_kwh=9.4,
+            dhw_short_kwh=0.0,
+        )
+
+        self.assertIn("lageret rækker", card)
+        self.assertNotIn("Værd at hente", card)
+
+    def test_without_an_answer_there_is_no_card(self):
+        # Foer planlaeggeren har svaret én gang, er der ingenting at vise -
+        # og et tomt kort er vaerre end intet kort.
+        self.assertEqual(self.card(charge_state=""), "")
+
+
 if __name__ == "__main__":
     unittest.main()

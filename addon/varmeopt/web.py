@@ -358,6 +358,10 @@ class WebUI:
             f'{buffer.reference:.0f} °C</div></div>'
             f'<div class="tanks">{"".join(cards)}</div>'
             f'<h2>Samlet</h2><div class="card"><dl>{dl}</dl></div>{warn}'
+            + _charge_card(
+                status,
+                self._options.dhw_usable_temp if self._options is not None else None,
+            )
             + _balance_section(status.get("balance"), buffer, status)
             + _solar_section(status, buffer)
             + _vessel_section(status)
@@ -1162,6 +1166,96 @@ def _load_curve_chart(curve: Any) -> str:
         '<p class="legend">Kilowatt mod grader ude. Svage punkter har få '
         "målinger bag sig. Kun rene vinduer læres ind — et bad eller en spa "
         "midt i en måling holder den ude.</p>"
+    )
+
+
+def _clock(minutes: float) -> str:
+    """Minutter frem som et klokkeslæt. «kl. 17:30» kan læses; «om 210 min» skal regnes."""
+    return (datetime.now().astimezone() + timedelta(minutes=minutes)).strftime("%H:%M")
+
+
+def _need_line(
+    need: float | None, have: float | None, short: float | None, over: str = ""
+) -> str:
+    """Én linje: hvad der skal bruges, hvad der står, og hvad der så mangler."""
+    if need is None:
+        return "—"
+    line = f"skal bruge {need:.1f} kWh"
+    if have is not None:
+        line += f" · lageret har {have:.1f}{over}"
+    if short is not None:
+        line += f" · <b>mangler {short:.1f}</b>" if short > 0.05 else " · dækket"
+    return line
+
+
+def _charge_card(status: dict[str, Any], dhw_temp: float | None = None) -> str:
+    """Hvorfor den vil lade op — eller hvorfor den lader være.
+
+    Beslutningen har hele historien i sin ``reason``, men den er en sætning
+    man skal læse til ende. Her står regnestykket i stedet som det er: hvad
+    varmt vand og rumvarme ventes at bruge mens strømmen er dyr, hvad lageret
+    har til hver af dem, og hvad der derfor mangler.
+
+    De to tælles hver for sig med vilje, og det er ikke en detalje: et bad kan
+    kun tages fra den del af lageret der er varmt nok til et bad, mens
+    radiatorerne kan tage af det hele. Et lager på 45 grader kan være fuldt af
+    brugbar varme og stadig ikke kunne lave ét bad.
+    """
+    decision = status.get("decision")
+    if decision is None or not getattr(decision, "charge_state", ""):
+        return ""
+
+    over = f" over {dhw_temp:.0f}°" if dhw_temp is not None else ""
+    rows: list[tuple[str, str]] = []
+    if decision.dhw_need_kwh is not None:
+        rows.append(
+            (
+                "Varmt vand og spa",
+                _need_line(
+                    decision.dhw_need_kwh,
+                    decision.dhw_have_kwh,
+                    decision.dhw_short_kwh,
+                    over,
+                ),
+            )
+        )
+    if decision.space_need_kwh is not None:
+        rows.append(
+            (
+                "Rumvarme",
+                _need_line(
+                    decision.space_need_kwh,
+                    decision.space_have_kwh,
+                    decision.space_short_kwh,
+                ),
+            )
+        )
+    if decision.window_starts_in is not None:
+        when = f"fra kl. {_clock(decision.window_starts_in)}"
+        if decision.window_minutes is not None:
+            when += f", dyrest kl. {_clock(decision.window_minutes)}"
+        rows.append(("Strømmen bliver dyr", when))
+    elif decision.window_minutes is not None:
+        rows.append(("Dyreste time", f"kl. {_clock(decision.window_minutes)}"))
+    if decision.saving_kr is not None:
+        rows.append(("Værd at hente", f"{decision.saving_kr:.2f} kr"))
+
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    legend = ""
+    if decision.dhw_need_kwh is not None:
+        legend = (
+            '<p class="legend">Varmt vand og spa kan kun tages fra den del af '
+            "lageret der er varmt nok til et bad; rumvarmen kan tages fra det "
+            "hele. Derfor tælles de hver for sig — et lager på 45 grader kan "
+            "være fuldt af brugbar varme og stadig ikke kunne lave ét bad.</p>"
+        )
+    return (
+        "<h2>Hvorfor lade op</h2>"
+        f'<div class="card"><div class="big" style="font-size:20px">'
+        f"{_esc(decision.charge_state)}</div>"
+        + (f"<dl>{dl}</dl>" if dl else "")
+        + "</div>"
+        + legend
     )
 
 

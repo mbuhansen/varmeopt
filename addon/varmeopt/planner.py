@@ -60,12 +60,56 @@ class Decision:
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
+    # Svaret i ét kort udsagn, sat af den gren der ved hvad der skete.
+    # ``reason`` er hele historien; det her er den linje der kan staa paa en
+    # skaerm uden at nogen skal laese sig frem til pointen.
+    charge_state: str = ""
+    # Hvad opladningen er *til*: hvor meget lageret mangler til hver af de to,
+    # talt ved hver sin temperatur. Varmt vand og spa kan kun tage af den del
+    # af lageret der er varm nok til dem; rumvarmen kan tage af det hele.
+    # ``None`` betyder "ikke regnet ud", nul betyder "der er nok".
+    dhw_short_kwh: float | None = None
+    space_short_kwh: float | None = None
+    # Og hvad regnestykket bestod af: hvad de to ventes at bruge i det dyre
+    # vindue, og hvad lageret har til hver af dem.
+    dhw_need_kwh: float | None = None
+    dhw_have_kwh: float | None = None
+    space_need_kwh: float | None = None
+    space_have_kwh: float | None = None
 
     @property
     def charging_note(self) -> str:
         if self.charge and self.charge_kwh is not None:
             return f"lad {self.charge_kwh:.1f} kWh"
         return "lad ikke op"
+
+
+@dataclass(frozen=True)
+class Shortfall:
+    """Hvad lageret mangler, delt på de to der skal bruge det.
+
+    De to tal kan ikke lægges sammen før de er talt ved hver sin temperatur —
+    se ``Planner._shortfall``. ``told`` er sætningen til begrundelsen, og
+    ``driver`` det led der hænges på «lad 8,2 kWh …».
+    """
+
+    # Hvad de to ventes at bruge i det dyre vindue.
+    dhw_need: float = 0.0
+    space_need: float = 0.0
+    # Hvad lageret har til hver af dem, talt ved hver sin temperatur.
+    dhw_have: float = 0.0
+    space_have: float = 0.0
+    # Og hvad der saa mangler. Ikke bare differensen: varmtvandets mangel
+    # maales over brugstemperaturen, men det der skal lades, er energi *ind
+    # i* lageret - se ``Planner._shortfall``.
+    dhw_kwh: float = 0.0
+    space_kwh: float = 0.0
+    told: str = ""
+    driver: str = ""
+
+    @property
+    def total(self) -> float:
+        return self.dhw_kwh + self.space_kwh
 
 
 @dataclass(frozen=True)
@@ -270,7 +314,11 @@ class Planner:
         # pillefyret, staar den tilbage i marginen, hvor den hoerer hjemme.
         margin = best_gap
         if best_when is None or margin <= 0:
-            return _with(decision, reason=f"{why}; intet at hente ved at gemme")
+            return _with(
+                decision,
+                charge_state="ingen dyrere timer forude at gemme varme til",
+                reason=f"{why}; intet at hente ved at gemme",
+            )
 
         # Spoergsmaal 2a: er forskellen stor nok til at handle paa?
         #
@@ -288,6 +336,9 @@ class Planner:
             return _with(
                 decision,
                 window_minutes=best_when,
+                charge_state=(
+                    f"forskellen er for lille - kun {margin:.2f} kr/kWh at hente"
+                ),
                 reason=(
                     f"{why}; kun {margin:.2f} kr/kWh at hente om {best_when} "
                     "min — for tæt til at flytte varme på"
@@ -316,6 +367,8 @@ class Planner:
         if room < self.min_charge_kwh:
             return _with(
                 decision,
+                window_minutes=best_when,
+                charge_state=f"der er kun {room:.1f} kWh plads i lageret",
                 reason=(
                     f"{why}; {margin:.2f} kr/kWh at hente om {best_when} min, "
                     f"men kun {room:.1f} kWh plads — under minimumstrækket"
@@ -349,15 +402,24 @@ class Planner:
         # 1,57 om aftenen, hvor den kunne vaere solgt.
         need = displaced
         driver = ""
+        short = None
         if displaced is not None:
-            need, told, driver = self._shortfall(
+            short = self._shortfall(
                 displaced, stored_kwh, hot_kwh, dhw_kwh, dhw_input_for
             )
+            need, driver = short.total, short.driver
             if need <= 0:
                 return _with(
                     decision,
                     window_minutes=best_when,
-                    reason=f"{why}; {told} — intet at lade op til",
+                    charge_state="lageret rækker - der er ikke noget at lade op til",
+                    dhw_short_kwh=short.dhw_kwh,
+                    space_short_kwh=short.space_kwh,
+                    dhw_need_kwh=short.dhw_need,
+                    dhw_have_kwh=short.dhw_have,
+                    space_need_kwh=short.space_need,
+                    space_have_kwh=short.space_have,
+                    reason=f"{why}; {short.told} — intet at lade op til",
                 )
 
         # Der lades det der skal bruges - ikke hele lagerpladsen. Mindre end
@@ -386,6 +448,16 @@ class Planner:
                 planned_kwh=want,
                 window_minutes=best_when,
                 window_starts_in=starts or best_when,
+                charge_state=(
+                    f"venter - om {when} min er strømmen billigere, og der er "
+                    "stadig tid inden det bliver dyrt"
+                ),
+                dhw_short_kwh=None if short is None else short.dhw_kwh,
+                space_short_kwh=None if short is None else short.space_kwh,
+                dhw_need_kwh=None if short is None else short.dhw_need,
+                dhw_have_kwh=None if short is None else short.dhw_have,
+                space_need_kwh=None if short is None else short.space_need,
+                space_have_kwh=None if short is None else short.space_have,
                 reason=(
                     f"{why}; venter - om {when} min koster varmen {price:.2f} "
                     f"mod {vp_now:.2f} nu, og der er stadig tid inden toppen "
@@ -416,6 +488,13 @@ class Planner:
             window_starts_in=starts or best_when,
             saving_kr=saving,
             window_minutes=best_when,
+            charge_state=f"lader {want:.1f} kWh op nu",
+            dhw_short_kwh=None if short is None else short.dhw_kwh,
+            space_short_kwh=None if short is None else short.space_kwh,
+            dhw_need_kwh=None if short is None else short.dhw_need,
+            dhw_have_kwh=None if short is None else short.dhw_have,
+            space_need_kwh=None if short is None else short.space_need,
+            space_have_kwh=None if short is None else short.space_have,
             reason=(
                 f"{why}; lad {want:.1f} kWh{driver} nu og spar {saving:.2f} kr "
                 f"mod om {best_when} min{shortfall}"
@@ -454,7 +533,7 @@ class Planner:
         hot_kwh: float | None,
         dhw_kwh: float | None,
         dhw_input_for: Any = None,
-    ) -> tuple[float, str, str]:
+    ) -> Shortfall:
         """Hvor meget lageret mangler — talt ved hver sin temperatur.
 
         To spor, og de deler det samme vand. Varmt vand og spa kan kun tages
@@ -509,7 +588,16 @@ class Planner:
                 f"har {space_have:.1f}"
             )
             driver = " til rumvarme" if space_short > 0 else ""
-        return dhw_short + space_short, told, driver
+        return Shortfall(
+            dhw_need=dhw,
+            space_need=displaced,
+            dhw_have=hot,
+            space_have=space_have,
+            dhw_kwh=dhw_short,
+            space_kwh=space_short,
+            told=told,
+            driver=driver,
+        )
 
     def _displaced_kwh(
         self,
