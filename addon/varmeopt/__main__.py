@@ -320,6 +320,17 @@ class Varmeopt:
         # siger nej, og Node-RED bruger sin egen logik.
         # Vaegurstid, ikke monoton - kun den giver mening paa tvaers af en
         # genstart, og opholdstiden skal fortsaette hvor den slap.
+        #
+        # Vagten spoerges *foer* blokken. Blokken skal kende den kilde vagten
+        # staar ved, ikke planlaeggerens raa svar: ladeflaget var det eneste
+        # udgang i huset uden hviletid, saa ét minuts udsving i COP eller pris
+        # kunne afslutte en opladning som vagten samtidig holdt paa
+        # varmepumpen. Vagten laeser kun ``source`` og ``heat_price``, aldrig
+        # ``charge``, saa den kan trygt gaa foerst.
+        command = self.guard.check(
+            decision, lookup, prices.get("plan"), time.time()
+        )
+
         # Opladningen er en blok, ikke en beslutning pr. minut. Den siger
         # ja eller nej for hele sit forloeb, og beslutningens flag rettes ind
         # efter den, saa flaget, attributterne og planen siger det samme.
@@ -336,12 +347,10 @@ class Varmeopt:
                 store is not None
                 and store.room_to(self.options.dhw_setpoint) <= 0.01
             ),
+            source=command.source,
+            min_runtime_minutes=self.options.hp_min_runtime_minutes,
         )
         decision = replace(decision, charge=charging)
-
-        command = self.guard.check(
-            decision, lookup, prices.get("plan"), time.time()
-        )
         projection = self.planner.project(
             prices.get("plan"),
             lookup.cop if lookup is not None else None,

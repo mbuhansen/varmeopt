@@ -40,6 +40,14 @@ from typing import Any
 
 SLOT_SECONDS = 1800.0
 
+# Saa laenge «lageret er fuldt» skal holde, foer en koerende blok afsluttes.
+#
+# ``headroom`` er en sum over otte termometre, og ét af dem kan poste et
+# udsving. Tre minutter mod et fuldt lager er tre minutter hvor kompressoren
+# leverer i noget der ikke kan optage det - en aerlig, lille pris. Femten
+# ville vaere et rigtigt overskud og et hoejtryk.
+FULL_HOLD_SECONDS = 180.0
+
 
 def _finite(value: Any) -> bool:
     return (
@@ -130,6 +138,8 @@ class ChargePlan:
     # ét straek giver én opladning.
     done_until: float | None = None
     note: str = "ingen opladning planlagt"
+    # Hvornaar lageret foerste gang meldte sig fuldt i det her forloeb.
+    _full_since: float | None = None
 
     # ---------------------------------------------------------------- opslag
 
@@ -152,13 +162,36 @@ class ChargePlan:
         plan: Any,
         rate_kw: float,
         full: bool = False,
+        source: str | None = None,
+        min_runtime_minutes: float = 0.0,
     ) -> bool:
-        """Ét skridt. Returnerer om der skal lades lige nu."""
+        """Ét skridt. Returnerer om der skal lades lige nu.
+
+        ``source`` er den kilde vagten staar ved - den med hviletiden. Uden
+        den laeste vi planlaeggerens raa svar, og saa kunne ét minuts udsving
+        i COP eller pris afslutte en opladning som vagten samtidig holdt paa
+        varmepumpen. Er den ukendt, spoerges beslutningen som foer.
+        """
+        chosen = source if source is not None else getattr(decision, "source", None)
+
         # 1. Kører en blok, er den bundet. Kun to ting bryder den.
         if self.block is not None and self.block.running(now):
             if full:
-                return self._finish(now, "lageret blev fuldt")
-            if decision is not None and decision.source == "pillefyr":
+                # Ét minut er ikke nok. ``headroom`` er en sum over otte
+                # termometre, og et enkelt udsving maa ikke afslutte en
+                # opladning - og *brænde* straekket med, saa der ikke kan
+                # laegges en ny.
+                if self._full_since is None:
+                    self._full_since = now
+                if now - self._full_since >= FULL_HOLD_SECONDS:
+                    return self._finish(now, "lageret blev fuldt")
+            else:
+                self._full_since = None
+            # Kortcykling slider. En blok der lige er startet, afsluttes ikke
+            # fordi pillefyret vandt et minut - men et fuldt lager gaar
+            # forud, for der er ingen varme at levere ind i.
+            young = (now - self.block.starts_at) / 60 < min_runtime_minutes
+            if chosen == "pillefyr" and not young:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
             self.note = (
@@ -180,8 +213,7 @@ class ChargePlan:
 
         # 3. En blok der venter, droppes kun af de samme to grunde som en der
         #    koerer.
-        if self.block is not None and (full or decision is not None
-                                       and decision.source == "pillefyr"):
+        if self.block is not None and (full or chosen == "pillefyr"):
             self.block = None
             self.note = "opladning droppet — " + (
                 "lageret er fuldt" if full else "pillefyret vinder"
@@ -217,6 +249,22 @@ class ChargePlan:
             # enden ligger fast, saa laenge det er det samme straek. Begynder
             # det vi nu sigter mod, inden det vi allerede har daekket er
             # forbi, er det det samme.
+            #
+            # **Og der er ingen undtagelse for et toemt lager.** Den var
+            # planlagt - «genlaeg hvis lageret loeber toert, og der stadig
+            # ligger en billigere halvtime inden det dyre er forbi» - men den
+            # kan ikke fyre. Straekket *er* de timer hvor varmepumpen taber
+            # til pillefyret; en halvtime derinde der var billig nok til at
+            # lade op i, ville have afsluttet straekket. Betingelsen modsiger
+            # sin egen forudsaetning.
+            #
+            # Det er heller ikke et hul. Loeber lageret toert midt i det dyre,
+            # starter UVR'en selv pumpen ved det setpunkt fremloebet kraever -
+            # og tager kun den varme huset beder om, ved den bedre COP der
+            # hoerer til 32 grader frem for 56. En genlagt blok ville koere
+            # 56 og fylde *hele* lageret til aftenpris. Kildevalget siger
+            # samtidig pillefyr, for det er derfor straekket er et straek.
+            # Alle tre veje er billigere end den undtagelse der udgik.
             self.block = None
             self.note = "allerede ladet op mod det her dyre stræk"
             return False
@@ -245,10 +293,16 @@ class ChargePlan:
             return False
 
         offset, _price = found
-        starts = now + offset * 60
-        self.block = Block(
-            dear_from, dear_until, starts, starts + minutes * 60, float(want)
-        )
+        # ``offset`` taelles i hele halvtimer fra den halvtime vi *staar i*,
+        # ikke fra det her sekund. Uden gulvet gled en ventende bloks start
+        # ét minut frem pr. cyklus og sprang 30 minutter tilbage ved hver
+        # :00/:30 - saa den stod aldrig stille laenge nok til at kunne laeses.
+        starts = _slot_start(now) + offset * 60
+        # Og laengden maales fra det seneste af de to. Starter blokken nu, kan
+        # ``_slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og saa
+        # ville blokken blive tilsvarende for kort.
+        ends = max(starts, now) + minutes * 60
+        self.block = Block(dear_from, dear_until, starts, ends, float(want))
         if self.block.running(now):
             self._running = True
             self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
@@ -276,11 +330,13 @@ class ChargePlan:
         """
         starts = getattr(decision, "dear_starts_in", None)
         span = getattr(decision, "dear_span_minutes", None)
-        if _finite(starts) and _finite(span) and span > 0:
-            return (
-                _slot_start(now + starts * 60),
-                _slot_start(now + (starts + span) * 60),
-            )
+        if starts is not None and span is not None and _finite(starts) and _finite(span):
+            first, length = float(starts), float(span)
+            if length > 0:
+                return (
+                    _slot_start(now + first * 60),
+                    _slot_start(now + (first + length) * 60),
+                )
         top = _slot_start(now + (decision.window_minutes or window) * 60)
         return top, top + SLOT_SECONDS
 
@@ -289,6 +345,7 @@ class ChargePlan:
             self.done_until = self.block.dear_until
         self.block = None
         self._running = False
+        self._full_since = None
         self.note = f"opladning slut — {why}"
         return False
 

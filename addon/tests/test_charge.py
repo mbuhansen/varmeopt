@@ -10,7 +10,7 @@ læg dem fast, kør dem.
 import unittest
 from dataclasses import dataclass
 
-from varmeopt.charge import ChargePlan
+from varmeopt.charge import ChargePlan, _slot_start
 from varmeopt.prices import Plan
 
 
@@ -52,12 +52,32 @@ class BlockTest(unittest.TestCase):
         )
 
     def test_it_waits_for_the_cheapest_window(self):
-        # De billige halvtimer begynder 120 minutter frem.
+        # De billige halvtimer begynder 120 minutter frem - regnet fra den
+        # halvtime vi staar i, ikke fra det her sekund. Toleransen var foer
+        # ét minut, og den skjulte praecis den drift.
         self.assertFalse(self.step())
 
         starts, ends = self.charge.slots()
-        self.assertAlmostEqual((starts - self.now) / 60, 120, delta=1)
+        self.assertEqual(starts, _slot_start(self.now) + 120 * 60)
         self.assertAlmostEqual((ends - starts) / 60, 45, delta=1)
+
+    def test_a_pending_block_does_not_drift_between_cycles(self):
+        # Blokkens start laa foer paa ``now + offset``, hvor ``offset`` er
+        # hele halvtimer fra den halvtime vi staar i. Den gled derfor ét
+        # minut frem pr. cyklus og sprang 30 minutter tilbage ved hver :00 og
+        # :30 - og en start der aldrig staar stille, kan ikke laeses.
+        # Inden for den halvtime vi staar i. Krydser uret en halvtime, ruller
+        # Predbats plan ogsaa en halvtime frem paa anlaegget, og saa er det
+        # stadig det samme absolutte tidspunkt - men det kan attrappen her
+        # ikke vise, for dens plan staar stille.
+        seen = set()
+        for minute in range(0, 26):
+            self.step(at=self.now + minute * 60)
+            slots = self.charge.slots()
+            if slots is not None:
+                seen.add(slots[0])
+
+        self.assertEqual(len(seen), 1)
 
     def test_a_block_that_exactly_fills_the_window_still_fits(self):
         # Planlaeggeren kapper maengden med ``charge_kw * window / 60``, og
@@ -163,15 +183,35 @@ class InterruptionTest(unittest.TestCase):
             )
         )
 
-    def test_a_full_store_stops_it(self):
+    def full_at(self, seconds, **over):
+        return self.charge.update(
+            self.now + seconds, FakeDecision(), self.plan, 16.0, full=True, **over
+        )
+
+    def test_one_full_reading_does_not_stop_a_running_block(self):
+        # ``headroom`` er en sum over otte termometre. Ét udsving maa ikke
+        # afslutte en opladning - og braende straekket med, saa der ikke kan
+        # laegges en ny.
         self.start()
 
-        self.assertFalse(
-            self.charge.update(
-                self.now + 300, FakeDecision(), self.plan, 16.0, full=True
-            )
-        )
+        self.assertTrue(self.full_at(300))
+        self.assertIsNotNone(self.charge.slots())
+
+    def test_three_minutes_of_a_full_store_does(self):
+        self.start()
+        self.full_at(300)
+
+        self.assertFalse(self.full_at(300 + 180))
         self.assertIn("fuldt", self.charge.note)
+
+    def test_a_flicker_of_full_starts_the_patience_over(self):
+        self.start()
+        self.full_at(300)
+        # Ikke fuldt igen - taelleren nulstilles.
+        self.charge.update(self.now + 360, FakeDecision(), self.plan, 16.0)
+
+        self.assertTrue(self.full_at(300 + 180))
+        self.assertIsNotNone(self.charge.slots())
 
     def test_the_pellet_boiler_winning_stops_it(self):
         self.start()
@@ -182,6 +222,44 @@ class InterruptionTest(unittest.TestCase):
             )
         )
         self.assertIn("pillefyret", self.charge.note)
+
+    def test_the_guarded_source_is_what_counts(self):
+        # Vagten holder varmepumpen i femten minutter; planlaeggerens raa
+        # svar vipper paa nogle oere. Det er vagtens svar der gaelder.
+        self.start()
+
+        self.assertTrue(
+            self.charge.update(
+                self.now + 300,
+                FakeDecision(source="pillefyr"),
+                self.plan,
+                16.0,
+                source="varmepumpe",
+            )
+        )
+
+    def test_a_block_is_not_stopped_inside_its_minimum_runtime(self):
+        # Kortcykling slider. En blok der lige er startet, afsluttes ikke
+        # fordi pillefyret vandt ét minut.
+        self.start()
+
+        self.assertTrue(
+            self.charge.update(
+                self.now + 300,
+                FakeDecision(source="pillefyr"),
+                self.plan,
+                16.0,
+                min_runtime_minutes=15,
+            )
+        )
+
+    def test_but_a_full_store_goes_before_the_minimum_runtime(self):
+        # Der er ingen varme at levere ind i et fuldt lager, saa der er heller
+        # ikke noget at beskytte.
+        self.start()
+        self.full_at(60, min_runtime_minutes=15)
+
+        self.assertFalse(self.full_at(60 + 180, min_runtime_minutes=15))
 
     def test_nothing_else_does(self):
         # Behovet forsvinder midt i blokken. Den koerer alligevel faerdig.
