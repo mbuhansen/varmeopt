@@ -150,6 +150,69 @@ class CycleTest(unittest.TestCase):
         self.assertIn("sensor.varmeopt_lager", published)
         self.assertGreater(published["sensor.varmeopt_lager"], 0)
 
+    def _fill_tanks(self, b_answers: bool = True) -> None:
+        o = self.app.options
+        pairs = [
+            (o.entity_tank_a_top, 60), (o.entity_tank_a_mid, 45),
+            (o.entity_tank_a_bottom, 30), (o.entity_tank_a_outlet, 58),
+        ]
+        if b_answers:
+            pairs += [
+                (o.entity_tank_b_top, 58), (o.entity_tank_b_mid, 44),
+                (o.entity_tank_b_bottom, 29), (o.entity_tank_b_outlet, 56),
+            ]
+        else:
+            for eid in (o.entity_tank_b_top, o.entity_tank_b_mid,
+                        o.entity_tank_b_bottom, o.entity_tank_b_outlet):
+                self.ha._states.pop(eid, None)
+        for eid, temp in pairs:
+            self.ha._states[eid] = State(eid, str(temp), {}, "tank-1")
+
+    def test_a_slower_pump_lowers_the_minimum_draw(self):
+        # Typeskiltet siger 16 kW og mindstetraekket 4,0 kWh; maskinen
+        # leverer omkring 11, saa de 4,0 kWh var 22 minutter og ikke de 15
+        # reglen handler om. Blokken laegges i forvejen med den maalte rate.
+        self.cycle()
+        nameplate = self.app.planner.min_charge_kwh
+
+        for _ in range(40):
+            self.app.charge_rate.observe(11.0)
+        self.cycle()
+
+        self.assertLess(self.app.planner.min_charge_kwh, nameplate)
+        self.assertAlmostEqual(
+            self.app.planner.min_charge_kwh,
+            self.app.charge_rate.effective_kw * 15 / 60,
+            places=6,
+        )
+
+    def test_a_tank_that_stops_answering_holds_its_last_reading(self):
+        # Natten til den 10. september svarede tank B ikke i ét minut, og
+        # lageret halverede sig fra 22,6 til 11,8 kWh. Baade opladningen og
+        # «lageret er fuldt» laeser den sum.
+        self._fill_tanks()
+        self.cycle()
+        whole = self.app.status["tank"].stored_kwh
+
+        self._fill_tanks(b_answers=False)
+        self.cycle()
+
+        self.assertAlmostEqual(self.app.status["tank"].stored_kwh, whole, places=6)
+        self.assertEqual(self.app._tank_held, ("B",))
+
+    def test_a_held_reading_is_dropped_when_it_gets_old(self):
+        self._fill_tanks()
+        self.cycle()
+        # Skru aflaesningens alder tilbage, som om der var gaaet en time.
+        stamp, tank = self.app._tank_last["B"]
+        self.app._tank_last["B"] = (stamp - 3600, tank)
+
+        self._fill_tanks(b_answers=False)
+        self.cycle()
+
+        self.assertEqual(self.app._tank_held, ())
+        self.assertFalse(self.app.status["tank"].complete)
+
     def test_tank_is_skipped_when_no_sensor_answers(self):
         # Standardopsætningen i denne test har ingen tankfølere i FakeHa.
         self.cycle()

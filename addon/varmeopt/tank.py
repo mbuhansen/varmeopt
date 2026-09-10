@@ -182,6 +182,23 @@ class Buffer:
         return bool(self.measured)
 
     @property
+    def complete(self) -> bool:
+        """Svarer alle tankene overhovedet?
+
+        ``covered`` er sandt saa snart **én** tank svarer, og det er rigtigt
+        til at afgøre om der er noget at vise. Til at afgøre om lagertallet må
+        *handles* på, er det forkert: en tavs tank halverer summen uden at
+        sige det. Både opladningen og «lageret er fuldt» hænger på den sum, og
+        et halveret lager er ikke en ringere måling — det er en forkert.
+        """
+        return bool(self.tanks) and len(self.measured) == len(self.tanks)
+
+    @property
+    def silent(self) -> tuple[str, ...]:
+        """Navnene paa de tanke der ikke svarer med ét eneste lag."""
+        return tuple(t.name for t in self.tanks if not t.covered)
+
+    @property
     def sensor_count(self) -> int:
         return sum(len(t.layers) for t in self.tanks)
 
@@ -271,6 +288,23 @@ class Buffer:
     def headroom_kwh(self) -> float:
         """Hvor meget varmepumpen kan nå at tilføre, før den løber tør for løft."""
         return sum(t.headroom_kwh(self.ceiling) for t in self.measured)
+
+    def room_to(self, temp: float) -> float:
+        """Hvor meget der kan laegges i, foer lageret naar den temperatur.
+
+        ``headroom_kwh`` regner op til ``ceiling`` - hvad varmepumpen
+        realistisk kan naa. Men en blokopladning koerer 56 grader fremloeb, og
+        saa naar tankene ikke 60: de sidste grader hoerer til solvarmen og
+        ACthor. Regnes pladsen til loftet, lover den plads der ikke kan fyldes
+        af den pumpe der skal fylde den.
+
+        ``ceiling`` staar med vilje uroert. Den bruges ogsaa af
+        ``energy_to_reach``, hvor et loft paa 56 ville klemme baandet over
+        brugsvandets 55 grader ned til én kelvin og faa varmtvandsbehovet til
+        at eksplodere - og af ``charge_percent`` og ``above_heatpump_ceiling``.
+        Det her er et andet spoergsmaal og faar sin egen indgang.
+        """
+        return sum(t.headroom_kwh(temp) for t in self.measured)
 
     @property
     def peak_headroom_kwh(self) -> float:

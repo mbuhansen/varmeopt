@@ -82,6 +82,13 @@ SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
 # laese rigtigt, bliver oftere laest rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
 
+# Saa laenge en tavs tank maa svare med sin sidste gode aflaesning. Lageret
+# flytter sig ikke langt paa en halv time - pumpen kan laegge 11 kW i, huset
+# tager 1-3 - saa et par kelvin er det vaerste der kan ske, og det ligger
+# inden for stoejen paa «tre foelere repraesenterer en tank». Derudover er
+# tallet en fiktion, og saa er «ved ikke» det aerlige svar.
+TANK_HOLD_SECONDS = 30 * 60
+
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
 SAVE_INTERVAL_SECONDS = 300
@@ -124,6 +131,11 @@ class Varmeopt:
         # Opladningen som en blok: planlagt én gang, koert én gang. Se
         # charge.py for hvorfor det ikke er en beslutning pr. minut.
         self.charge_plan = ChargePlan()
+        # Sidste gode aflaesning pr. tank, saa et enkelt minuts tavshed ikke
+        # halverer lageret. Kun i hukommelsen: efter en genstart er svaret
+        # «ved ikke», og det er det rigtige svar.
+        self._tank_last: dict[str, tuple[float, Tank]] = {}
+        self._tank_held: tuple[str, ...] = ()
         self._dirty = False
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
@@ -220,6 +232,15 @@ class Varmeopt:
         # tredjedel, faar den til at starte for sent.
         self.charge_rate.observe(balance.heatpump_kw if balance is not None else None)
         self.planner.charge_kw = self.charge_rate.effective_kw
+        # Og mindstetraekket med. Det er ét minimumstraek - de minutter
+        # pumpen skal koere for ikke at kortcykle - og det er kun det samme
+        # tal som typeskiltets naar pumpen leverer typeskiltets kW. Den
+        # leverer omkring 11, saa de 4,0 kWh fra options svarede til 22
+        # minutter og ikke til de 15 reglen handler om. Blokken laegges i
+        # forvejen med den maalte rate; nu regner begge ender med den samme.
+        self.planner.min_charge_kwh = (
+            self.charge_rate.effective_kw * self.options.hp_min_runtime_minutes / 60
+        )
 
         curve_note = None
         if flow_temp is not None and outdoor_temp is not None:
@@ -243,19 +264,30 @@ class Varmeopt:
 
         # Planlaeggeren binder pris, COP, lager og sol sammen. Den svarer
         # ogsaa uden en plan - saa er det bare kildevalget.
+        # Lageret maa kun *handles* paa naar alle tankene svarer. Svarer
+        # kun den ene, er summen ikke en ringere maaling - den er forkert, og
+        # en halveret plads er praecis det der lagde en blok der ikke skulle
+        # laegges. Vises maa den gerne; det er en anden ting.
+        store = buffer if buffer is not None and buffer.complete else None
         decision = self.planner.decide(
             plan=prices.get("plan"),
             cop_now=lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
-            headroom_kwh=buffer.headroom_kwh if buffer is not None else None,
-            peak_headroom_kwh=buffer.peak_headroom_kwh if buffer is not None else None,
-            stored_kwh=buffer.stored_kwh if buffer is not None else None,
+            charge_cop_at=self._charge_cop_at,
+            # Pladsen maales op til den temperatur blokken lader ved, ikke op
+            # til varmepumpens loft. De sidste grader op til 60 hoerer til
+            # solvarmen og ACthor, og en blok kan ikke fylde dem.
+            headroom_kwh=(
+                store.room_to(self.options.dhw_setpoint) if store is not None else None
+            ),
+            peak_headroom_kwh=store.peak_headroom_kwh if store is not None else None,
+            stored_kwh=store.stored_kwh if store is not None else None,
             # Den del af lageret der er varm nok til at lade beholderen. Uden
             # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
             # er varmt vand - og lageret kunne ikke lave et eneste bad.
             hot_kwh=(
-                buffer.usable_kwh(self.options.dhw_usable_temp)
-                if buffer is not None
+                store.usable_kwh(self.options.dhw_usable_temp)
+                if store is not None
                 else None
             ),
             # Varmtvandet i det dyre vindue, ikke i de naeste timer: profilen
@@ -268,13 +300,14 @@ class Varmeopt:
             # Og hvad det koster at faa den varme til at *staa* der. Lagerets
             # fysik hoerer hjemme i tank.py, ikke i planlaeggeren.
             dhw_input_for=(
-                (lambda kwh: buffer.energy_to_reach(kwh, self.options.dhw_usable_temp))
-                if buffer is not None
+                (lambda kwh: store.energy_to_reach(kwh, self.options.dhw_usable_temp))
+                if store is not None
                 else None
             ),
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
+            demand_kw_at=self._demand_at,
             # Fristen paa uret. Den regnes her og ikke i planlaeggeren:
             # planlaeggeren faar minutter, ikke et klokkeslaet, saa den kan
             # proeves af uden at nogen skal stille en systemklokke.
@@ -295,7 +328,14 @@ class Varmeopt:
             decision,
             prices.get("plan"),
             self.charge_rate.effective_kw,
-            full=buffer is not None and buffer.headroom_kwh <= 0.01,
+            # Og «fuldt» maa heller ikke afgoeres paa et halvt lager: det
+            # afslutter en koerende blok. Samme loft som pladsen ovenfor -
+            # ellers ville planlaeggeren sige «ingen plads» mens blokken kunne
+            # koere videre mod et loft den ikke kan naa.
+            full=(
+                store is not None
+                and store.room_to(self.options.dhw_setpoint) <= 0.01
+            ),
         )
         decision = replace(decision, charge=charging)
 
@@ -494,8 +534,11 @@ class Varmeopt:
             return None
 
         share = self.options.tank_liters / max(1, len(self.options.tanks))
-        tanks = [
-            Tank(
+        now = time.time()
+        tanks: list[Tank] = []
+        held: list[str] = []
+        for name, top, mid, bottom, outlet in self.options.tanks:
+            tank = Tank(
                 name=name,
                 liters=share,
                 top=await self._number(ha, top),
@@ -503,8 +546,24 @@ class Varmeopt:
                 bottom=await self._number(ha, bottom),
                 outlet=await self._number(ha, outlet),
             )
-            for name, top, mid, bottom, outlet in self.options.tanks
-        ]
+            if tank.covered:
+                self._tank_last[name] = (now, tank)
+            else:
+                # En tank uden ét eneste svar er ikke en koldere tank, den er
+                # en ukendt tank - og uden det her halverer summen sig i
+                # tavshed. Natten til den 10. september skete det i ét minut:
+                # 22,6 -> 11,8 kWh, og baade opladningen og «lageret er
+                # fuldt» laeser den sum.
+                #
+                # Mangler den kun *nogle* foelere, holdes den ikke. Det er
+                # praecis det tilfaelde gradientreglen i tank.py er skrevet
+                # til, og en gammel aflaesning ville overtroeve den.
+                cached = self._tank_last.get(name)
+                if cached is not None and now - cached[0] <= TANK_HOLD_SECONDS:
+                    tank = cached[1]
+                    held.append(name)
+            tanks.append(tank)
+        self._tank_held = tuple(held)
         buffer = Buffer(
             tuple(tanks),
             self.options.tank_reference_temp,
@@ -513,6 +572,8 @@ class Varmeopt:
             self.options.tank_cascade_temp,
         )
         return buffer if buffer.covered else None
+
+
 
     async def _publish_tank(self, ha: HomeAssistant, buffer: Buffer) -> None:
         attributes: dict[str, Any] = {
@@ -533,6 +594,12 @@ class Varmeopt:
             # En manglende dybdefoeler goer lagerenergien til et skoen. Det
             # skal kunne ses, ikke bare regnes videre paa.
             "foelere_mangler": buffer.sensors_lost,
+            # Og en helt tavs tank goer den til noget vaerre end et skoen.
+            # Saa laenge den holdes paa sin sidste gode aflaesning, staar
+            # tallet der stadig - men det er ikke maalt lige nu, og
+            # opladningen roerer det ikke.
+            "lager_komplet": buffer.complete,
+            "lager_holdt": ", ".join(self._tank_held) or "—",
             # Rummet tankene staar i. Staatabet foelger forskellen til det
             # her, ikke til en antaget kaeldertemperatur - og de to tal
             # sammen er raamaterialet til at maale tabet naar der en nat
@@ -754,6 +821,35 @@ class Varmeopt:
                 self.options.entity_weather,
                 keys,
             )
+
+    def _charge_cop_at(self, minutes: int) -> float | None:
+        """COP'en ved ladetemperaturen om saa mange minutter.
+
+        Samme kaede som ``_cop_at``, men uden varmekurven: setpunktet er
+        givet. En blok koerer ``dhw_setpoint`` - 56 grader - og det er derfor
+        varmen bagefter ogsaa kan lave et bad.
+        """
+        temp = self.forecast.temperature_at(minutes)
+        if temp is None:
+            return None
+        return self.table.lookup(self.options.dhw_setpoint, temp).cop
+
+    def _demand_at(self, minutes: int) -> float | None:
+        """Hvad huset ventes at traekke om saa mange minutter.
+
+        Samme kaede som ``_cop_at``, men den korte ende af den: forudsagt
+        temperatur gennem den indlaerte forbrugskurve. Udsigten klemmer fast
+        paa yderpunkterne i stedet for at svare ingenting, saa naar der
+        overhovedet er en udsigt, er der ogsaa et svar - og kurven svarer kun
+        ``None`` foer den har laert sit foerste punkt.
+
+        Den maalte vaerdi staar med vilje ikke her. Den hoerer til nuet, og
+        det her er en udsigt - se ``Planner._displaced_kwh``.
+        """
+        temp = self.forecast.temperature_at(minutes)
+        if temp is None:
+            return None
+        return self.house_load.curve.predict(temp)
 
     def _cop_at(self, minutes: int) -> float | None:
         """COP om saa mange minutter, hele vejen gennem kaeden.

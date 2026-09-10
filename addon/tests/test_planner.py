@@ -568,6 +568,100 @@ class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
 
 
 
+class ChargeCopTest(unittest.TestCase):
+    """Opladningen koerer 56 grader, ikke rumvarmens setpunkt."""
+
+    def setUp(self):
+        # 1,00 nu, 3,00 om en halv time. COP 4,8 ved rumvarmens setpunkt,
+        # 4,2 ved ladetemperaturen - tabellens egne tal ved 13 grader ude.
+        self.plan = plan(100, 300, 300, 30)
+        self.planner = planner()
+
+    def decide(self, **over):
+        values = dict(cop_now=4.8, cop_later=4.8, headroom_kwh=24.0)
+        values.update(over)
+        return self.planner.decide(self.plan, **values)
+
+    def test_the_margin_is_measured_against_the_charge_price(self):
+        # Uden lade-COP'en regnes nu-benet paa 4,8: 1,00/4,8 + 0,15 = 0,358.
+        # Med den paa 4,2: 1,00/4,2 + 0,15 = 0,388. Marginen er tre oere
+        # mindre, og det er de tre oere der findes.
+        loose = self.decide()
+        honest = self.decide(charge_cop_at=lambda m: 4.2)
+
+        self.assertLess(honest.saving_kr, loose.saving_kr)
+
+    def test_the_source_choice_keeps_the_room_temperature(self):
+        # Kildevalget handler om den varme huset vil have *nu*, ved kurvens
+        # setpunkt. Den maa ladetemperaturen ikke roere.
+        loose = self.decide()
+        honest = self.decide(charge_cop_at=lambda m: 4.2)
+
+        self.assertEqual(honest.heat_price, loose.heat_price)
+        self.assertEqual(honest.source, loose.source)
+
+    def test_without_a_charge_cop_nothing_changes(self):
+        blind = self.decide(charge_cop_at=lambda m: None)
+        old = self.decide()
+
+        self.assertAlmostEqual(blind.saving_kr, old.saving_kr, places=9)
+
+
+class DemandTest(unittest.TestCase):
+    """Behovet i vinduet regnes af kurven, ikke af ét minut ganget op."""
+
+    def setUp(self):
+        # Een dyr halvtime forude, saa der er et straek at regne over.
+        self.plan = plan(30, 300, 300, 30)
+        self.planner = planner()
+
+    def decide(self, **over):
+        values = dict(
+            cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            stored_kwh=0.0, hot_kwh=0.0, demand_kw=0.69,
+        )
+        values.update(over)
+        return self.planner.decide(self.plan, **values)
+
+    def test_the_window_is_read_from_the_curve_and_not_the_meter(self):
+        # Flowmaaleren stod paa 0,69 kW kl. 01:53 mens den indlaerte kurve
+        # laa paa 1,34. Det er kurven der skal gange op over timerne.
+        meter = self.decide()
+        curve = self.decide(demand_kw_at=lambda m: 1.34)
+
+        self.assertGreater(curve.space_need_kwh, meter.space_need_kwh)
+        self.assertAlmostEqual(
+            curve.space_need_kwh / meter.space_need_kwh, 1.34 / 0.69, places=6
+        )
+
+    def test_a_single_unanswered_half_hour_does_not_empty_the_answer(self):
+        # ``None`` betyder «kan ikke besvares», og saa bliver maengden til
+        # hele lagerpladsen. Ét hul i udsigten maa ikke goere det.
+        holes = self.decide(demand_kw_at=lambda m: None if m == 30 else 1.34)
+
+        self.assertIsNotNone(holes.space_need_kwh)
+        self.assertGreater(holes.space_need_kwh, 0)
+
+    def test_without_a_curve_the_meter_still_answers(self):
+        blind = self.decide(demand_kw_at=lambda m: None)
+        meter = self.decide()
+
+        self.assertAlmostEqual(blind.space_need_kwh, meter.space_need_kwh, places=9)
+
+    def test_the_curve_is_asked_over_the_stretch_not_from_now(self):
+        asked = []
+
+        def curve(minutes):
+            asked.append(minutes)
+            return 1.34
+
+        self.decide(demand_kw_at=curve)
+
+        # Straekket begynder 30 min ude - ikke nu.
+        self.assertTrue(asked)
+        self.assertGreaterEqual(min(asked), 30)
+
+
 class DeadlineTest(unittest.TestCase):
     """Fristen paa uret: lageret skal vaere fyldt kl. 17.
 

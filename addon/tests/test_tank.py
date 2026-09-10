@@ -251,6 +251,43 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class CompleteTest(unittest.TestCase):
+    """Forskellen paa «der er noget at vise» og «der er noget at handle paa»."""
+
+    def test_one_answering_tank_is_covered_but_not_complete(self):
+        half = Buffer(
+            (Tank("A", 500.0, 60.0, 50.0, 40.0), Tank("B", 500.0, None, None, None)),
+            30.0,
+            60.0,
+        )
+
+        self.assertTrue(half.covered)
+        self.assertFalse(half.complete)
+        self.assertEqual(half.silent, ("B",))
+
+    def test_both_answering_is_complete(self):
+        whole = Buffer(
+            (Tank("A", 500.0, 60.0, 50.0, 40.0), Tank("B", 500.0, 58.0, 48.0, 38.0)),
+            30.0,
+            60.0,
+        )
+
+        self.assertTrue(whole.complete)
+        self.assertEqual(whole.silent, ())
+
+    def test_a_tank_missing_one_sensor_is_still_complete(self):
+        # Ét doedt lag er ikke en tavs tank - gradientreglen daekker det, og
+        # den skal ikke overtrumfes af en gammel aflaesning.
+        gap = Buffer(
+            (Tank("A", 500.0, 60.0, None, 40.0), Tank("B", 500.0, 58.0, 48.0, 38.0)),
+            30.0,
+            60.0,
+        )
+
+        self.assertTrue(gap.complete)
+        self.assertEqual(gap.sensors_lost, 1)
+
+
 class ChargePercentTest(unittest.TestCase):
     def test_energy_above_the_ceiling_does_not_inflate_the_percentage(self):
         # 90/70/40 med reference 30 og loft 60. Der stod stored/(stored +
