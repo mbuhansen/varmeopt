@@ -141,9 +141,10 @@ _DEFAULTS: dict[str, object] = {
     # fra den ukoblede v4-node i Node-RED, hvor det var en konstant - her
     # er det en indstilling, saa det kan efterproeves mod virkeligheden.
     "hp_wear_kr_per_kwh": 0.15,
-    # Hvor langt frem det giver mening at gemme varme. Ud over det aeder
-    # staatabet gevinsten, og prisprognosen bliver for usikker.
-    "planner_horizon_hours": 12,
+    # Hvor langt frem det giver mening at gemme varme. Et doegn daekker altid
+    # naeste aften, uanset hvornaar paa dagen der spoerges - se
+    # DEFAULT_HORIZON_MINUTES for hvorfor de 12 timer ikke raakte.
+    "planner_horizon_hours": 24,
     # Klokkeslaettet lageret skal vaere fyldt til. Det er en frist paa uret
     # og ikke et prisargument: der bades om aftenen, og huset koerer paa
     # restvarmen natten igennem. Prisraekken kender hverken badetiden eller

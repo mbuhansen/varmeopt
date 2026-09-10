@@ -32,9 +32,21 @@ from typing import Any
 
 from .prices import SUN
 
-# Hvor langt frem det giver mening at gemme varme. Ud over det æder ståtabet
-# gevinsten, og prisprognosen bliver for usikker til at handle på.
-DEFAULT_HORIZON_MINUTES = 12 * 60
+# Hvor langt frem det giver mening at gemme varme.
+#
+# Her stod 12 timer, med ståtabet som begrundelse. Det holdt ikke: Predbats
+# plan rækker 35 timer, og kl. 01:53 den 10. september kunne planlæggeren
+# ikke se eksporten kl. 19:23 til 3,38 kr/kWh. Værre var det at
+# ``_dear_window`` scannede til den samme kant, så det dyre stræk blev
+# *afkortet* og voksede efterhånden som horisonten skred frem — det er
+# derfor «der bruges X kWh mens det er dyrt» svingede mellem 2,0 og 8,9 kWh
+# fra minut til minut.
+#
+# Et døgn dækker altid næste aften, uanset hvornår på dagen der spørges.
+# Ståtabet over den lagring er stadig ikke trukket fra marginen — det er
+# målt (``standby.loss_kw_at``), men bevidst ikke koblet på endnu — så
+# gevinsten på et langt træk er en anelse for optimistisk. Det er kendt.
+DEFAULT_HORIZON_MINUTES = 24 * 60
 
 SLOT_MINUTES = 30
 
@@ -429,14 +441,21 @@ class Planner:
         # handler hele tiden - hver aften faar man flyttet en lagerfuld varme
         # rundt for at hente en forskel der ikke er der.
         #
-        # Men den gaelder prisen, ikke uret. En frist paa uret er ikke et
-        # prisargument der kan vaere for svagt: lageret skal vaere fyldt naar
-        # der bades, og den 9. september laa hele doegnet paa 1,18 kr fordi
-        # batteriet var prissat mod aftenens eksport - formiddagen 0,40 og
-        # aftenen 0,43, altsaa 0,03 at hente. For lidt at flytte varme paa,
-        # og alligevel praecis den dag hvor tankene skulle vaere fulde kl. 17.
-        # Uden det her ville fristen kun virke paa de dage den ikke behoevedes.
-        if margin <= self.hysteresis and not on_the_clock:
+        # Og den gaelder ogsaa naar uret har sat fristen. Her stod
+        # ``and not on_the_clock``, saa en frist kunne tvinge en opladning
+        # igennem paa en margin ingen kunne skelne fra stoej. Det blev
+        # skrevet den 9. september, hvor hele doegnet laa paa 1,18 kr og der
+        # kun var 0,03 at hente - men den flade dag var selv en fejl: prisen
+        # var forkert, og horisonten paa 12 timer kunne ikke se aftenen.
+        #
+        # Begge dele er rettet, og saa staar valget rent: fristen siger
+        # *hvornaar* en opladning skal vaere faerdig, ikke *at* der skal
+        # lades. Kan det ikke svare sig, lades der ikke - heller ikke selv om
+        # klokken naermer sig sytten. Konsekvensen skal staa her: paa et
+        # virkelig fladt doegn bliver lageret ikke fyldt paa forhaand, og saa
+        # starter UVR'en selv pumpen ved det setpunkt fremloebet kraever. Det
+        # er billigere end at flytte en lagerfuld varme for tre oere.
+        if margin <= self.hysteresis:
             return _with(
                 decision,
                 **stretch,

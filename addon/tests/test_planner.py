@@ -758,6 +758,68 @@ class DeadlineTest(unittest.TestCase):
         self.assertEqual(asked[0][0], 120)
 
 
+class HorizonTest(unittest.TestCase):
+    """Et doegn frem, saa naeste aften altid er i syne."""
+
+    def test_the_default_horizon_is_a_day(self):
+        from varmeopt.planner import DEFAULT_HORIZON_MINUTES
+
+        self.assertEqual(DEFAULT_HORIZON_MINUTES, 24 * 60)
+        self.assertEqual(Planner(pellet_price=PELLET).horizon_minutes, 24 * 60)
+
+    def test_a_dear_stretch_beyond_twelve_hours_is_seen_whole(self):
+        # Fjorten timer billigt, saa fire timer dyrt. Med tolv timers
+        # horisont fandtes straekket slet ikke.
+        rates = [30] * 28 + [300] * 8
+        short = planner(horizon_minutes=12 * 60)
+        long = planner(horizon_minutes=24 * 60)
+        p = plan(*rates)
+
+        self.assertEqual(short._dear_period(p, 3.0, 3.0), (0, 0))
+        starts, span = long._dear_period(p, 3.0, 3.0)
+        self.assertEqual(starts, 28 * 30)
+        self.assertEqual(span, 8 * 30)
+
+    def test_two_stretches_with_cheap_hours_between_are_not_merged(self):
+        # Hultolerancen er en time. To dyre straek med tre timers billige
+        # timer imellem er to straek - ellers ville en dyr morgen og en dyr
+        # aften spaerre for hinanden.
+        rates = [30] * 2 + [300] * 4 + [30] * 6 + [300] * 4 + [30] * 4
+        starts, span = planner()._dear_period(plan(*rates), 3.0, 3.0)
+
+        self.assertEqual(starts, 2 * 30)
+        self.assertEqual(span, 4 * 30)
+
+
+class ThinMarginTest(unittest.TestCase):
+    """Fristen siger hvornaar, ikke at der skal lades."""
+
+    def test_a_thin_margin_is_not_charged_even_against_the_clock(self):
+        # Den 9. september: hele doegnet paa samme pris, tre oere at hente
+        # (1,10/3 + 0,15 = 0,517 mod 0,483). Foer tvang fristen en opladning
+        # igennem paa dem.
+        p = plan(100, 110)
+
+        d = planner().decide(
+            p, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, deadline_minutes=30
+        )
+
+        self.assertFalse(d.charge)
+        self.assertIn("for tæt", d.reason)
+
+    def test_the_deadline_still_tightens_a_real_margin(self):
+        # Og modstykket: er marginen rigtig, binder fristen stadig - den er
+        # bare en frist og ikke en grund.
+        p = plan(100, 100, 100, 30, 300)
+
+        d = planner().decide(
+            p, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, deadline_minutes=90
+        )
+
+        self.assertTrue(d.charge)
+        self.assertEqual(d.window_starts_in, 90)
+
+
 class DeadlineOnTheClockTest(unittest.TestCase):
     """``minutes_until_hour`` - fristen som minutter, i lokal tid."""
 

@@ -60,7 +60,7 @@ options:
   hp_min_runtime_minutes: 15
   hp_charge_kw: 16.0
   hp_wear_kr_per_kwh: 0.15
-  planner_horizon_hours: 12
+  planner_horizon_hours: 24
   store_full_by_hour: 17
   entity_vvb_top: sensor.node_1_input_7
   entity_vvb_bottom: sensor.node_1_input_8
