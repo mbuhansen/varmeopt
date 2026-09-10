@@ -16,14 +16,14 @@ import signal
 import sys
 import time
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import aiohttp
 
 from . import VERSION, selfupdate
 from .capacity import ChargeRate
-from .charge import ChargePlan
+from .charge import ChargePlan, slot_start
 from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
@@ -82,6 +82,17 @@ SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
 # laese rigtigt, bliver oftere laest rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
 
+def _clock_ahead(minutes: float) -> str:
+    """Saa mange minutter frem som et klokkeslaet paa vaeggen.
+
+    Planlaeggeren faar den ind udefra i stedet for at kende uret selv, saa
+    den bliver ved med at vaere til at proeve af uden en systemklokke.
+    """
+    return "kl. " + (
+        datetime.now().astimezone() + timedelta(minutes=minutes)
+    ).strftime("%H:%M")
+
+
 # Saa laenge en tavs tank maa svare med sin sidste gode aflaesning. Lageret
 # flytter sig ikke langt paa en halv time - pumpen kan laegge 11 kW i, huset
 # tager 1-3 - saa et par kelvin er det vaerste der kan ske, og det ligger
@@ -117,6 +128,9 @@ class Varmeopt:
             charge_kw=options.hp_charge_kw,
             horizon_minutes=int(options.planner_horizon_hours * 60),
             dhw_temp=options.dhw_usable_temp,
+            # Begrundelserne skriver klokkeslaet i stedet for minutter.
+            # «kl. 13:26» kan laeses; «om 510 min» skal regnes.
+            clock=_clock_ahead,
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         # Staatabsmaalingen. Den maaler kun naar brugeren selv har aabnet et
@@ -140,6 +154,7 @@ class Varmeopt:
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
         self._warned_limit_unit = False
+        self._warned_horizon = False
         self._warned_losses = False
         self._warned_hp_cop = False
         self._hp_cop: float | None = None
@@ -278,7 +293,9 @@ class Varmeopt:
             # til varmepumpens loft. De sidste grader op til 60 hoerer til
             # solvarmen og ACthor, og en blok kan ikke fylde dem.
             headroom_kwh=(
-                store.room_to(self.options.dhw_setpoint) if store is not None else None
+                store.room_to(self.options.hp_charge_temp)
+                if store is not None
+                else None
             ),
             peak_headroom_kwh=store.peak_headroom_kwh if store is not None else None,
             stored_kwh=store.stored_kwh if store is not None else None,
@@ -345,7 +362,7 @@ class Varmeopt:
             # koere videre mod et loft den ikke kan naa.
             full=(
                 store is not None
-                and store.room_to(self.options.dhw_setpoint) <= 0.01
+                and store.room_to(self.options.hp_charge_temp) <= 0.01
             ),
             source=command.source,
             min_runtime_minutes=self.options.hp_min_runtime_minutes,
@@ -835,13 +852,18 @@ class Varmeopt:
         """COP'en ved ladetemperaturen om saa mange minutter.
 
         Samme kaede som ``_cop_at``, men uden varmekurven: setpunktet er
-        givet. En blok koerer ``dhw_setpoint`` - 56 grader - og det er derfor
-        varmen bagefter ogsaa kan lave et bad.
+        givet. En blok koerer ``hp_charge_temp`` - 56 grader - og det er
+        derfor varmen bagefter ogsaa kan lave et bad.
+
+        Ikke ``dhw_setpoint``. Den er det setpunkt beholderen *kalder* med, og
+        paa anlaegget her staar den paa 53. De to stod som ét i et doegn, og
+        saa blev COP'en slaaet op tre grader for lavt og pladsen maalt til en
+        temperatur lavere end den blokken naar.
         """
         temp = self.forecast.temperature_at(minutes)
         if temp is None:
             return None
-        return self.table.lookup(self.options.dhw_setpoint, temp).cop
+        return self.table.lookup(self.options.hp_charge_temp, temp).cop
 
     def _demand_at(self, minutes: int) -> float | None:
         """Hvad huset ventes at traekke om saa mange minutter.
@@ -908,6 +930,19 @@ class Varmeopt:
                 "kunne ikke laese Predbats plan fra %s", self.options.entity_predbat_plan
             )
             return {}
+
+        # Raekker Predbats plan laengere end vi kigger, ser vi ikke enden paa
+        # det dyre. Saa bliver straekket afkortet, behovet for lille, og
+        # blokken for kort - og intet siger det. Sig det én gang.
+        if plan.horizon_minutes > self.planner.horizon_minutes and not self._warned_horizon:
+            self._warned_horizon = True
+            log.warning(
+                "Predbats plan raekker %.0f timer, men horisonten er %.0f - "
+                "det dyre straek bliver afkortet, og opladningen for lille. "
+                "Saet planner_horizon_hours op i add-on'ens indstillinger.",
+                plan.horizon_minutes / 60,
+                self.planner.horizon_minutes / 60,
+            )
 
         grid = Grid(
             battery_power=await self._number(ha, self.options.entity_battery_power) or 0.0,
@@ -1299,13 +1334,25 @@ class Varmeopt:
         return (None, None) if window is None else (window[0], window[1])
 
     def _charge_window(self) -> tuple[int, int] | None:
-        """Blokkens start og slut som minutter frem, til plan-tabellen."""
+        """Blokkens start og slut som minutter frem, til plan-tabellen.
+
+        Regnet fra **halvtimens begyndelse**, ikke fra dette sekund. Planens
+        raekker er nummereret sadan: raekke 0 er den halvtime vi staar i, og
+        web-siden skriver klokkeslaettet som halvtimens start. Blokken ligger
+        ogsaa paa det gitter, saa de to skal maales fra det samme nulpunkt.
+
+        Her stod ``starts - now``, og det var rigtigt saa laenge blokkens
+        start selv laa paa ``now + offset``. Da starten blev lagt paa
+        halvtimen, kom de to ud af trit med hvor langt vi er inde i
+        halvtimen: kl. 04:56 blev en blok kl. 13:00 til 484 minutter, og 484
+        rammer raekken der hedder 12:30. Maerket stod én raekke for tidligt.
+        """
         slots = self.charge_plan.slots()
         if slots is None:
             return None
-        now = time.time()
+        base = slot_start(time.time())
         starts, ends = slots
-        return int((starts - now) / 60), int((ends - now) / 60)
+        return int((starts - base) / 60), int((ends - base) / 60)
 
     def _vessel_kw(
         self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None

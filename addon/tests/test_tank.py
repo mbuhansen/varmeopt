@@ -251,6 +251,28 @@ if __name__ == "__main__":
     unittest.main()
 
 
+class RoomToTest(unittest.TestCase):
+    """Pladsen maales op til den temperatur blokken lader ved."""
+
+    def setUp(self):
+        # Lag der ligger mellem de to temperaturer: 58 er over begge, 54
+        # ligger imellem, 40 er under begge.
+        self.buffer = Buffer((Tank("A", 500.0, 58.0, 54.0, 40.0),), 30.0, 60.0)
+
+    def test_a_warmer_charge_temperature_leaves_more_room(self):
+        # Med 53 ses der ingen plads over det lag der staar paa 54; med 56
+        # er der to kelvin. Det var forskellen mellem ``dhw_setpoint`` - som
+        # staar paa 53 paa anlaegget - og den rigtige ladetemperatur.
+        self.assertGreater(self.buffer.room_to(56.0), self.buffer.room_to(53.0))
+
+    def test_the_ceiling_itself_is_untouched(self):
+        # ``headroom_kwh`` regner stadig op til loftet paa 60, for det er
+        # ogsaa det ``energy_to_reach`` og ``charge_percent`` bygger paa.
+        self.assertAlmostEqual(
+            self.buffer.headroom_kwh, self.buffer.room_to(60.0), places=9
+        )
+
+
 class CompleteTest(unittest.TestCase):
     """Forskellen paa «der er noget at vise» og «der er noget at handle paa»."""
 

@@ -57,7 +57,7 @@ def _finite(value: Any) -> bool:
     )
 
 
-def _slot_start(at: float) -> float:
+def slot_start(at: float) -> float:
     """Rund ned til halvtimen. En top skal ikke flytte sig af sig selv.
 
     ``window_minutes`` regnes forfra hver cyklus og vipper et minut hid og did.
@@ -297,9 +297,9 @@ class ChargePlan:
         # ikke fra det her sekund. Uden gulvet gled en ventende bloks start
         # ét minut frem pr. cyklus og sprang 30 minutter tilbage ved hver
         # :00/:30 - saa den stod aldrig stille laenge nok til at kunne laeses.
-        starts = _slot_start(now) + offset * 60
+        starts = slot_start(now) + offset * 60
         # Og laengden maales fra det seneste af de to. Starter blokken nu, kan
-        # ``_slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og saa
+        # ``slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og saa
         # ville blokken blive tilsvarende for kort.
         ends = max(starts, now) + minutes * 60
         self.block = Block(dear_from, dear_until, starts, ends, float(want))
@@ -334,10 +334,10 @@ class ChargePlan:
             first, length = float(starts), float(span)
             if length > 0:
                 return (
-                    _slot_start(now + first * 60),
-                    _slot_start(now + (first + length) * 60),
+                    slot_start(now + first * 60),
+                    slot_start(now + (first + length) * 60),
                 )
-        top = _slot_start(now + (decision.window_minutes or window) * 60)
+        top = slot_start(now + (decision.window_minutes or window) * 60)
         return top, top + SLOT_SECONDS
 
     def _finish(self, now: float, why: str) -> bool:

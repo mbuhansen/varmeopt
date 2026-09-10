@@ -10,7 +10,7 @@ læg dem fast, kør dem.
 import unittest
 from dataclasses import dataclass
 
-from varmeopt.charge import ChargePlan, _slot_start
+from varmeopt.charge import ChargePlan, slot_start
 from varmeopt.prices import Plan
 
 
@@ -58,7 +58,7 @@ class BlockTest(unittest.TestCase):
         self.assertFalse(self.step())
 
         starts, ends = self.charge.slots()
-        self.assertEqual(starts, _slot_start(self.now) + 120 * 60)
+        self.assertEqual(starts, slot_start(self.now) + 120 * 60)
         self.assertAlmostEqual((ends - starts) / 60, 45, delta=1)
 
     def test_a_pending_block_does_not_drift_between_cycles(self):

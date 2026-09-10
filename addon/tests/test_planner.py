@@ -758,6 +758,45 @@ class DeadlineTest(unittest.TestCase):
         self.assertEqual(asked[0][0], 120)
 
 
+class ClockTest(unittest.TestCase):
+    """Begrundelsen skriver klokkeslaet, ikke minutter."""
+
+    def setUp(self):
+        self.plan = plan(100, 100, 100, 30, 300)
+        self.planner = planner(clock=lambda m: f"kl. {6 + int(m) // 60:02d}:00")
+
+    def test_the_waiting_reason_says_a_clock_time(self):
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertIn("venter", d.reason)
+        self.assertIn("kl. ", d.reason)
+        self.assertNotIn(" min ", d.reason)
+
+    def test_the_charge_state_says_it_too(self):
+        d = self.planner.decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertIn("kl. ", d.charge_state)
+
+    def test_the_thin_margin_reason_says_it_too(self):
+        d = self.planner.decide(
+            plan(100, 110), cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertIn("for tæt", d.reason)
+        self.assertIn("kl. ", d.reason)
+
+    def test_without_a_clock_it_falls_back_to_minutes(self):
+        d = planner().decide(
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+        )
+
+        self.assertIn("min", d.reason)
+
+
 class HorizonTest(unittest.TestCase):
     """Et doegn frem, saa naeste aften altid er i syne."""
 

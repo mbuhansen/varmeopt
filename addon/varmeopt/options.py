@@ -145,6 +145,16 @@ _DEFAULTS: dict[str, object] = {
     # naeste aften, uanset hvornaar paa dagen der spoerges - se
     # DEFAULT_HORIZON_MINUTES for hvorfor de 12 timer ikke raakte.
     "planner_horizon_hours": 24,
+    # Fremloebstemperaturen en blokopladning koerer ved. Den er hoejere end
+    # rumvarmens setpunkt, og det er med vilje: varmen skal bagefter ogsaa
+    # kunne lave et bad.
+    #
+    # Ikke det samme som ``dhw_setpoint``, selv om de ligner hinanden. Den er
+    # det setpunkt *beholderen kalder med*, og den bruges af curve.py til at
+    # kende et varmtvandskald fra en rumvarmemaaling. Her staar hvad
+    # opladningen sigter efter - to spoergsmaal, to indstillinger. De stod
+    # som ét i et doegn, og saa blev COP'en slaaet op tre grader for lavt.
+    "hp_charge_temp": 56,
     # Klokkeslaettet lageret skal vaere fyldt til. Det er en frist paa uret
     # og ikke et prisargument: der bades om aftenen, og huset koerer paa
     # restvarmen natten igennem. Prisraekken kender hverken badetiden eller
@@ -307,6 +317,7 @@ class Options:
     hp_charge_kw: float
     hp_wear_kr_per_kwh: float
     planner_horizon_hours: float
+    hp_charge_temp: float
     store_full_by_hour: float
     pellet_price_per_kg: float
     pellet_kwh_per_kg: float

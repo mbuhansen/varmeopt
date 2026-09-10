@@ -256,6 +256,7 @@ class Planner:
         charge_kw: float = 16.0,
         horizon_minutes: int = DEFAULT_HORIZON_MINUTES,
         dhw_temp: float = 55.0,
+        clock: Any = None,
     ) -> None:
         self.pellet_price = pellet_price
         self.hysteresis = hysteresis
@@ -268,8 +269,27 @@ class Planner:
         self.horizon_minutes = horizon_minutes
         # Kun til begrundelsen: hvilken temperatur lageret blev talt ved.
         self.dhw_temp = dhw_temp
+        # Hvordan et tidspunkt forude skrives. Se ``_when``.
+        self.clock = clock
 
     # ------------------------------------------------------------------ pris
+
+    def _when(self, minutes: float) -> str:
+        """Et tidspunkt forude, skrevet saa det kan laeses.
+
+        «kl. 13:26» kan laeses; «om 510 min» skal regnes - og saa bliver det
+        ikke laest. Uret kommer udefra, saa planlaeggeren bliver ved med at
+        vaere til at proeve af uden at nogen skal stille en systemklokke; uden
+        et ur svarer den som foer.
+
+        Ét sted at formatere, saa loggen, sensorens attributter og nu-siden
+        bliver ved med at sige det samme.
+        """
+        if self.clock is not None:
+            text = self.clock(minutes)
+            if text:
+                return str(text)
+        return f"om {minutes:.0f} min"
 
     def _cop_for(self, minutes: int, cop_now: float | None, cop_later: Any) -> float | None:
         """COP i en given time.
@@ -464,8 +484,8 @@ class Planner:
                     f"forskellen er for lille - kun {margin:.2f} kr/kWh at hente"
                 ),
                 reason=(
-                    f"{why}; kun {margin:.2f} kr/kWh at hente om {best_when} "
-                    "min — for tæt til at flytte varme på"
+                    f"{why}; kun {margin:.2f} kr/kWh at hente "
+                    f"{self._when(best_when)} — for tæt til at flytte varme på"
                 ),
             )
 
@@ -495,8 +515,9 @@ class Planner:
                 window_minutes=best_when,
                 charge_state=f"der er kun {room:.1f} kWh plads i lageret",
                 reason=(
-                    f"{why}; {margin:.2f} kr/kWh at hente om {best_when} min, "
-                    f"men kun {room:.1f} kWh plads — under minimumstrækket"
+                    f"{why}; {margin:.2f} kr/kWh at hente "
+                    f"{self._when(best_when)}, men kun {room:.1f} kWh plads "
+                    "— under minimumstrækket"
                 ),
             )
 
@@ -593,8 +614,8 @@ class Planner:
                 window_starts_in=frist,
                 deadline_on_the_clock=on_the_clock,
                 charge_state=(
-                    f"venter - om {when} min er strømmen billigere, og der er "
-                    "stadig tid inden det bliver dyrt"
+                    f"venter - {self._when(when)} er strømmen billigere, og "
+                    "der er stadig tid inden det bliver dyrt"
                 ),
                 dhw_short_kwh=None if short is None else short.dhw_kwh,
                 space_short_kwh=None if short is None else short.space_kwh,
@@ -603,12 +624,12 @@ class Planner:
                 space_need_kwh=None if short is None else short.space_need,
                 space_have_kwh=None if short is None else short.space_have,
                 reason=(
-                    f"{why}; venter - om {when} min koster varmen {price:.2f} "
-                    f"mod {vp_now:.2f} nu, og der er stadig tid inden "
+                    f"{why}; venter - {self._when(when)} koster varmen "
+                    f"{price:.2f} mod {vp_now:.2f} nu, og der er stadig tid inden "
                     + (
-                        f"lageret skal vaere fyldt om {frist} min"
+                        f"lageret skal vaere fyldt {self._when(frist)}"
                         if on_the_clock
-                        else f"toppen om {best_when} min"
+                        else f"toppen {self._when(best_when)}"
                     )
                 ),
             )
@@ -647,11 +668,11 @@ class Planner:
             space_have_kwh=None if short is None else short.space_have,
             reason=(
                 f"{why}; lad {want:.1f} kWh{driver} nu — lageret skal vaere "
-                f"fyldt om {frist} min{shortfall}"
+                f"fyldt {self._when(frist)}{shortfall}"
                 if on_the_clock
                 else (
                     f"{why}; lad {want:.1f} kWh{driver} nu og spar "
-                    f"{saving:.2f} kr mod om {best_when} min{shortfall}"
+                    f"{saving:.2f} kr mod {self._when(best_when)}{shortfall}"
                 )
             ),
         )

@@ -279,6 +279,7 @@ siges i loggen ved opstart.
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
+| `hp_charge_temp` | 56 | Fremløbstemperaturen en blokopladning kører ved. Højere end rumvarmens setpunkt med vilje: varmen skal bagefter også kunne lave et bad. Ikke det samme som `dhw_setpoint`, som er hvad beholderen *kalder* med |
 | `planner_horizon_hours` | 24 | Hvor langt frem det giver mening at gemme varme. Et døgn dækker altid næste aften, uanset hvornår på dagen der spørges |
 | `store_full_by_hour` | 17 | Klokkeslættet lageret skal være fyldt til. En frist på uret, ikke et prisargument: der bades om aftenen, og huset kører på restvarmen natten igennem. Et tal uden for døgnet slår fristen fra |
 | `entity_weather` | `weather.hjem` | Home Assistants egen vejrudsigt. Uden den arver hver time i planen den COP vi har nu |

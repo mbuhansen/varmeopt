@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from varmeopt.__main__ import Varmeopt
 from varmeopt.cop import Cell, CopTable
@@ -167,6 +168,33 @@ class CycleTest(unittest.TestCase):
                 self.ha._states.pop(eid, None)
         for eid, temp in pairs:
             self.ha._states[eid] = State(eid, str(temp), {}, "tank-1")
+
+    def test_the_charge_mark_lands_on_the_row_the_block_starts_in(self):
+        # Planens raekker er nummereret fra halvtimens begyndelse - raekke 0
+        # er den halvtime vi staar i - og web-siden skriver klokkeslaettet
+        # som halvtimens start. Blokken ligger paa det samme gitter, saa de
+        # to skal maales fra det samme nulpunkt.
+        #
+        # Foer blev blokken maalt fra *dette sekund*: kl. 04:56 blev en blok
+        # kl. 13:00 til 484 minutter, og 484 rammer raekken der hedder 12:30.
+        # Maerket stod én raekke for tidligt.
+        from varmeopt.charge import Block, slot_start
+
+        now = 1_757_000_000.0 + 26 * 60  # et godt stykke inde i halvtimen
+        base = slot_start(now)
+        starts = base + 510 * 60
+        self.app.charge_plan.block = Block(
+            dear_from=base + 570 * 60,
+            dear_until=base + 750 * 60,
+            starts_at=starts,
+            ends_at=starts + 15 * 60,
+            kwh=2.7,
+        )
+
+        with mock.patch("time.time", return_value=now):
+            window = self.app._charge_window()
+
+        self.assertEqual(window, (510, 525))
 
     def test_a_slower_pump_lowers_the_minimum_draw(self):
         # Typeskiltet siger 16 kW og mindstetraekket 4,0 kWh; maskinen
