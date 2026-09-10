@@ -61,9 +61,22 @@ def _slot_start(at: float) -> float:
 
 @dataclass(frozen=True)
 class Block:
-    """Én planlagt opladning: hvornår, hvor længe, hvor meget."""
+    """Én planlagt opladning: hvornår, hvor længe, hvor meget.
 
-    top_at: float
+    ``dear_from``/``dear_until`` er det dyre stræk blokken blev lagt til, som
+    absolutte tidspunkter. De afgøres én gang, når blokken lægges — ``_finish``
+    har ingen beslutning i hånden og kan ikke regne dem ud bagefter.
+
+    Her stod ``top_at``: den *dyreste* halvtime. Den vandrede. Fordi
+    ``cheapest_heat`` er loftet af pillefyrets pris, har hver dyr halvtime i
+    et stræk præcis samme værdi, den tidligste vinder — og når den bliver til
+    «nu», arver den næste titlen. Spærren «kør det én gang» så derfor en ny
+    top hver halve time gennem et stræk der ikke havde rørt sig, og lagde en
+    ny blok hver gang. Den 9. september blev det til otte.
+    """
+
+    dear_from: float
+    dear_until: float
     starts_at: float
     ends_at: float
     kwh: float
@@ -79,7 +92,8 @@ class Block:
 
     def to_raw(self) -> dict[str, Any]:
         return {
-            "top_at": round(self.top_at, 1),
+            "dear_from": round(self.dear_from, 1),
+            "dear_until": round(self.dear_until, 1),
             "starts_at": round(self.starts_at, 1),
             "ends_at": round(self.ends_at, 1),
             "kwh": round(self.kwh, 3),
@@ -91,7 +105,8 @@ class Block:
             return None
         try:
             block = cls(
-                top_at=float(raw["top_at"]),
+                dear_from=float(raw["dear_from"]),
+                dear_until=float(raw["dear_until"]),
                 starts_at=float(raw["starts_at"]),
                 ends_at=float(raw["ends_at"]),
                 kwh=float(raw["kwh"]),
@@ -100,15 +115,20 @@ class Block:
             return None
         if block.ends_at <= block.starts_at or block.kwh <= 0:
             return None
+        if block.dear_until <= block.dear_from:
+            return None
         return block
 
 
 @dataclass
 class ChargePlan:
-    """Den blok der er lagt, og den top der allerede er klaret."""
+    """Den blok der er lagt, og det stræk der allerede er klaret."""
 
     block: Block | None = None
-    done_top: float | None = None
+    # Enden paa det dyre straek der er ladet op imod. Saa laenge det straek
+    # vi nu sigter mod, begynder inden det her, er det det samme straek - og
+    # ét straek giver én opladning.
+    done_until: float | None = None
     note: str = "ingen opladning planlagt"
 
     # ---------------------------------------------------------------- opslag
@@ -148,6 +168,11 @@ class ChargePlan:
             return True
 
         # 2. Er den kørt til ende, er den klaret.
+        #
+        #    Der behoeves ikke et skridt mere for «straekket er forbi». En
+        #    blok slutter altid inden straekket begynder - det er hele dens
+        #    formaal - saa naar straekkets ende er passeret, er blokkens ende
+        #    passeret for laengst, og den her linje har allerede taget den.
         if self.block is not None and now >= self.block.ends_at:
             return self._finish(now, "kørt")
 
@@ -181,27 +206,49 @@ class ChargePlan:
                 self.note = "ingen opladning planlagt"
             return False
 
-        top_at = _slot_start(now + (decision.window_minutes or window) * 60)
-        if self.done_top is not None and abs(self.done_top - top_at) < 1:
-            # Den her top er klaret. Ét billigt vindue giver én opladning;
-            # foerst naar en ny top dukker op, laegges der en ny blok.
+        dear_from, dear_until = self._dear_key(now, decision, window)
+        if self.done_until is not None and dear_from < self.done_until:
+            # Det her straek er klaret. Ét dyrt straek giver én opladning;
+            # foerst naar et *nyt* straek begynder, laegges der en ny blok.
+            #
+            # Sammenligningen gaar mod straekkets **ende** og ikke mod dets
+            # start. Graensen for hvad der er dyrt, kan rykke sig nogle oere
+            # fra minut til minut, og saa flytter starten sig en halvtime;
+            # enden ligger fast, saa laenge det er det samme straek. Begynder
+            # det vi nu sigter mod, inden det vi allerede har daekket er
+            # forbi, er det det samme.
             self.block = None
-            self.note = "allerede ladet op mod den her pristop"
+            self.note = "allerede ladet op mod det her dyre stræk"
             return False
 
         # 5. Laeg blokken - eller flyt den, hvis priserne har rykket sig.
         if rate_kw <= 0:
             return False
         minutes = max(1.0, want / rate_kw * 60)
-        found = plan.cheapest_window(int(math.ceil(minutes)), int(window))
+        # Blokken kan aldrig kraeve flere halvtimer end der er til fristen.
+        #
+        # Uden ``min`` her faldt hver ellevte cyklus paa en flydendetalskant:
+        # planlaeggeren kapper maengden med ``charge_kw * window / 60``, og
+        # ``want / rate * 60`` regner det tilbage til 90,000000000000014
+        # minutter. ``ceil`` goer det til 91, og et vindue paa 90 minutter har
+        # ikke plads til 91. Maalt over 200.000 kombinationer af ladehastighed
+        # og vindue skete det i 9,4 % af tilfaeldene.
+        needed = min(int(math.ceil(minutes)), max(1, int(window)))
+        found = plan.cheapest_window(needed, int(window))
         if found is None:
-            self.block = None
+            # Ingen plads er ikke det samme som «drop det der allerede er
+            # lagt». En blok der venter, er lagt paa priser vi har set efter;
+            # at der ikke kan lægges en *ny* i det her minut, siger ingenting
+            # om den. Foer stod her ``self.block = None``, og saa slettede en
+            # forbigaaende trangt vindue en opladning der var klar.
             self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
             return False
 
         offset, _price = found
         starts = now + offset * 60
-        self.block = Block(top_at, starts, starts + minutes * 60, float(want))
+        self.block = Block(
+            dear_from, dear_until, starts, starts + minutes * 60, float(want)
+        )
         if self.block.running(now):
             self._running = True
             self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
@@ -213,9 +260,33 @@ class ChargePlan:
         )
         return False
 
+    def _dear_key(self, now: float, decision: Any, window: int) -> tuple[float, float]:
+        """Det dyre straek som to absolutte tidspunkter.
+
+        Planlaeggeren giver straekket som minutter frem; her bliver det til
+        vaegurstid, gulvet til halvtimen, saa det samme straek ser ens ud
+        hvert minut.
+
+        Har planlaeggeren intet straek at give - der er ingen timer hvor
+        pumpen taber, og heller ingen der er dyrere end nu - falder vi tilbage
+        paa den dyreste halvtime, som foer. Netop dér er det ufarligt: den
+        dyreste halvtime vandrer kun naar flere halvtimer er lige dyre, og det
+        sker kun naar de rammer pillefyrets loft. Gaelder det, findes der et
+        straek, og saa er vi ikke her.
+        """
+        starts = getattr(decision, "dear_starts_in", None)
+        span = getattr(decision, "dear_span_minutes", None)
+        if _finite(starts) and _finite(span) and span > 0:
+            return (
+                _slot_start(now + starts * 60),
+                _slot_start(now + (starts + span) * 60),
+            )
+        top = _slot_start(now + (decision.window_minutes or window) * 60)
+        return top, top + SLOT_SECONDS
+
     def _finish(self, now: float, why: str) -> bool:
         if self.block is not None:
-            self.done_top = self.block.top_at
+            self.done_until = self.block.dear_until
         self.block = None
         self._running = False
         self.note = f"opladning slut — {why}"
@@ -230,7 +301,7 @@ class ChargePlan:
         # ubrugeligt - her er en halvfaerdig opladning stadig en opladning.
         return {
             "block": None if self.block is None else self.block.to_raw(),
-            "done_top": self.done_top,
+            "done_until": self.done_until,
         }
 
     @classmethod
@@ -239,9 +310,13 @@ class ChargePlan:
         if not isinstance(raw, dict):
             return plan
         plan.block = Block.from_raw(raw.get("block"))
-        top = raw.get("done_top")
-        if _finite(top):
-            plan.done_top = float(top)
+        # ``done_top`` fra en aeldre udgave laeses ikke. Det var enden paa en
+        # *halvtime*, ikke paa et straek, og at laese det ville kun kunne
+        # spaerre for meget. Prisen er én ekstra tilladt blok den dag
+        # add-on'en opdateres.
+        until = raw.get("done_until")
+        if _finite(until):
+            plan.done_until = float(until)
         if plan.block is not None:
             plan.note = "genoptager planlagt opladning"
         return plan

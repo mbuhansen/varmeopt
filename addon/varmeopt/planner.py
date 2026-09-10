@@ -65,6 +65,13 @@ class Decision:
     # priserne, og den er forkert naar det er badevandet der har sat
     # tidspunktet.
     deadline_on_the_clock: bool = False
+    # Det dyre straek der lades op imod: hvornaar det begynder, og hvor
+    # laenge det varer. Det er ikke det samme som ``window_minutes``, som er
+    # den *dyreste* halvtime - og forskellen er hele grunden til at flaget
+    # flimrede. En blok hoerer til et straek, ikke til en halvtime, og
+    # ``charge.py`` bruger de to tal til at kende straekket igen naeste minut.
+    dear_starts_in: int | None = None
+    dear_span_minutes: int | None = None
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
@@ -360,18 +367,32 @@ class Planner:
         # om pumpen koerer nu eller om tre timer. Skal den ellers laves af
         # pillefyret, staar den tilbage i marginen, hvor den hoerer hjemme.
         margin = best_gap
+
+        # Straekket der skal daekkes, og fristen det skal vaere klart inden.
+        # Begge dele hoerer til her, hvor de kan regnes én gang og bruges af
+        # alle spoergsmaalene nedenfor: om det kan vente, hvor meget der er
+        # tid til, og hvor meget der skal bruges.
+        #
+        # Det regnes *foer* den foerste udgang, og det er med vilje. Staar vi
+        # inde i et dyrt straek, er der ingen dyrere time forude, og saa gaar
+        # turen ud ad den her doer - men det er praecis dér ``charge.py``
+        # skal kunne se hvilket straek vi er inde i. Uden det ville spaerren
+        # miste hukommelsen paa de eneste cyklusser den findes for.
+        starts, span = self._dear_stretch(plan, vp_now, cop_now, cop_later)
+        stretch: dict[str, Any] = (
+            {"dear_starts_in": starts, "dear_span_minutes": span}
+            if span > 0
+            else {}
+        )
+
         if best_when is None or margin <= 0:
             return _with(
                 decision,
+                **stretch,
                 charge_state="ingen dyrere timer forude at gemme varme til",
                 reason=f"{why}; intet at hente ved at gemme",
             )
 
-        # Vinduet der skal daekkes, og fristen det skal vaere klart inden.
-        # Begge dele hoerer til her, hvor de kan regnes én gang og bruges af
-        # alle spoergsmaalene nedenfor: om det kan vente, hvor meget der er
-        # tid til, og hvor meget der skal bruges.
-        starts, span = self._dear_window(plan, vp_now, cop_now, cop_later)
         priced = starts or best_when
         frist = self._frist(priced, deadline_minutes)
         on_the_clock = frist != priced
@@ -399,6 +420,7 @@ class Planner:
         if margin <= self.hysteresis and not on_the_clock:
             return _with(
                 decision,
+                **stretch,
                 window_minutes=best_when,
                 charge_state=(
                     f"forskellen er for lille - kun {margin:.2f} kr/kWh at hente"
@@ -431,6 +453,7 @@ class Planner:
         if room < self.min_charge_kwh:
             return _with(
                 decision,
+                **stretch,
                 window_minutes=best_when,
                 charge_state=f"der er kun {room:.1f} kWh plads i lageret",
                 reason=(
@@ -481,6 +504,7 @@ class Planner:
             if need <= 0:
                 return _with(
                     decision,
+                    **stretch,
                     window_minutes=best_when,
                     charge_state="lageret rækker - der er ikke noget at lade op til",
                     dhw_short_kwh=short.dhw_kwh,
@@ -523,6 +547,7 @@ class Planner:
             when, price = cheaper
             return _with(
                 decision,
+                **stretch,
                 planned_kwh=want,
                 window_minutes=best_when,
                 window_starts_in=frist,
@@ -565,6 +590,7 @@ class Planner:
 
         return _with(
             decision,
+            **stretch,
             charge=True,
             charge_kwh=want,
             planned_kwh=want,
@@ -768,6 +794,85 @@ class Planner:
         if first is None or last is None:
             return 0, 0
         return first, last - first + SLOT_MINUTES
+
+    def _dear_period(
+        self,
+        plan: Any,
+        cop_now: Any,
+        cop_later: Any,
+    ) -> tuple[int, int]:
+        """Det foerste straek hvor varmepumpen taber til pillefyret.
+
+        Returnerer (minutter frem til det begynder, straekkets laengde).
+
+        Forskellen fra ``_dear_window`` er hvem der bestemmer hvad «dyrt» er.
+        Der er det *dyrere end lige nu*, og det goer straekket til en egenskab
+        ved **hvornaar man spoerger** i stedet for ved priserne. Spoerger man
+        kl. 04 fra nattens bund, er svaret ét straek fra kl. 05 til midnat —
+        tyve timer — fordi intet undervejs er billigere end natten. Alt hvad
+        man haenger paa det straek, arver den egenskab: maengden, fristen, og
+        enhver spaerre der skal huske «det her straek har vi ladet op til».
+
+        Her er graensen anlaeggets egen og staar stille: over pillefyrets pris
+        taber varmepumpen, og saa er det pillefyret der laver varmen. Det er
+        ogsaa praecis den varme lageret kan fortraenge — hver kWh det baerer
+        derinde, sparer en kWh pillevarme. En eksport til 3,38 loefter varmen
+        til 0,94 og er dermed dyr; Predbats ladevindue til 0,96 er det ikke.
+
+        Uden hysteresen ville et straek kunne begynde og slutte paa nogle
+        oerer, saa den traekkes fra - samme snit som kildevalget bruger.
+        Hultolerancen er den samme som i ``_dear_window``: huset traekker
+        videre af lageret i en enkelt billig halvtime.
+        """
+        threshold = self.pellet_price - self.hysteresis
+        first = last = None
+        gap = 0
+        for minutes in range(SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES):
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            # Den *uloftede* pris. ``cheapest_heat`` klemmer ved pillefyret,
+            # og saa ville sammenligningen vaere sand for hver eneste time.
+            heat = self.heat_price(
+                price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
+            )
+            if heat is not None and heat >= threshold:
+                if first is None:
+                    first = minutes
+                last = minutes
+                gap = 0
+            elif first is not None:
+                gap += SLOT_MINUTES
+                if gap > MAX_GAP_IN_WINDOW:
+                    break
+        if first is None or last is None:
+            return 0, 0
+        return first, last - first + SLOT_MINUTES
+
+    def _dear_stretch(
+        self,
+        plan: Any,
+        vp_now: float,
+        cop_now: Any,
+        cop_later: Any,
+    ) -> tuple[int, int]:
+        """Straekket der lades op imod. Absolut naar der findes et.
+
+        Findes der timer hvor pumpen taber til pillefyret, er *de* timer
+        straekket. Findes der ingen, falder vi tilbage paa den relative:
+        hvad der er dyrere end nu.
+
+        Tilbagefaldet er ufarligt netop dér. Pilleloftets uafgjorte - som er
+        grunden til at den dyreste halvtime vandrer - opstaar kun naar en
+        halvtime rammer loftet, og paa et doegn uden absolut straek goer ingen
+        af dem det. Saa er den dyreste halvtime entydig, og en spaerre der
+        haenger paa den, staar stille. Hver tilstand har sin egen stabile
+        noegle, af hver sin grund.
+        """
+        starts, span = self._dear_period(plan, cop_now, cop_later)
+        if span > 0:
+            return starts, span
+        return self._dear_window(plan, vp_now, cop_now, cop_later)
 
 
     # ------------------------------------------------------------ fremskrivning

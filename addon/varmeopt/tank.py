@@ -322,8 +322,22 @@ class Buffer:
 
     @property
     def sensors_lost(self) -> int:
-        """Hvor mange dybdefølere der mangler på tværs af lageret."""
-        return sum(t.sensors_lost for t in self.measured)
+        """Hvor mange dybdefølere der mangler på tværs af lageret.
+
+        Over **alle** tankene, ikke kun dem der svarer. Her stod
+        ``self.measured``, og så talte en tank der var faldet helt ud, som
+        nul mistede følere — den var jo ikke med i summen. Natten til den 10.
+        september svarede tank B ikke i ét minut: lageret halverede sig fra
+        22,6 til 11,8 kWh, og det her tal sagde uændret nul.
+
+        Det er ikke kun en visning. Tallet går til ``houseload.observe``, hvis
+        eneste opgave er at kassere målevinduet når følergrundlaget skifter —
+        og den gjorde det ikke. Det halve lager blev læst som et kæmpe
+        varmeforbrug og lært permanent ind i forbrugskurven. Da tanken kom
+        tilbage, blev det modsatte spring fanget, for kontrollen af uforklaret
+        energi ser kun det der *vokser*. En ensrettet vagt, og en blivende fejl.
+        """
+        return sum(t.sensors_lost for t in self.tanks)
 
     @property
     def mean_temp(self) -> float | None:

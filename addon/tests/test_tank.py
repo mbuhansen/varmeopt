@@ -215,6 +215,28 @@ class SensorGuardTest(unittest.TestCase):
         self.assertEqual(whole.sensors_lost, 0)
         self.assertEqual(dead.sensors_lost, 1)
 
+    def test_a_whole_silent_tank_counts_as_three_lost(self):
+        # Den vigtigste af dem alle, og den der manglede. En tank uden ét
+        # eneste svar er ikke med i ``measured``, saa summen over de *maalte*
+        # tanke gav nul mistede foelere - mens lageret halverede sig. Natten
+        # til den 10. september svarede tank B ikke i ét minut: 22,6 -> 11,8
+        # kWh, og vagten saa ingenting.
+        whole = Buffer(
+            (Tank("A", 500.0, 60.0, 50.0, 40.0), Tank("B", 500.0, 58.0, 48.0, 38.0)),
+            30.0,
+            60.0,
+        )
+        silent = Buffer(
+            (Tank("A", 500.0, 60.0, 50.0, 40.0), Tank("B", 500.0, None, None, None)),
+            30.0,
+            60.0,
+        )
+
+        self.assertEqual(whole.sensors_lost, 0)
+        self.assertEqual(silent.sensors_lost, 3)
+        # Og energien halverer sig, saa vagten har noget at reagere paa.
+        self.assertLess(silent.heat_kwh, whole.heat_kwh * 0.6)
+
     def test_and_the_energy_really_does_jump(self):
         # Det er derfor det betyder noget: naar foeleren falder ud, hopper
         # energien - og en haeldning over vinduet ville laese det som et

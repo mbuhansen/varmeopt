@@ -20,6 +20,8 @@ class FakeDecision:
     window_starts_in: int | None = 240
     window_minutes: int | None = 300
     source: str = "varmepumpe"
+    dear_starts_in: int | None = None
+    dear_span_minutes: int | None = None
 
 
 def plan(*rates):
@@ -56,6 +58,41 @@ class BlockTest(unittest.TestCase):
         starts, ends = self.charge.slots()
         self.assertAlmostEqual((starts - self.now) / 60, 120, delta=1)
         self.assertAlmostEqual((ends - starts) / 60, 45, delta=1)
+
+    def test_a_block_that_exactly_fills_the_window_still_fits(self):
+        # Planlaeggeren kapper maengden med ``charge_kw * window / 60``, og
+        # her regnes den tilbage: 16,95 kWh ved 11,3 kW er 90,000000000000014
+        # minutter, som ``ceil`` goer til 91. Et vindue paa 90 minutter har
+        # ikke plads til 91, og saa svarede den «ingen plads» - i 9,4 % af
+        # alle cyklusser.
+        want = 11.3 * 90 / 60
+
+        self.charge.update(
+            self.now,
+            FakeDecision(planned_kwh=want, window_starts_in=90, window_minutes=90),
+            self.plan,
+            11.3,
+        )
+
+        self.assertIsNotNone(self.charge.slots())
+        self.assertNotIn("ingen plads", self.charge.note)
+
+    def test_no_room_this_minute_does_not_delete_a_waiting_block(self):
+        # En blok der venter, er lagt paa priser vi har set efter. At der ikke
+        # kan laegges en *ny* i det her minut, siger ingenting om den.
+        self.step()
+        waiting = self.charge.slots()
+        self.assertIsNotNone(waiting)
+
+        # Et vindue paa én halvtime, som en blok paa 45 min ikke kan ligge i.
+        self.charge.update(
+            self.now,
+            FakeDecision(planned_kwh=12.0, window_starts_in=1, window_minutes=300),
+            self.plan,
+            16.0,
+        )
+
+        self.assertEqual(self.charge.slots(), waiting)
 
     def test_and_then_it_charges_without_flapping(self):
         # Kernen. Behovet vipper omkring nul minut for minut, praecis som den
@@ -197,6 +234,76 @@ class OnceTest(unittest.TestCase):
         self.charge.update(later, self.at(0), self.plan, 16.0)
 
         self.assertIsNotNone(self.charge.slots())
+
+
+class OncePerStretchTest(unittest.TestCase):
+    """Ét dyrt straek giver én opladning - ogsaa naar toppen vandrer.
+
+    Reproduktionen af den 9. september. Flaget taendte og slukkede otte gange,
+    fordi spaerren kendte straekket paa dets *dyreste* halvtime. Pilleloftet
+    goer alle dyre halvtimer lige dyre, den tidligste vinder, og naar den
+    bliver til «nu», arver den naeste titlen. Straekket selv rykkede sig ikke
+    en tomme.
+    """
+
+    def setUp(self):
+        self.now = 1_757_000_000.0
+        # Ti billige halvtimer, saa dyrt resten af vejen.
+        self.plan = plan(*([35] * 10 + [155] * 14))
+        self.charge = ChargePlan()
+
+    def at(self, minute, top):
+        """Straekket staar stille; ``window_minutes`` vandrer."""
+        return FakeDecision(
+            planned_kwh=8.0,
+            window_starts_in=max(1, 300 - minute),
+            # Den dyreste halvtime - den der flyttede sig hver halve time.
+            window_minutes=max(1, top - minute),
+            dear_starts_in=max(1, 300 - minute),
+            dear_span_minutes=240,
+        )
+
+    def run_block(self):
+        for minute in (0, 15, 30, 31):
+            self.charge.update(
+                self.now + minute * 60, self.at(minute, 300), self.plan, 16.0
+            )
+
+    def test_a_wandering_dearest_half_hour_does_not_open_a_new_block(self):
+        self.run_block()
+        self.assertIsNone(self.charge.slots())
+
+        # Toppen vandrer en halvtime ad gangen gennem straekket, praecis som
+        # den gjorde den 9. september. Straekket er det samme, saa der maa
+        # ikke laegges en ny blok.
+        for minute, top in ((60, 330), (90, 360), (120, 390), (180, 450)):
+            self.assertFalse(
+                self.charge.update(
+                    self.now + minute * 60, self.at(minute, top), self.plan, 16.0
+                )
+            )
+            self.assertIn("allerede ladet op", self.charge.note)
+            self.assertIsNone(self.charge.slots())
+
+    def test_a_new_stretch_may_be_charged_for(self):
+        # Modtesten, og den er lige saa vigtig: to dyre straek med billige
+        # timer imellem - en dyr morgen og en dyr aften - skal give to
+        # blokke, én inden hver. Ellers er spaerren bare blevet til
+        # «én om dagen».
+        self.run_block()
+
+        # Aftenens straek: begynder 100 min efter det foerste er forbi.
+        later = FakeDecision(
+            planned_kwh=8.0,
+            window_starts_in=100,
+            window_minutes=100,
+            dear_starts_in=100,
+            dear_span_minutes=120,
+        )
+        self.charge.update(self.now + 600 * 60, later, plan(*([35] * 4 + [155] * 8)), 16.0)
+
+        self.assertIsNotNone(self.charge.slots())
+        self.assertNotIn("allerede ladet op", self.charge.note)
 
 
 class StorageTest(unittest.TestCase):
