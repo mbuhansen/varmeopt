@@ -35,24 +35,24 @@ class TankEnergyTest(unittest.TestCase):
 
         self.assertAlmostEqual(gap.stored_kwh(30.0), whole.stored_kwh(30.0), places=4)
         self.assertEqual(gap.sensors_lost, 1)
-        # Midt imellem 60 og 30 ligger 45 - praecis det der stod der.
+        # Midt imellem 60 og 30 ligger 45 - præcis det der stod der.
         self.assertEqual(gap.layers, (60.0, 45.0, 30.0))
 
     def test_a_lost_bottom_sensor_does_not_inflate_the_store_by_half(self):
         # 500 L med 60/50/30 over reference 30 rummer 9,57 kWh. Da de to
-        # maalte lag daekkede hele tanken, blev det til 14,36 - halvdelen
-        # mere varme end der var, netop naar der var mindst grund til at tro
-        # paa tallet.
+        # målte lag dækkede hele tanken, blev det til 14,36 - halvdelen
+        # mere varme end der var, netop når der var mindst grund til at tro
+        # på tallet.
         whole = tank(top=60.0, mid=50.0, bottom=30.0)
         lost = tank(top=60.0, mid=50.0, bottom=None)
 
         truth = whole.stored_kwh(30.0)
         self.assertAlmostEqual(truth, 9.57, places=2)
-        # Gradienten forlaenges: 60, 50 -> 40.
+        # Gradienten forlænges: 60, 50 -> 40.
         self.assertEqual(lost.layers, (60.0, 50.0, 40.0))
 
         # Fejlen er 1,92 kWh mod de 4,79 den gamle udgave gav. Den er ikke
-        # vaek: en rigtig tank har en termoklin, saa bunden ligger koldere
+        # væk: en rigtig tank har en termoklin, så bunden ligger koldere
         # end en ret linje siger, og en fremskrivning overvurderer den
         # altid lidt. Men den er mindre end det halve.
         was = (500 / 2) * (30 + 20) * 1.149 / 1000
@@ -64,8 +64,8 @@ class TankEnergyTest(unittest.TestCase):
         self.assertEqual(lost.layers, (70.0, 50.0, 30.0))
 
     def test_an_inverted_profile_falls_back_on_the_nearest_layer(self):
-        # Bunden varmere end midten er enten omroert eller en foeler ude af
-        # kalibrering. Saa er en fremskrivning vaerre end det naermeste maal.
+        # Bunden varmere end midten er enten omrørt eller en føler ude af
+        # kalibrering. Så er en fremskrivning værre end det nærmeste mål.
         lost = tank(top=None, mid=40.0, bottom=60.0)
 
         self.assertEqual(lost.layers[0], 60.0)
@@ -150,7 +150,7 @@ class BufferTest(unittest.TestCase):
         self.assertGreater(hot.peak_headroom_kwh, 0.0)
         self.assertTrue(hot.above_heatpump_ceiling)
         # ... men solfangeren har stadig 30 K at give af. Det er forskellen
-        # paa de to lofter, og den afgoer om en soldag kan laeres af.
+        # på de to lofter, og den afgør om en soldag kan læres af.
         self.assertFalse(hot.at_peak_ceiling)
 
     def test_a_cool_buffer_is_not_above_the_heat_pump_ceiling(self):
@@ -200,8 +200,8 @@ class SensorGuardTest(unittest.TestCase):
     """Hvilket tal der kan bruges til at opdage en død føler."""
 
     def test_the_layer_count_does_not_notice_one_dead_sensor(self):
-        # ``layers`` interpolerer det manglende lag og giver stadig tre, saa
-        # ``sensor_count`` staar stille. Det er rigtigt til energiregnskabet
+        # ``layers`` interpolerer det manglende lag og giver stadig tre, så
+        # ``sensor_count`` står stille. Det er rigtigt til energiregnskabet
         # og ubrugeligt som vagt.
         whole = Buffer((Tank("A", 500.0, 60.0, 50.0, 40.0),), 30.0, 60.0)
         dead = Buffer((Tank("A", 500.0, 60.0, 50.0, None),), 30.0, 60.0)
@@ -217,10 +217,10 @@ class SensorGuardTest(unittest.TestCase):
 
     def test_a_whole_silent_tank_counts_as_three_lost(self):
         # Den vigtigste af dem alle, og den der manglede. En tank uden ét
-        # eneste svar er ikke med i ``measured``, saa summen over de *maalte*
-        # tanke gav nul mistede foelere - mens lageret halverede sig. Natten
+        # eneste svar er ikke med i ``measured``, så summen over de *målte*
+        # tanke gav nul mistede følere - mens lageret halverede sig. Natten
         # til den 10. september svarede tank B ikke i ét minut: 22,6 -> 11,8
-        # kWh, og vagten saa ingenting.
+        # kWh, og vagten så ingenting.
         whole = Buffer(
             (Tank("A", 500.0, 60.0, 50.0, 40.0), Tank("B", 500.0, 58.0, 48.0, 38.0)),
             30.0,
@@ -234,13 +234,13 @@ class SensorGuardTest(unittest.TestCase):
 
         self.assertEqual(whole.sensors_lost, 0)
         self.assertEqual(silent.sensors_lost, 3)
-        # Og energien halverer sig, saa vagten har noget at reagere paa.
+        # Og energien halverer sig, så vagten har noget at reagere på.
         self.assertLess(silent.heat_kwh, whole.heat_kwh * 0.6)
 
     def test_and_the_energy_really_does_jump(self):
-        # Det er derfor det betyder noget: naar foeleren falder ud, hopper
-        # energien - og en haeldning over vinduet ville laese det som et
-        # forbrug paa flere kW og laere det ind i kurven.
+        # Det er derfor det betyder noget: når føleren falder ud, hopper
+        # energien - og en hældning over vinduet ville læse det som et
+        # forbrug på flere kW og lære det ind i kurven.
         whole = Buffer((Tank("A", 500.0, 60.0, 50.0, 30.0),), 30.0, 60.0)
         dead = Buffer((Tank("A", 500.0, 60.0, 50.0, None),), 30.0, 60.0)
 
@@ -252,7 +252,7 @@ if __name__ == "__main__":
 
 
 class RoomToTest(unittest.TestCase):
-    """Pladsen maales op til den temperatur blokken lader ved."""
+    """Pladsen måles op til den temperatur blokken lader ved."""
 
     def setUp(self):
         # Lag der ligger mellem de to temperaturer: 58 er over begge, 54
@@ -260,21 +260,21 @@ class RoomToTest(unittest.TestCase):
         self.buffer = Buffer((Tank("A", 500.0, 58.0, 54.0, 40.0),), 30.0, 60.0)
 
     def test_a_warmer_charge_temperature_leaves_more_room(self):
-        # Med 53 ses der ingen plads over det lag der staar paa 54; med 56
+        # Med 53 ses der ingen plads over det lag der står på 54; med 56
         # er der to kelvin. Det var forskellen mellem ``dhw_setpoint`` - som
-        # staar paa 53 paa anlaegget - og den rigtige ladetemperatur.
+        # står på 53 på anlægget - og den rigtige ladetemperatur.
         self.assertGreater(self.buffer.room_to(56.0), self.buffer.room_to(53.0))
 
     def test_the_ceiling_itself_is_untouched(self):
-        # ``headroom_kwh`` regner stadig op til loftet paa 60, for det er
-        # ogsaa det ``energy_to_reach`` og ``charge_percent`` bygger paa.
+        # ``headroom_kwh`` regner stadig op til loftet på 60, for det er
+        # også det ``energy_to_reach`` og ``charge_percent`` bygger på.
         self.assertAlmostEqual(
             self.buffer.headroom_kwh, self.buffer.room_to(60.0), places=9
         )
 
 
 class CompleteTest(unittest.TestCase):
-    """Forskellen paa «der er noget at vise» og «der er noget at handle paa»."""
+    """Forskellen på «der er noget at vise» og «der er noget at handle på»."""
 
     def test_one_answering_tank_is_covered_but_not_complete(self):
         half = Buffer(
@@ -298,8 +298,8 @@ class CompleteTest(unittest.TestCase):
         self.assertEqual(whole.silent, ())
 
     def test_a_tank_missing_one_sensor_is_still_complete(self):
-        # Ét doedt lag er ikke en tavs tank - gradientreglen daekker det, og
-        # den skal ikke overtrumfes af en gammel aflaesning.
+        # Ét dødt lag er ikke en tavs tank - gradientreglen dækker det, og
+        # den skal ikke overtrumfes af en gammel aflæsning.
         gap = Buffer(
             (Tank("A", 500.0, 60.0, None, 40.0), Tank("B", 500.0, 58.0, 48.0, 38.0)),
             30.0,
@@ -313,7 +313,7 @@ class CompleteTest(unittest.TestCase):
 class ChargePercentTest(unittest.TestCase):
     def test_energy_above_the_ceiling_does_not_inflate_the_percentage(self):
         # 90/70/40 med reference 30 og loft 60. Der stod stored/(stored +
-        # headroom), og de to taellere maalte ikke det samme: energi over
+        # headroom), og de to tællere målte ikke det samme: energi over
         # loftet talte med foroven men gav ingen rummelighed forneden.
         b = Buffer(tanks=(tank(top=90.0, mid=70.0, bottom=40.0),),
                    reference=30.0, ceiling=60.0)
@@ -334,11 +334,11 @@ class ChargePercentTest(unittest.TestCase):
 
 
 class CascadeTest(unittest.TestCase):
-    """Anlaegget lader tankene i raekkefoelge, ikke parallelt.
+    """Anlægget lader tankene i rækkefølge, ikke parallelt.
 
-    Afspaerringsventilen til tank 2 aabner foerst naar tank 1 er over 55 paa
-    topfoeleren. Det er med vilje: solvarmen lader fra bunden af tank 1, saa
-    ved kun at varme de foerste 500 L naar lageret hurtigere en brugbar
+    Afspærringsventilen til tank 2 åbner først når tank 1 er over 55 på
+    topføleren. Det er med vilje: solvarmen lader fra bunden af tank 1, så
+    ved kun at varme de første 500 L når lageret hurtigere en brugbar
     temperatur.
     """
 
@@ -357,9 +357,9 @@ class CascadeTest(unittest.TestCase):
         self.assertTrue(b.imbalance_is_by_design)
 
     def test_and_still_is_just_after_the_valve_opens(self):
-        # Anlaeggets egne tal 3. september: A 55,2/44,2/32,3, B 41,0/35,3/28,8.
-        # Ventilen er lige aabnet ved 55, og tank 2 er ved at hente ind. At
-        # kalde det en flowfejl ville vaere lige saa forkert som at kalde
+        # Anlæggets egne tal 3. september: A 55,2/44,2/32,3, B 41,0/35,3/28,8.
+        # Ventilen er lige åbnet ved 55, og tank 2 er ved at hente ind. At
+        # kalde det en flowfejl ville være lige så forkert som at kalde
         # opfyldningen af tank 1 en fejl.
         b = self.store(55.2, 41.0)
 
@@ -368,8 +368,8 @@ class CascadeTest(unittest.TestCase):
         self.assertTrue(b.imbalance_is_by_design)
 
     def test_but_not_once_the_first_tank_is_as_full_as_the_pump_can_make_it(self):
-        # Raekkefoelgen er koert til ende uden at have rettet forskellen op.
-        # Saa er det flowet.
+        # Rækkefølgen er kørt til ende uden at have rettet forskellen op.
+        # Så er det flowet.
         b = self.store(60.5, 41.0)
 
         self.assertGreater(b.imbalance, 5.0)
@@ -381,7 +381,7 @@ class CascadeTest(unittest.TestCase):
         self.assertFalse(b.imbalance_is_by_design)
 
     def test_the_store_still_delivers_from_the_warm_tank(self):
-        # Kaskaden aendrer ikke hvad lageret kan levere - det er den
+        # Kaskaden ændrer ikke hvad lageret kan levere - det er den
         # varmeste afgang, ikke gennemsnittet.
         b = self.store(55.2, 41.0)
 
@@ -389,8 +389,8 @@ class CascadeTest(unittest.TestCase):
         self.assertTrue(b.can_deliver(54.0))
 
     def test_the_energy_is_the_sum_regardless(self):
-        # Kaskaden er en raekkefoelge, ikke en opdeling: begge tanke lades,
-        # bare ikke samtidig. Energien og pladsen er summen som foer.
+        # Kaskaden er en rækkefølge, ikke en opdeling: begge tanke lades,
+        # bare ikke samtidig. Energien og pladsen er summen som før.
         b = self.store(55.2, 41.0)
 
         self.assertAlmostEqual(

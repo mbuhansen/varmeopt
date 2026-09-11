@@ -25,7 +25,7 @@ class FakeDecision:
 
 
 def plan(*rates):
-    """En plan hvor batteriet er bundet, saa importprisen gaelder direkte."""
+    """En plan hvor batteriet er bundet, så importprisen gælder direkte."""
     rows = [
         {"state": "holdchrg", "import_rate": rate, "export_rate": 50} for rate in rates
     ]
@@ -53,8 +53,8 @@ class BlockTest(unittest.TestCase):
 
     def test_it_waits_for_the_cheapest_window(self):
         # De billige halvtimer begynder 120 minutter frem - regnet fra den
-        # halvtime vi staar i, ikke fra det her sekund. Toleransen var foer
-        # ét minut, og den skjulte praecis den drift.
+        # halvtime vi står i, ikke fra det her sekund. Toleransen var før
+        # ét minut, og den skjulte præcis den drift.
         self.assertFalse(self.step())
 
         starts, ends = self.charge.slots()
@@ -62,14 +62,14 @@ class BlockTest(unittest.TestCase):
         self.assertAlmostEqual((ends - starts) / 60, 45, delta=1)
 
     def test_a_pending_block_does_not_drift_between_cycles(self):
-        # Blokkens start laa foer paa ``now + offset``, hvor ``offset`` er
-        # hele halvtimer fra den halvtime vi staar i. Den gled derfor ét
+        # Blokkens start lå før på ``now + offset``, hvor ``offset`` er
+        # hele halvtimer fra den halvtime vi står i. Den gled derfor ét
         # minut frem pr. cyklus og sprang 30 minutter tilbage ved hver :00 og
-        # :30 - og en start der aldrig staar stille, kan ikke laeses.
-        # Inden for den halvtime vi staar i. Krydser uret en halvtime, ruller
-        # Predbats plan ogsaa en halvtime frem paa anlaegget, og saa er det
+        # :30 - og en start der aldrig står stille, kan ikke læses.
+        # Inden for den halvtime vi står i. Krydser uret en halvtime, ruller
+        # Predbats plan også en halvtime frem på anlægget, og så er det
         # stadig det samme absolutte tidspunkt - men det kan attrappen her
-        # ikke vise, for dens plan staar stille.
+        # ikke vise, for dens plan står stille.
         seen = set()
         for minute in range(0, 26):
             self.step(at=self.now + minute * 60)
@@ -80,10 +80,10 @@ class BlockTest(unittest.TestCase):
         self.assertEqual(len(seen), 1)
 
     def test_a_block_that_exactly_fills_the_window_still_fits(self):
-        # Planlaeggeren kapper maengden med ``charge_kw * window / 60``, og
+        # Planlæggeren kapper mængden med ``charge_kw * window / 60``, og
         # her regnes den tilbage: 16,95 kWh ved 11,3 kW er 90,000000000000014
-        # minutter, som ``ceil`` goer til 91. Et vindue paa 90 minutter har
-        # ikke plads til 91, og saa svarede den «ingen plads» - i 9,4 % af
+        # minutter, som ``ceil`` gør til 91. Et vindue på 90 minutter har
+        # ikke plads til 91, og så svarede den «ingen plads» - i 9,4 % af
         # alle cyklusser.
         want = 11.3 * 90 / 60
 
@@ -98,13 +98,13 @@ class BlockTest(unittest.TestCase):
         self.assertNotIn("ingen plads", self.charge.note)
 
     def test_no_room_this_minute_does_not_delete_a_waiting_block(self):
-        # En blok der venter, er lagt paa priser vi har set efter. At der ikke
-        # kan laegges en *ny* i det her minut, siger ingenting om den.
+        # En blok der venter, er lagt på priser vi har set efter. At der ikke
+        # kan lægges en *ny* i det her minut, siger ingenting om den.
         self.step()
         waiting = self.charge.slots()
         self.assertIsNotNone(waiting)
 
-        # Et vindue paa én halvtime, som en blok paa 45 min ikke kan ligge i.
+        # Et vindue på én halvtime, som en blok på 45 min ikke kan ligge i.
         self.charge.update(
             self.now,
             FakeDecision(planned_kwh=12.0, window_starts_in=1, window_minutes=300),
@@ -115,12 +115,12 @@ class BlockTest(unittest.TestCase):
         self.assertEqual(self.charge.slots(), waiting)
 
     def test_and_then_it_charges_without_flapping(self):
-        # Kernen. Behovet vipper omkring nul minut for minut, praecis som den
-        # 6. september - og flaget skal alligevel taende én gang og blive
-        # taendt blokken ud.
+        # Kernen. Behovet vipper omkring nul minut for minut, præcis som den
+        # 6. september - og flaget skal alligevel tænde én gang og blive
+        # tændt blokken ud.
         #
-        # Tiden gaar rigtigt: planen skydes frem som halvtimerne gaar, og
-        # fristen taeller ned. Ellers ville blokken skubbe sig selv foran sig.
+        # Tiden går rigtigt: planen skydes frem som halvtimerne går, og
+        # fristen tæller ned. Ellers ville blokken skubbe sig selv foran sig.
         dear_at = 8 * 30  # de dyre halvtimer begynder her
         flags = []
         for minute in range(dear_at):
@@ -140,7 +140,7 @@ class BlockTest(unittest.TestCase):
             )
 
         starts = sum(1 for a, b in zip(flags, flags[1:]) if b and not a)
-        self.assertEqual(starts, 1, f"flaget taendte {starts} gange")
+        self.assertEqual(starts, 1, f"flaget tændte {starts} gange")
         self.assertEqual(sum(flags), 45, "blokken skal vare 45 minutter")
 
     def test_a_slower_pump_gets_a_longer_block(self):
@@ -156,7 +156,7 @@ class BlockTest(unittest.TestCase):
         self.assertAlmostEqual((slow[1] - slow[0]) / 60, 60, delta=1)
 
     def test_it_moves_while_it_waits(self):
-        # En blok der ikke er begyndt, er ikke et loefte: bliver en anden
+        # En blok der ikke er begyndt, er ikke et løfte: bliver en anden
         # halvtime billigere, flytter den sig.
         self.step()
         first = self.charge.slots()[0]
@@ -168,7 +168,7 @@ class BlockTest(unittest.TestCase):
 
 
 class InterruptionTest(unittest.TestCase):
-    """Kun to ting maa bryde en igangvaerende blok."""
+    """Kun to ting må bryde en igangværende blok."""
 
     def setUp(self):
         self.now = 1_757_000_000.0
@@ -189,9 +189,9 @@ class InterruptionTest(unittest.TestCase):
         )
 
     def test_one_full_reading_does_not_stop_a_running_block(self):
-        # ``headroom`` er en sum over otte termometre. Ét udsving maa ikke
-        # afslutte en opladning - og braende straekket med, saa der ikke kan
-        # laegges en ny.
+        # ``headroom`` er en sum over otte termometre. Ét udsving må ikke
+        # afslutte en opladning - og brænde strækket med, så der ikke kan
+        # lægges en ny.
         self.start()
 
         self.assertTrue(self.full_at(300))
@@ -207,7 +207,7 @@ class InterruptionTest(unittest.TestCase):
     def test_a_flicker_of_full_starts_the_patience_over(self):
         self.start()
         self.full_at(300)
-        # Ikke fuldt igen - taelleren nulstilles.
+        # Ikke fuldt igen - tælleren nulstilles.
         self.charge.update(self.now + 360, FakeDecision(), self.plan, 16.0)
 
         self.assertTrue(self.full_at(300 + 180))
@@ -224,8 +224,8 @@ class InterruptionTest(unittest.TestCase):
         self.assertIn("pillefyret", self.charge.note)
 
     def test_the_guarded_source_is_what_counts(self):
-        # Vagten holder varmepumpen i femten minutter; planlaeggerens raa
-        # svar vipper paa nogle oere. Det er vagtens svar der gaelder.
+        # Vagten holder varmepumpen i femten minutter; planlæggerens rå
+        # svar vipper på nogle øre. Det er vagtens svar der gælder.
         self.start()
 
         self.assertTrue(
@@ -254,7 +254,7 @@ class InterruptionTest(unittest.TestCase):
         )
 
     def test_but_a_full_store_goes_before_the_minimum_runtime(self):
-        # Der er ingen varme at levere ind i et fuldt lager, saa der er heller
+        # Der er ingen varme at levere ind i et fuldt lager, så der er heller
         # ikke noget at beskytte.
         self.start()
         self.full_at(60, min_runtime_minutes=15)
@@ -262,7 +262,7 @@ class InterruptionTest(unittest.TestCase):
         self.assertFalse(self.full_at(60 + 180, min_runtime_minutes=15))
 
     def test_nothing_else_does(self):
-        # Behovet forsvinder midt i blokken. Den koerer alligevel faerdig.
+        # Behovet forsvinder midt i blokken. Den kører alligevel færdig.
         self.start()
 
         self.assertTrue(
@@ -282,7 +282,7 @@ class OnceTest(unittest.TestCase):
         self.decision = FakeDecision(planned_kwh=8.0, window_starts_in=60, window_minutes=60)
 
     def at(self, minute):
-        """Beslutningen som den ser ud det minut - fristen taeller ned."""
+        """Beslutningen som den ser ud det minut - fristen tæller ned."""
         return FakeDecision(
             planned_kwh=8.0,
             window_starts_in=max(1, 60 - minute),
@@ -315,23 +315,23 @@ class OnceTest(unittest.TestCase):
 
 
 class OncePerStretchTest(unittest.TestCase):
-    """Ét dyrt straek giver én opladning - ogsaa naar toppen vandrer.
+    """Ét dyrt stræk giver én opladning - også når toppen vandrer.
 
-    Reproduktionen af den 9. september. Flaget taendte og slukkede otte gange,
-    fordi spaerren kendte straekket paa dets *dyreste* halvtime. Pilleloftet
-    goer alle dyre halvtimer lige dyre, den tidligste vinder, og naar den
-    bliver til «nu», arver den naeste titlen. Straekket selv rykkede sig ikke
+    Reproduktionen af den 9. september. Flaget tændte og slukkede otte gange,
+    fordi spærren kendte strækket på dets *dyreste* halvtime. Pilleloftet
+    gør alle dyre halvtimer lige dyre, den tidligste vinder, og når den
+    bliver til «nu», arver den næste titlen. Strækket selv rykkede sig ikke
     en tomme.
     """
 
     def setUp(self):
         self.now = 1_757_000_000.0
-        # Ti billige halvtimer, saa dyrt resten af vejen.
+        # Ti billige halvtimer, så dyrt resten af vejen.
         self.plan = plan(*([35] * 10 + [155] * 14))
         self.charge = ChargePlan()
 
     def at(self, minute, top):
-        """Straekket staar stille; ``window_minutes`` vandrer."""
+        """Strækket står stille; ``window_minutes`` vandrer."""
         return FakeDecision(
             planned_kwh=8.0,
             window_starts_in=max(1, 300 - minute),
@@ -351,9 +351,9 @@ class OncePerStretchTest(unittest.TestCase):
         self.run_block()
         self.assertIsNone(self.charge.slots())
 
-        # Toppen vandrer en halvtime ad gangen gennem straekket, praecis som
-        # den gjorde den 9. september. Straekket er det samme, saa der maa
-        # ikke laegges en ny blok.
+        # Toppen vandrer en halvtime ad gangen gennem strækket, præcis som
+        # den gjorde den 9. september. Strækket er det samme, så der må
+        # ikke lægges en ny blok.
         for minute, top in ((60, 330), (90, 360), (120, 390), (180, 450)):
             self.assertFalse(
                 self.charge.update(
@@ -364,13 +364,13 @@ class OncePerStretchTest(unittest.TestCase):
             self.assertIsNone(self.charge.slots())
 
     def test_a_new_stretch_may_be_charged_for(self):
-        # Modtesten, og den er lige saa vigtig: to dyre straek med billige
+        # Modtesten, og den er lige så vigtig: to dyre stræk med billige
         # timer imellem - en dyr morgen og en dyr aften - skal give to
-        # blokke, én inden hver. Ellers er spaerren bare blevet til
+        # blokke, én inden hver. Ellers er spærren bare blevet til
         # «én om dagen».
         self.run_block()
 
-        # Aftenens straek: begynder 100 min efter det foerste er forbi.
+        # Aftenens stræk: begynder 100 min efter det første er forbi.
         later = FakeDecision(
             planned_kwh=8.0,
             window_starts_in=100,
@@ -386,8 +386,8 @@ class OncePerStretchTest(unittest.TestCase):
 
 class StorageTest(unittest.TestCase):
     def test_a_running_block_survives_a_restart(self):
-        # En genstart midt i en opladning maa ikke starte kompressoren forfra
-        # paa den anden side.
+        # En genstart midt i en opladning må ikke starte kompressoren forfra
+        # på den anden side.
         now = 1_757_000_000.0
         charge = ChargePlan()
         charge.update(

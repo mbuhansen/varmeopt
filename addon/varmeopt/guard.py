@@ -44,7 +44,7 @@ class Guard:
     ) -> None:
         self.enabled = enabled
         # Anlægget må ikke vippe frem og tilbage. Hysteresen i planlæggeren
-        # daemper prisstøj; det her sætter en bund under hvor tit kilden
+        # dæmper prisstøj; det her sætter en bund under hvor tit kilden
         # overhovedet får lov at skifte.
         self.min_dwell_minutes = min_dwell_minutes
         # Efter en opstart er tabellerne lige indlæst og der er kørt én

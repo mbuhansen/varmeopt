@@ -106,7 +106,7 @@ class Load:
     def source(self) -> str | None:
         """Hvor tallet kom fra. ``None`` når ingen af dem kunne svare."""
         if self.trustworthy:
-            return "flowmaaler" if self.kw is not None else None
+            return "flowmåler" if self.kw is not None else None
         return "lager" if self.fallback_kw is not None else None
 
     @property
@@ -130,17 +130,17 @@ class Balance:
     """Hvad der lades ind i lageret, mod hvad huset tager ud."""
 
     load: Load
-    # Varmepumpens elforbrug. Ikke en varmekilde og taeller ikke med i
-    # ``input_kw`` - den staar her fordi ydelsen delt med den *er* COP'en, og
-    # fordi det er det ene sted i huset hvor vi maaler baade ind og ud.
+    # Varmepumpens elforbrug. Ikke en varmekilde og tæller ikke med i
+    # ``input_kw`` - den står her fordi ydelsen delt med den *er* COP'en, og
+    # fordi det er det ene sted i huset hvor vi måler både ind og ud.
     hp_power_kw: float | None = None
     solar_kw: float | None = None
     element_kw: float | None = None
     heatpump_kw: float | None = None
     boiler_kw: float | None = None
-    # Kender vi overhovedet alt det der gaar ind? Koerer varmepumpen uden en
-    # COP at regne ydelsen af, er ``heatpump_kw`` None, og saa mangler der en
-    # kilde i summen. Det gaar ud over enhver energibalance der bygger paa
+    # Kender vi overhovedet alt det der går ind? Kører varmepumpen uden en
+    # COP at regne ydelsen af, er ``heatpump_kw`` None, og så mangler der en
+    # kilde i summen. Det går ud over enhver energibalance der bygger på
     # den - se ``houseload``.
     inputs_known: bool = True
 

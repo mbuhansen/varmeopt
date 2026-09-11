@@ -55,7 +55,7 @@ class BalanceTest(unittest.TestCase):
 
     def test_free_heat_is_kept_apart_from_bought(self):
         # Hele pointen med at skille kilderne ad: solvarme er gratis, og en
-        # plan der lader op med varmepumpen fortraenger den.
+        # plan der lader op med varmepumpen fortrænger den.
         balance = Balance(load=self.load, solar_kw=0.96, heatpump_kw=3.0)
 
         self.assertAlmostEqual(balance.free_kw, 0.96, places=6)
@@ -70,7 +70,7 @@ class BalanceTest(unittest.TestCase):
         self.assertIsNone(Balance(load=Load(), solar_kw=1.0).net_kw)
 
     def test_hours_left_while_draining(self):
-        # 2,72 kW ud, intet ind: 11,6 kWh raekker godt fire timer.
+        # 2,72 kW ud, intet ind: 11,6 kWh rækker godt fire timer.
         balance = Balance(load=self.load)
 
         self.assertAlmostEqual(balance.hours_left(11.6), 11.6 / 2.7185, places=3)
@@ -83,8 +83,8 @@ class BalanceTest(unittest.TestCase):
         self.assertAlmostEqual(balance.hours_to_full(22.9), 22.9 / (8.0 - 2.7185), places=3)
 
     def test_a_balanced_system_has_no_horizon(self):
-        # Gaar det lige op, er svaret hverken "raekker to timer" eller "fuld om
-        # to timer" - det er "uaendret", og der er intet tal at give.
+        # Går det lige op, er svaret hverken "rækker to timer" eller "fuld om
+        # to timer" - det er "uændret", og der er intet tal at give.
         balance = Balance(load=self.load, heatpump_kw=2.7185)
 
         self.assertIsNone(balance.hours_left(11.6))
@@ -101,19 +101,19 @@ if __name__ == "__main__":
 
 
 class MeterFloorTest(unittest.TestCase):
-    """Et nul fra en maaler der foerst taeller fra 100 l/h er ikke et nul."""
+    """Et nul fra en måler der først tæller fra 100 l/h er ikke et nul."""
 
     def test_a_zero_below_the_floor_is_unknown_not_no_demand(self):
-        # Maaleren kan vise nul ved reelle stroemme op mod 100 l/h. Ved 15 K
-        # er det op mod 1,7 kW, altsaa ikke noget man kan kalde ingenting.
+        # Måleren kan vise nul ved reelle strømme op mod 100 l/h. Ved 15 K
+        # er det op mod 1,7 kW, altså ikke noget man kan kalde ingenting.
         load = Load(flow=45.0, ret=30.0, litres_per_hour=0.0)
 
         self.assertIsNone(load.kw)
         self.assertFalse(load.trustworthy)
 
     def test_a_stuck_meter_is_unknown_too(self):
-        # 5 l/h gav foer 0,06 kW, som ser ud som et rigtigt forbrug: 101
-        # timers restlevetid paa lageret.
+        # 5 l/h gav før 0,06 kW, som ser ud som et rigtigt forbrug: 101
+        # timers restlevetid på lageret.
         load = Load(flow=45.0, ret=30.0, litres_per_hour=5.0)
 
         self.assertIsNone(load.kw)
@@ -125,8 +125,8 @@ class MeterFloorTest(unittest.TestCase):
         self.assertTrue(load.trustworthy)
 
     def test_the_floor_is_the_meters_property_not_the_plants(self):
-        # En bedre maaler ville have et lavere gulv, og saa er 50 l/h en
-        # maaling. Derfor er tallet en indstilling.
+        # En bedre måler ville have et lavere gulv, og så er 50 l/h en
+        # måling. Derfor er tallet en indstilling.
         load = Load(flow=45.0, ret=30.0, litres_per_hour=50.0, meter_floor=10.0)
 
         self.assertIsNotNone(load.kw)

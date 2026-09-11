@@ -40,12 +40,12 @@ from typing import Any
 
 SLOT_SECONDS = 1800.0
 
-# Saa laenge «lageret er fuldt» skal holde, foer en koerende blok afsluttes.
+# Så længe «lageret er fuldt» skal holde, før en kørende blok afsluttes.
 #
 # ``headroom`` er en sum over otte termometre, og ét af dem kan poste et
 # udsving. Tre minutter mod et fuldt lager er tre minutter hvor kompressoren
-# leverer i noget der ikke kan optage det - en aerlig, lille pris. Femten
-# ville vaere et rigtigt overskud og et hoejtryk.
+# leverer i noget der ikke kan optage det - en ærlig, lille pris. Femten
+# ville være et rigtigt overskud og et højtryk.
 FULL_HOLD_SECONDS = 180.0
 
 
@@ -133,12 +133,12 @@ class ChargePlan:
     """Den blok der er lagt, og det stræk der allerede er klaret."""
 
     block: Block | None = None
-    # Enden paa det dyre straek der er ladet op imod. Saa laenge det straek
-    # vi nu sigter mod, begynder inden det her, er det det samme straek - og
-    # ét straek giver én opladning.
+    # Enden på det dyre stræk der er ladet op imod. Så længe det stræk
+    # vi nu sigter mod, begynder inden det her, er det det samme stræk - og
+    # ét stræk giver én opladning.
     done_until: float | None = None
     note: str = "ingen opladning planlagt"
-    # Hvornaar lageret foerste gang meldte sig fuldt i det her forloeb.
+    # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
 
     # ---------------------------------------------------------------- opslag
@@ -167,10 +167,10 @@ class ChargePlan:
     ) -> bool:
         """Ét skridt. Returnerer om der skal lades lige nu.
 
-        ``source`` er den kilde vagten staar ved - den med hviletiden. Uden
-        den laeste vi planlaeggerens raa svar, og saa kunne ét minuts udsving
-        i COP eller pris afslutte en opladning som vagten samtidig holdt paa
-        varmepumpen. Er den ukendt, spoerges beslutningen som foer.
+        ``source`` er den kilde vagten står ved - den med hviletiden. Uden
+        den læste vi planlæggerens rå svar, og så kunne ét minuts udsving
+        i COP eller pris afslutte en opladning som vagten samtidig holdt på
+        varmepumpen. Er den ukendt, spørges beslutningen som før.
         """
         chosen = source if source is not None else getattr(decision, "source", None)
 
@@ -178,9 +178,9 @@ class ChargePlan:
         if self.block is not None and self.block.running(now):
             if full:
                 # Ét minut er ikke nok. ``headroom`` er en sum over otte
-                # termometre, og et enkelt udsving maa ikke afslutte en
-                # opladning - og *brænde* straekket med, saa der ikke kan
-                # laegges en ny.
+                # termometre, og et enkelt udsving må ikke afslutte en
+                # opladning - og *brænde* strækket med, så der ikke kan
+                # lægges en ny.
                 if self._full_since is None:
                     self._full_since = now
                 if now - self._full_since >= FULL_HOLD_SECONDS:
@@ -188,7 +188,7 @@ class ChargePlan:
             else:
                 self._full_since = None
             # Kortcykling slider. En blok der lige er startet, afsluttes ikke
-            # fordi pillefyret vandt et minut - men et fuldt lager gaar
+            # fordi pillefyret vandt et minut - men et fuldt lager går
             # forud, for der er ingen varme at levere ind i.
             young = (now - self.block.starts_at) / 60 < min_runtime_minutes
             if chosen == "pillefyr" and not young:
@@ -202,17 +202,17 @@ class ChargePlan:
 
         # 2. Er den kørt til ende, er den klaret.
         #
-        #    Der behoeves ikke et skridt mere for «straekket er forbi». En
-        #    blok slutter altid inden straekket begynder - det er hele dens
-        #    formaal - saa naar straekkets ende er passeret, er blokkens ende
-        #    passeret for laengst, og den her linje har allerede taget den.
+        #    Der behøves ikke et skridt mere for «strækket er forbi». En
+        #    blok slutter altid inden strækket begynder - det er hele dens
+        #    formål - så når strækkets ende er passeret, er blokkens ende
+        #    passeret for længst, og den her linje har allerede taget den.
         if self.block is not None and now >= self.block.ends_at:
             return self._finish(now, "kørt")
 
         self._running = False
 
         # 3. En blok der venter, droppes kun af de samme to grunde som en der
-        #    koerer.
+        #    kører.
         if self.block is not None and (full or chosen == "pillefyr"):
             self.block = None
             self.note = "opladning droppet — " + (
@@ -220,12 +220,12 @@ class ChargePlan:
             )
             return False
 
-        # 4. Er der en hensigt at planlaegge efter?
+        # 4. Er der en hensigt at planlægge efter?
         #
-        #    Er der ikke, staar en allerede lagt blok ved magt. Det er hele
+        #    Er der ikke, står en allerede lagt blok ved magt. Det er hele
         #    pointen: behovet vipper omkring nul minut for minut, og en blok
-        #    der forsvandt hver gang det gjorde, ville vaere det samme flimmer
-        #    en etage hoejere oppe.
+        #    der forsvandt hver gang det gjorde, ville være det samme flimmer
+        #    en etage højere oppe.
         want = getattr(decision, "planned_kwh", None) if decision else None
         window = getattr(decision, "window_starts_in", None) if decision else None
         if not _finite(want) or want <= 0 or not window or plan is None:
@@ -240,66 +240,66 @@ class ChargePlan:
 
         dear_from, dear_until = self._dear_key(now, decision, window)
         if self.done_until is not None and dear_from < self.done_until:
-            # Det her straek er klaret. Ét dyrt straek giver én opladning;
-            # foerst naar et *nyt* straek begynder, laegges der en ny blok.
+            # Det her stræk er klaret. Ét dyrt stræk giver én opladning;
+            # først når et *nyt* stræk begynder, lægges der en ny blok.
             #
-            # Sammenligningen gaar mod straekkets **ende** og ikke mod dets
-            # start. Graensen for hvad der er dyrt, kan rykke sig nogle oere
-            # fra minut til minut, og saa flytter starten sig en halvtime;
-            # enden ligger fast, saa laenge det er det samme straek. Begynder
-            # det vi nu sigter mod, inden det vi allerede har daekket er
+            # Sammenligningen går mod strækkets **ende** og ikke mod dets
+            # start. Grænsen for hvad der er dyrt, kan rykke sig nogle øre
+            # fra minut til minut, og så flytter starten sig en halvtime;
+            # enden ligger fast, så længe det er det samme stræk. Begynder
+            # det vi nu sigter mod, inden det vi allerede har dækket er
             # forbi, er det det samme.
             #
-            # **Og der er ingen undtagelse for et toemt lager.** Den var
-            # planlagt - «genlaeg hvis lageret loeber toert, og der stadig
+            # **Og der er ingen undtagelse for et tømt lager.** Den var
+            # planlagt - «genlæg hvis lageret løber tørt, og der stadig
             # ligger en billigere halvtime inden det dyre er forbi» - men den
-            # kan ikke fyre. Straekket *er* de timer hvor varmepumpen taber
+            # kan ikke fyre. Strækket *er* de timer hvor varmepumpen taber
             # til pillefyret; en halvtime derinde der var billig nok til at
-            # lade op i, ville have afsluttet straekket. Betingelsen modsiger
-            # sin egen forudsaetning.
+            # lade op i, ville have afsluttet strækket. Betingelsen modsiger
+            # sin egen forudsætning.
             #
-            # Det er heller ikke et hul. Loeber lageret toert midt i det dyre,
-            # starter UVR'en selv pumpen ved det setpunkt fremloebet kraever -
+            # Det er heller ikke et hul. Løber lageret tørt midt i det dyre,
+            # starter UVR'en selv pumpen ved det setpunkt fremløbet kræver -
             # og tager kun den varme huset beder om, ved den bedre COP der
-            # hoerer til 32 grader frem for 56. En genlagt blok ville koere
+            # hører til 32 grader frem for 56. En genlagt blok ville køre
             # 56 og fylde *hele* lageret til aftenpris. Kildevalget siger
-            # samtidig pillefyr, for det er derfor straekket er et straek.
+            # samtidig pillefyr, for det er derfor strækket er et stræk.
             # Alle tre veje er billigere end den undtagelse der udgik.
             self.block = None
             self.note = "allerede ladet op mod det her dyre stræk"
             return False
 
-        # 5. Laeg blokken - eller flyt den, hvis priserne har rykket sig.
+        # 5. Læg blokken - eller flyt den, hvis priserne har rykket sig.
         if rate_kw <= 0:
             return False
         minutes = max(1.0, want / rate_kw * 60)
-        # Blokken kan aldrig kraeve flere halvtimer end der er til fristen.
+        # Blokken kan aldrig kræve flere halvtimer end der er til fristen.
         #
-        # Uden ``min`` her faldt hver ellevte cyklus paa en flydendetalskant:
-        # planlaeggeren kapper maengden med ``charge_kw * window / 60``, og
+        # Uden ``min`` her faldt hver ellevte cyklus på en flydendetalskant:
+        # planlæggeren kapper mængden med ``charge_kw * window / 60``, og
         # ``want / rate * 60`` regner det tilbage til 90,000000000000014
-        # minutter. ``ceil`` goer det til 91, og et vindue paa 90 minutter har
-        # ikke plads til 91. Maalt over 200.000 kombinationer af ladehastighed
-        # og vindue skete det i 9,4 % af tilfaeldene.
+        # minutter. ``ceil`` gør det til 91, og et vindue på 90 minutter har
+        # ikke plads til 91. Målt over 200.000 kombinationer af ladehastighed
+        # og vindue skete det i 9,4 % af tilfældene.
         needed = min(int(math.ceil(minutes)), max(1, int(window)))
         found = plan.cheapest_window(needed, int(window))
         if found is None:
             # Ingen plads er ikke det samme som «drop det der allerede er
-            # lagt». En blok der venter, er lagt paa priser vi har set efter;
+            # lagt». En blok der venter, er lagt på priser vi har set efter;
             # at der ikke kan lægges en *ny* i det her minut, siger ingenting
-            # om den. Foer stod her ``self.block = None``, og saa slettede en
-            # forbigaaende trangt vindue en opladning der var klar.
+            # om den. Før stod her ``self.block = None``, og så slettede en
+            # forbigående trangt vindue en opladning der var klar.
             self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
             return False
 
         offset, _price = found
-        # ``offset`` taelles i hele halvtimer fra den halvtime vi *staar i*,
+        # ``offset`` tælles i hele halvtimer fra den halvtime vi *står i*,
         # ikke fra det her sekund. Uden gulvet gled en ventende bloks start
         # ét minut frem pr. cyklus og sprang 30 minutter tilbage ved hver
-        # :00/:30 - saa den stod aldrig stille laenge nok til at kunne laeses.
+        # :00/:30 - så den stod aldrig stille længe nok til at kunne læses.
         starts = slot_start(now) + offset * 60
-        # Og laengden maales fra det seneste af de to. Starter blokken nu, kan
-        # ``slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og saa
+        # Og længden måles fra det seneste af de to. Starter blokken nu, kan
+        # ``slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og så
         # ville blokken blive tilsvarende for kort.
         ends = max(starts, now) + minutes * 60
         self.block = Block(dear_from, dear_until, starts, ends, float(want))
@@ -315,18 +315,18 @@ class ChargePlan:
         return False
 
     def _dear_key(self, now: float, decision: Any, window: int) -> tuple[float, float]:
-        """Det dyre straek som to absolutte tidspunkter.
+        """Det dyre stræk som to absolutte tidspunkter.
 
-        Planlaeggeren giver straekket som minutter frem; her bliver det til
-        vaegurstid, gulvet til halvtimen, saa det samme straek ser ens ud
+        Planlæggeren giver strækket som minutter frem; her bliver det til
+        vægurstid, gulvet til halvtimen, så det samme stræk ser ens ud
         hvert minut.
 
-        Har planlaeggeren intet straek at give - der er ingen timer hvor
+        Har planlæggeren intet stræk at give - der er ingen timer hvor
         pumpen taber, og heller ingen der er dyrere end nu - falder vi tilbage
-        paa den dyreste halvtime, som foer. Netop dér er det ufarligt: den
-        dyreste halvtime vandrer kun naar flere halvtimer er lige dyre, og det
-        sker kun naar de rammer pillefyrets loft. Gaelder det, findes der et
-        straek, og saa er vi ikke her.
+        på den dyreste halvtime, som før. Netop dér er det ufarligt: den
+        dyreste halvtime vandrer kun når flere halvtimer er lige dyre, og det
+        sker kun når de rammer pillefyrets loft. Gælder det, findes der et
+        stræk, og så er vi ikke her.
         """
         starts = getattr(decision, "dear_starts_in", None)
         span = getattr(decision, "dear_span_minutes", None)
@@ -352,10 +352,10 @@ class ChargePlan:
     # ------------------------------------------------------------------ lager
 
     def to_raw(self) -> dict[str, Any]:
-        # Blokken gemmes med, ogsaa den der er i gang: en genstart midt i en
-        # opladning maa ikke starte kompressoren forfra paa den anden side.
-        # Det er forskellen fra staatabsmaalingen, hvor et afbrudt vindue er
-        # ubrugeligt - her er en halvfaerdig opladning stadig en opladning.
+        # Blokken gemmes med, også den der er i gang: en genstart midt i en
+        # opladning må ikke starte kompressoren forfra på den anden side.
+        # Det er forskellen fra ståtabsmålingen, hvor et afbrudt vindue er
+        # ubrugeligt - her er en halvfærdig opladning stadig en opladning.
         return {
             "block": None if self.block is None else self.block.to_raw(),
             "done_until": self.done_until,
@@ -367,9 +367,9 @@ class ChargePlan:
         if not isinstance(raw, dict):
             return plan
         plan.block = Block.from_raw(raw.get("block"))
-        # ``done_top`` fra en aeldre udgave laeses ikke. Det var enden paa en
-        # *halvtime*, ikke paa et straek, og at laese det ville kun kunne
-        # spaerre for meget. Prisen er én ekstra tilladt blok den dag
+        # ``done_top`` fra en ældre udgave læses ikke. Det var enden på en
+        # *halvtime*, ikke på et stræk, og at læse det ville kun kunne
+        # spærre for meget. Prisen er én ekstra tilladt blok den dag
         # add-on'en opdateres.
         until = raw.get("done_until")
         if _finite(until):

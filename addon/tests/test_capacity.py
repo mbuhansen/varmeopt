@@ -13,8 +13,8 @@ from varmeopt.capacity import ChargeRate
 
 class MeasureTest(unittest.TestCase):
     def test_part_load_space_heating_does_not_count(self):
-        # Pumpen koerer 3 kW rumvarme i lange straek. Det siger intet om hvor
-        # hurtigt tankene kan fyldes, og et gennemsnit over alt ville traekke
+        # Pumpen kører 3 kW rumvarme i lange stræk. Det siger intet om hvor
+        # hurtigt tankene kan fyldes, og et gennemsnit over alt ville trække
         # raten langt under det den kan.
         rate = ChargeRate(nameplate_kw=16.0)
 
@@ -33,7 +33,7 @@ class MeasureTest(unittest.TestCase):
         self.assertAlmostEqual(rate.effective_kw, 12.0, delta=0.2)
 
     def test_a_mixed_day_still_finds_the_charging_rate(self):
-        # Rumvarme det meste af doegnet, en opladning ind imellem.
+        # Rumvarme det meste af døgnet, en opladning ind imellem.
         rate = ChargeRate(nameplate_kw=16.0)
 
         for hour in range(24):

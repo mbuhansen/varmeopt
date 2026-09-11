@@ -39,7 +39,7 @@ class DisabledTest(unittest.TestCase):
         self.assertIn("slået fra", cmd.reason)
 
     def test_the_decision_is_still_reported_when_off(self):
-        # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere det.
+        # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre det.
         g = Guard()
         g.start(0.0)
 
@@ -48,10 +48,10 @@ class DisabledTest(unittest.TestCase):
         self.assertEqual(cmd.source, "pillefyr")
 
     def test_the_binding_is_kept_even_though_nobody_is_steering(self):
-        # Det her er hele grunden til at bindingen regnes foer ``enabled``
-        # ses paa: entiteten er det Node-RED haenger sin
-        # ``server-state-changed`` paa, og den skal vaere rolig uanset hvem
-        # der styrer. Foer stod den paa planlaeggerens raa svar hvert minut.
+        # Det her er hele grunden til at bindingen regnes før ``enabled``
+        # ses på: entiteten er det Node-RED hænger sin
+        # ``server-state-changed`` på, og den skal være rolig uanset hvem
+        # der styrer. Før stod den på planlæggerens rå svar hvert minut.
         g = Guard(confirm_minutes=0.0)
         g.start(0.0)
         g.check(decision("varmepumpe"), LOOKUP, plan(), now=100 * MIN)
@@ -64,12 +64,12 @@ class DisabledTest(unittest.TestCase):
 
 
 class BindingGatesTest(unittest.TestCase):
-    """Bindingen maa ikke saettes paa et daarligt oplyst svar."""
+    """Bindingen må ikke sættes på et dårligt oplyst svar."""
 
     def test_no_cop_does_not_bind(self):
-        # ``source_now`` svarer "varmepumpe" som standard naar COP mangler.
-        # Bandt vi os til det, kunne en foraeldet Predbat-plan laase
-        # anlaegget paa et prisloest gaet et kvarter.
+        # ``source_now`` svarer "varmepumpe" som standard når COP mangler.
+        # Bandt vi os til det, kunne en forældet Predbat-plan låse
+        # anlægget på et prisløst gæt et kvarter.
         g = guard()
 
         g.check(decision(), None, plan(), now=10 * MIN)
@@ -121,8 +121,8 @@ class SafetyTest(unittest.TestCase):
         self.assertFalse(cmd.acting)
 
     def test_a_missing_plan_still_allows_the_source_choice(self):
-        # Planlaeggeren er bygget til at svare uden en plan. Det skal bare
-        # siges, saa det ikke ligner mere end det er.
+        # Planlæggeren er bygget til at svare uden en plan. Det skal bare
+        # siges, så det ikke ligner mere end det er.
         g = guard()
 
         cmd = g.check(decision(), LOOKUP, None, now=10 * MIN)
@@ -192,8 +192,8 @@ class DwellTest(unittest.TestCase):
         self.assertIn("uændret", cmd.reason)
 
     def test_a_switch_too_soon_is_held(self):
-        # Hysteresen daemper prisstoej; det her saetter en bund under hvor tit
-        # kilden overhovedet faar lov at skifte.
+        # Hysteresen dæmper prisstøj; det her sætter en bund under hvor tit
+        # kilden overhovedet får lov at skifte.
         cmd = self.g.check(decision("pillefyr"), LOOKUP, plan(), now=12 * MIN)
 
         self.assertTrue(cmd.acting)

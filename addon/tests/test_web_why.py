@@ -27,8 +27,8 @@ class FakeDecision:
 
 class BasisTest(unittest.TestCase):
     def test_net_is_set_in_red(self):
-        # Den dyre vej: hverken batteri eller sol daekker, og hver kWh koebes
-        # til fuld importpris. Det skal kunne ses paa een gang.
+        # Den dyre vej: hverken batteri eller sol dækker, og hver kWh købes
+        # til fuld importpris. Det skal kunne ses på een gang.
         self.assertIn("#c0392b", _highlight_basis("net · lader op"))
 
     def test_the_others_are_not(self):
@@ -47,7 +47,7 @@ class NowNoteTest(unittest.TestCase):
         self.assertIn("ingen grund", note)
 
     def test_charging_says_why_the_dear_hour_is_dear(self):
-        # De to grunde foerer til samme handling, men er ikke samme historie.
+        # De to grunde fører til samme handling, men er ikke samme historie.
         against_export = _now_note(
             FakeDecision(charge=True),
             FakeRow(power="batteri", reason="eksport: mistet indtjening"),
@@ -68,7 +68,7 @@ class NowNoteTest(unittest.TestCase):
 
 class SwitchNoteTest(unittest.TestCase):
     def test_switching_to_pellets_says_so_not_the_two_prices(self):
-        # Her stod "VP 0.84 > pille 0.71" - de tal hoerer i varmekolonnen ved
+        # Her stod "VP 0.84 > pille 0.71" - de tal hører i varmekolonnen ved
         # siden af, ikke i en kolonne der skal skimmes.
         note = _switch_note(FakeRow(power="net", source="pillefyr"))
 
@@ -77,8 +77,8 @@ class SwitchNoteTest(unittest.TestCase):
         self.assertNotIn("0.", note)
 
     def test_the_three_reasons_are_told_apart(self):
-        # Eksport er ikke en kilde men en grund - stroemmen kommer fra
-        # batteriet eller solen - saa den laeses af begrundelsen.
+        # Eksport er ikke en kilde men en grund - strømmen kommer fra
+        # batteriet eller solen - så den læses af begrundelsen.
         notes = {
             "net": _switch_note(FakeRow(power="net", source="pillefyr")),
             "eksport": _switch_note(
@@ -111,10 +111,10 @@ class ChargeBecauseTest(unittest.TestCase):
 
 
 class PlanTableTest(unittest.TestCase):
-    """Tabellen viser Predbats egen raekke ved siden af vores pris.
+    """Tabellen viser Predbats egen række ved siden af vores pris.
 
     Uden ladetilstanden og tilstandsordet kan man ikke se *hvorfor* kilden er
-    som den er - at der staar hold charge ved 16 % - uden at gaa over i
+    som den er - at der står hold charge ved 16 % - uden at gå over i
     Predbats egen tabel og finde den samme halvtime.
     """
 
@@ -132,7 +132,7 @@ class PlanTableTest(unittest.TestCase):
         values = dict(
             minutes=0,
             electricity=1.85,
-            reason="net: afladning er slaaet fra",
+            reason="net: afladning er slået fra",
             power="net",
             import_price=1.85,
             export_price=1.09,
@@ -152,8 +152,8 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn("16 %", html)
 
     def test_a_charging_slot_just_says_lad_op(self):
-        # Kort, som Predbats egen plan. Hvorfor der lades, staar paa
-        # maalraekken; her staar bare at der bliver ladet.
+        # Kort, som Predbats egen plan. Hvorfor der lades, står på
+        # målrækken; her står bare at der bliver ladet.
         html = self.html([self.row(charging=True)])
 
         self.assertIn("lad op", html)
@@ -165,29 +165,29 @@ class PlanTableTest(unittest.TestCase):
         self.assertNotIn("afventer", html)
 
     def test_the_why_column_names_the_source(self):
-        # "net" saettes i roedt af _highlight_basis, saa ordet staar i sit
-        # eget element - men det staar der, og det kommer fra kildefeltet.
+        # "net" sættes i rødt af _highlight_basis, så ordet står i sit
+        # eget element - men det står der, og det kommer fra kildefeltet.
         html = self.html([self.row()])
 
         self.assertIn(">net</span> ·", html)
 
     def test_a_plain_row_says_the_source_and_nothing_else(self):
-        # Ét ord. Begrundelsen kan vaere en anden - stroemmen kommer fra
-        # batteriet og er dyr fordi den skal koebes tilbage - men den hoerer
-        # i fejlsoegningsfilen. Kolonnen skal kunne skimmes.
+        # Ét ord. Begrundelsen kan være en anden - strømmen kommer fra
+        # batteriet og er dyr fordi den skal købes tilbage - men den hører
+        # i fejlsøgningsfilen. Kolonnen skal kunne skimmes.
         html = self.html([
             self.row(),
             self.row(
                 minutes=30,
                 power="batteri",
-                reason="koebes tilbage",
+                reason="købes tilbage",
                 state="demand",
                 soc_percent=30.0,
             ),
         ])
 
         self.assertIn('<td class="why">batteri</td>', html)
-        self.assertNotIn("koebes tilbage", html)
+        self.assertNotIn("købes tilbage", html)
 
     def test_a_row_without_a_plan_state_leaves_a_dash(self):
         html = self.html([self.row(state="", soc_percent=None)])
@@ -231,8 +231,8 @@ class UsagePageTest(unittest.TestCase):
         self.assertEqual(html.count("<svg"), 2)
 
     def test_a_modelled_window_is_drawn_open(self):
-        # Et vindue hvor spaen koerte, skal kunne kendes fra et der er maalt
-        # rent - ellers ser et skoen ud som en maaling.
+        # Et vindue hvor spaen kørte, skal kunne kendes fra et der er målt
+        # rent - ellers ser et skøn ud som en måling.
         html = self.html(self.model())
 
         self.assertIn('fill="none" stroke="', html)
@@ -263,11 +263,11 @@ class BalanceCardTest(unittest.TestCase):
         self.assertIn("flowmåleren", html)
 
     def test_the_store_is_named_when_it_stands_in(self):
-        # Under maalerens bund traeder lageret til, og det skal kunne ses -
+        # Under målerens bund træder lageret til, og det skal kunne ses -
         # de to er ikke lige sikre.
         html = self.section(
             load={"litres_per_hour": 0.0, "fallback_kw": 2.4},
-            status={"house_load_kw": 2.4, "house_load": "maalt 2,40 kW over 30 min"},
+            status={"house_load_kw": 2.4, "house_load": "målt 2,40 kW over 30 min"},
         )
 
         self.assertIn("lagerets energiændring", html)
@@ -305,7 +305,7 @@ class VesselCardTest(unittest.TestCase):
         self.assertEqual(self.value(self.FULL, "Spa varmer"), "nej")
 
     def test_the_flag_sits_with_the_vessel_it_belongs_to(self):
-        # Ikke nederst i en samlet klump - man laeser beholderen, ikke listen.
+        # Ikke nederst i en samlet klump - man læser beholderen, ikke listen.
         labels = self.labels(self.FULL)
 
         self.assertEqual(labels.index("VVB varmer"), labels.index("VVB bund") + 1)
@@ -319,7 +319,7 @@ class VesselCardTest(unittest.TestCase):
         self.assertIn("Spa varmer", self.labels(without))
 
     def test_a_flag_alone_is_not_worth_a_card(self):
-        # Foer talte flagene med i tomhedstjekket, saa et enkelt spa-flag
+        # Før talte flagene med i tomhedstjekket, så et enkelt spa-flag
         # kunne holde et ellers tomt kort i live.
         from varmeopt.web import _vessel_section
 
@@ -328,7 +328,7 @@ class VesselCardTest(unittest.TestCase):
 
 
 class ChargeCardTest(unittest.TestCase):
-    """Kortet paa lagersiden: hvorfor den vil lade op."""
+    """Kortet på lagersiden: hvorfor den vil lade op."""
 
     def card(self, **over):
         from varmeopt.planner import Decision
@@ -363,11 +363,11 @@ class ChargeCardTest(unittest.TestCase):
         self.assertIn("mangler 21.3", card)
 
     def test_what_is_covered_says_so_instead_of_a_number(self):
-        # Rumvarmen er daekket: 5,2 kWh mod 13,3 i lageret.
+        # Rumvarmen er dækket: 5,2 kWh mod 13,3 i lageret.
         self.assertIn("dækket", self.card())
 
     def test_the_window_is_a_clock_not_a_countdown(self):
-        # «om 210 min» skal regnes; «kl. 17:30» kan laeses.
+        # «om 210 min» skal regnes; «kl. 17:30» kan læses.
         card = self.card()
 
         self.assertIn("Strømmen bliver dyr", card)
@@ -375,8 +375,8 @@ class ChargeCardTest(unittest.TestCase):
         self.assertNotIn("210 min", card)
 
     def test_a_deadline_on_the_clock_does_not_claim_the_price_rises(self):
-        # Fristen kan komme fra uret i stedet for fra prisraekken. Saa er
-        # "stroemmen bliver dyr kl. 17" en paastand ingen har efterproevet -
+        # Fristen kan komme fra uret i stedet for fra prisrækken. Så er
+        # "strømmen bliver dyr kl. 17" en påstand ingen har efterprøvet -
         # tidspunktet kommer fra at der bades om aftenen.
         card = self.card(deadline_on_the_clock=True)
 
@@ -398,8 +398,8 @@ class ChargeCardTest(unittest.TestCase):
         self.assertNotIn("Værd at hente", card)
 
     def test_without_an_answer_there_is_no_card(self):
-        # Foer planlaeggeren har svaret én gang, er der ingenting at vise -
-        # og et tomt kort er vaerre end intet kort.
+        # Før planlæggeren har svaret én gang, er der ingenting at vise -
+        # og et tomt kort er værre end intet kort.
         self.assertEqual(self.card(charge_state=""), "")
 
 

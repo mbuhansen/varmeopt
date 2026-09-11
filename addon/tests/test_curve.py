@@ -38,9 +38,9 @@ class LearnTest(unittest.TestCase):
         self.assertAlmostEqual(c.point(5).setpoint, 44.6, places=6)
 
     def test_a_leap_above_a_settled_point_is_hot_water_not_weather(self):
-        # Ti grader over et punkt med 500 maalinger bag sig er ikke vejret.
-        # Brugsvand og spa varmer altid hedere end huset har brug for, saa
-        # skaevheden er ensidig - og det er den asymmetri testen her holder
+        # Ti grader over et punkt med 500 målinger bag sig er ikke vejret.
+        # Brugsvand og spa varmer altid hedere end huset har brug for, så
+        # skævheden er ensidig - og det er den asymmetri testen her holder
         # fast i.
         c = curve({5: (44.0, 500.0)})
 
@@ -50,7 +50,7 @@ class LearnTest(unittest.TestCase):
         self.assertAlmostEqual(c.point(5).setpoint, 44.0, places=6)
 
     def test_a_thin_point_has_no_veto(self):
-        # Et punkt der selv er et gaet, skal ikke kunne afvise nye maalinger.
+        # Et punkt der selv er et gæt, skal ikke kunne afvise nye målinger.
         c = curve({5: (44.0, 2.0)})
 
         note = c.learn(outdoor=5.0, setpoint=54.0)
@@ -59,7 +59,7 @@ class LearnTest(unittest.TestCase):
 
     def test_a_drop_is_always_the_weather(self):
         # Testen er ensidig med vilje: en justering *nedad* er aldrig
-        # varmtvand, og den skal laeres med det samme.
+        # varmtvand, og den skal læres med det samme.
         c = curve({5: (44.0, 500.0)})
 
         note = c.learn(outdoor=5.0, setpoint=30.0)
@@ -177,11 +177,11 @@ if __name__ == "__main__":
 
 
 class MonotoneTest(unittest.TestCase):
-    """En varmekurve kan ikke stige naar det bliver varmere ude."""
+    """En varmekurve kan ikke stige når det bliver varmere ude."""
 
     def test_the_derived_curve_never_rises_with_the_outdoor_temperature(self):
-        # Det virkelige anlaegs tabel havde seks brud. Det her er et af dem:
-        # U9 gav 38,8 og U10 gav 40,8 - en varmere prognose gav et hoejere
+        # Det virkelige anlægs tabel havde seks brud. Det her er et af dem:
+        # U9 gav 38,8 og U10 gav 40,8 - en varmere prognose gav et højere
         # setpunkt og dermed lavere COP, 2 K den forkerte vej.
         table = CopTable({
             38: {9: Cell(4.0, 181.0)},
@@ -195,8 +195,8 @@ class MonotoneTest(unittest.TestCase):
         self.assertEqual(points, sorted(points, reverse=True))
 
     def test_pooling_follows_the_weight_not_the_midpoint(self):
-        # 181 maalinger paa 38 mod 85 paa 41: det faelles svar skal ligge
-        # naermest de 38, ikke midtvejs.
+        # 181 målinger på 38 mod 85 på 41: det fælles svar skal ligge
+        # nærmest de 38, ikke midtvejs.
         table = CopTable({
             38: {9: Cell(4.0, 181.0)},
             41: {10: Cell(4.0, 85.0)},
@@ -223,8 +223,8 @@ class MonotoneTest(unittest.TestCase):
 
 class ConfidenceTest(unittest.TestCase):
     def test_distance_costs_confidence(self):
-        # Foer returnerede -20 de 70 maalinger der staar ved -10, som om der
-        # var maalt dernede. Der er bare ingen maalinger inden for 10 K.
+        # Før returnerede -20 de 70 målinger der står ved -10, som om der
+        # var målt dernede. Der er bare ingen målinger inden for 10 K.
         c = curve({-10: (53.0, 70.0)})
 
         self.assertAlmostEqual(c.confidence(-10), 70.0, places=6)

@@ -42,9 +42,9 @@ class State:
     # den identificerer en måling. Det er sådan en poller kan kende en ny
     # aflæsning fra den samme aflæsning set igen.
     last_changed: str | None = None
-    # last_changed flytter sig kun naar *tilstanden* skifter vaerdi.
-    # Predbats plan ligger i attributterne, saa til foraeldelse skal
-    # last_updated bruges - den flytter sig ogsaa naar attributter gor.
+    # last_changed flytter sig kun når *tilstanden* skifter værdi.
+    # Predbats plan ligger i attributterne, så til forældelse skal
+    # last_updated bruges - den flytter sig også når attributter gor.
     last_updated: str | None = None
 
     def age_seconds(self, now: datetime | None = None) -> float | None:
@@ -108,7 +108,7 @@ class HomeAssistant:
                     raise HaError(f"GET {entity_id} -> HTTP {res.status}")
                 body = await res.json()
         # TimeoutError er ikke en ClientError. Uden den her slap en timeout
-        # forbi og vaeltede hele cyklussen i stedet for det ene opslag.
+        # forbi og væltede hele cyklussen i stedet for det ene opslag.
         except (aiohttp.ClientError, TimeoutError, ValueError) as exc:
             raise HaError(f"GET {entity_id}: {exc}") from exc
 

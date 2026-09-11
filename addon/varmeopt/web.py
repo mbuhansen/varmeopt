@@ -1,12 +1,12 @@
 """Web-UI, serveret gennem Home Assistants ingress.
 
 Ingress betyder at HA proxyer siden ind under sin egen sti og står for login,
-så der aabnes ingen port paa netvaerket. Til gengaeld kender vi ikke vores egen
-sti-praefiks, og **alle links skal derfor vaere relative**.
+så der åbnes ingen port på netværket. Til gengæld kender vi ikke vores egen
+sti-præfiks, og **alle links skal derfor være relative**.
 
 Grafik tegnes som ren HTML og inline SVG. Ingen matplotlib: der er ingen grund
-til at rendere billeder paa serveren naar browseren kan tegne selv, og en
-Alpine-container skal ikke slaebe rundt paa den afhaengighed.
+til at rendere billeder på serveren når browseren kan tegne selv, og en
+Alpine-container skal ikke slæbe rundt på den afhængighed.
 """
 
 from __future__ import annotations
@@ -124,8 +124,8 @@ table.plan td.raw { color:var(--muted); font-variant-numeric:tabular-nums; }
 # mørk bund.
 _CURVE_INK = "#4a90c2"
 
-# Kilderne har hver sin farve hele vejen gennem UI'et, saa en raekke
-# kan laeses paa farven alene.
+# Kilderne har hver sin farve hele vejen gennem UI'et, så en række
+# kan læses på farven alene.
 _SOURCE_INK = {"varmepumpe": "#1f7a4d", "pillefyr": "#b4530a"}
 
 _SOURCE_LABEL = {
@@ -331,11 +331,11 @@ class WebUI:
         ]
         dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
 
-        # En stor forskel mellem tankene er kun vaerd at sige noget om hvis
-        # den er en fejl. Lades de i raekkefoelge, er forskellen netop det
-        # ventilen er sat til at lave, og saa staar tallet i tabellen - det
-        # er rigeligt. At forklare anlaegget for den der har bygget det, er
-        # stoej, og stoej der staar hver gang bliver til stoej man ikke ser.
+        # En stor forskel mellem tankene er kun værd at sige noget om hvis
+        # den er en fejl. Lades de i rækkefølge, er forskellen netop det
+        # ventilen er sat til at lave, og så står tallet i tabellen - det
+        # er rigeligt. At forklare anlægget for den der har bygget det, er
+        # støj, og støj der står hver gang bliver til støj man ikke ser.
         warn = ""
         if (
             buffer.imbalance is not None
@@ -378,7 +378,7 @@ class WebUI:
                 "Plan",
                 "plan",
                 "<h1>Plan</h1><p class='sub'>Ingen plan fra Predbat endnu. "
-                "Kildevalget staar stadig — det kraever ingen plan.</p>"
+                "Kildevalget står stadig — det kræver ingen plan.</p>"
                 + (_price_section(status) if status.get("price_now") else ""),
             )
 
@@ -394,16 +394,16 @@ class WebUI:
         )
         left = 30 - (clock_now.minute % 30)
 
-        # Varmepumpen er default. En raekke hvor den bare koerer videre, skal
-        # ikke fortaelle en historie om prissaetning - der blev jo ikke gjort
-        # noget. Den fulde begrundelse hoerer hjemme hvor noget aendrer sig:
-        # naar kilden skifter, naar vi staar i raekken, eller naar den er den
-        # planlaeggeren regner imod.
-        # Hvorfor der lades, er ikke det samme som hvornaar. Er den dyre time
-        # dyr fordi stroemmen koster mere, eller fordi vi *eksporterer* der og
-        # dermed giver afkald paa en indtaegt? De to foerer til samme
+        # Varmepumpen er default. En række hvor den bare kører videre, skal
+        # ikke fortælle en historie om prissætning - der blev jo ikke gjort
+        # noget. Den fulde begrundelse hører hjemme hvor noget ændrer sig:
+        # når kilden skifter, når vi står i rækken, eller når den er den
+        # planlæggeren regner imod.
+        # Hvorfor der lades, er ikke det samme som hvornår. Er den dyre time
+        # dyr fordi strømmen koster mere, eller fordi vi *eksporterer* der og
+        # dermed giver afkald på en indtægt? De to fører til samme
         # handling nu, men de er ikke samme historie, og forskellen er den
-        # brugeren skal kunne se uden at laese hele tabellen.
+        # brugeren skal kunne se uden at læse hele tabellen.
         target = next((r for r in rows if r.target), None)
         cells = []
         previous_source = None
@@ -412,28 +412,28 @@ class WebUI:
             previous_source = row.source
             if row.charging:
                 # Kort og godt, som Predbats egen plan. Hvorfor der lades,
-                # staar paa maalraekken; her staar bare at der bliver ladet.
+                # står på målrækken; her står bare at der bliver ladet.
                 why = f"{row.power} · lad op"
             elif row.now:
                 why = f"{row.power} · {_now_note(decision, target)}"
             elif changed:
                 # Kilden skifter. Det er det eneste sted i tabellen hvor der
-                # sker noget, og saa skal der staa hvad - ikke hvilke to tal
+                # sker noget, og så skal der stå hvad - ikke hvilke to tal
                 # der blev sammenlignet.
                 why = f"{row.power} · {_switch_note(row)}"
             elif row.target:
-                # Grundlaget med, saa hele kolonnen kan skimmes efter hvor
-                # prisen kommer fra - ogsaa paa den raekke der forklarer
+                # Grundlaget med, så hele kolonnen kan skimmes efter hvor
+                # prisen kommer fra - også på den række der forklarer
                 # hvorfor der lades.
                 why = f"{row.power} · dyreste time, der regnes herimod"
             else:
-                # Kilden, og kun den. Her stod et forsoeg paa at skrive
-                # begrundelsen med - "batteri · koebes tilbage" - saa en dyr
-                # batteriraekke kunne forklare sig selv. Men en raekke der
-                # skal laeses, er en raekke der ikke bliver skimmet, og
-                # kolonnen skal kunne skimmes: hvor kommer stroemmen fra.
-                # Prisen staar ved siden af og siger resten; hele
-                # regnestykket staar i fejlsoegningsfilen.
+                # Kilden, og kun den. Her stod et forsøg på at skrive
+                # begrundelsen med - "batteri · købes tilbage" - så en dyr
+                # batterirække kunne forklare sig selv. Men en række der
+                # skal læses, er en række der ikke bliver skimmet, og
+                # kolonnen skal kunne skimmes: hvor kommer strømmen fra.
+                # Prisen står ved siden af og siger resten; hele
+                # regnestykket står i fejlsøgningsfilen.
                 why = row.power
             clock = (start + timedelta(minutes=row.minutes)).strftime("%H:%M")
             width = max(2.0, 100 * row.electricity / top)
@@ -581,8 +581,8 @@ class WebUI:
 
         chart = (
             f'<svg viewBox="0 0 {width} {height}" role="img" '
-            'aria-label="UVR-ens varmekurve: fremloebssetpunkt som funktion af '
-            'udetemperatur, med antal maalinger bag hvert punkt">'
+            'aria-label="UVR-ens varmekurve: fremløbssetpunkt som funktion af '
+            'udetemperatur, med antal målinger bag hvert punkt">'
             f'{"".join(grid)}'
             f'<polyline points="{line}" fill="none" stroke="{_CURVE_INK}" '
             'stroke-width="2" stroke-linejoin="round"/>'
@@ -658,7 +658,7 @@ class WebUI:
             "status": status,
             "cop_tabel": table.to_raw(),
             "cop_celler": table.cell_count,
-            "cop_maalinger": round(table.sample_count),
+            "cop_målinger": round(table.sample_count),
         }
         if self._curve is not None:
             payload["varmekurve"] = self._curve().to_raw()
@@ -890,20 +890,20 @@ def _plain(value: Any) -> Any:
     return str(value)
 
 
-# Kilden staar nu som sit eget felt paa raekken (``Projection.power``), og
-# skaermen laeser den derfra. Foer blev den udledt ved at klippe begrundelsen
-# ved det foerste kolon - det virkede, saa laenge hver eneste begrundelse
+# Kilden står nu som sit eget felt på rækken (``Projection.power``), og
+# skærmen læser den derfra. Før blev den udledt ved at klippe begrundelsen
+# ved det første kolon - det virkede, så længe hver eneste begrundelse
 # huskede at starte med et kildeord, og det gjorde "balanceret" ikke.
 
 
-# Nettet er den dyre vej: der er hverken batteri eller sol til at daekke, og
-# hver kilowatt-time koeber vi til fuld importpris. Den skal kunne ses paa
-# een gang henover en tabel med fireogtyve raekker.
+# Nettet er den dyre vej: der er hverken batteri eller sol til at dække, og
+# hver kilowatt-time køber vi til fuld importpris. Den skal kunne ses på
+# een gang henover en tabel med fireogtyve rækker.
 _NET_INK = "#c0392b"
 
 
 def _now_note(decision: Any, target: Any) -> str:
-    """Hvad der sker lige nu — det er den eneste raekke hvor noget besluttes."""
+    """Hvad der sker lige nu — det er den eneste række hvor noget besluttes."""
     if decision is None:
         return "afventer"
     if decision.charge:
@@ -914,16 +914,16 @@ def _now_note(decision: Any, target: Any) -> str:
 def _switch_note(row: Any) -> str:
     """Hvad skiftet betyder, og hvad der driver det.
 
-    Prisen bag skiftet staar i varmekolonnen ved siden af. Her hoerer
+    Prisen bag skiftet står i varmekolonnen ved siden af. Her hører
     handlingen hjemme: hvilken kilde der overtager, og hvad der gjorde den
-    anden for dyr — for de tre grunde er ikke ens. At stroemmen koster meget
-    er noget andet end at den kunne saelges, og noget andet end at batteriet
+    anden for dyr — for de tre grunde er ikke ens. At strømmen koster meget
+    er noget andet end at den kunne sælges, og noget andet end at batteriet
     er tomt for billig energi.
     """
     if row.source != "pillefyr":
         return "tilbage på varmepumpen"
-    # Eksport er ikke en kilde men en grund: stroemmen kommer fra batteriet
-    # eller solen, og det der goer den dyr, er at den kunne vaere solgt.
+    # Eksport er ikke en kilde men en grund: strømmen kommer fra batteriet
+    # eller solen, og det der gør den dyr, er at den kunne være solgt.
     if row.reason.startswith("eksport"):
         return "skifter til pillefyr, strømmen sælges hellere"
     if row.power == "batteri":
@@ -934,10 +934,10 @@ def _switch_note(row: Any) -> str:
 def _charge_because(target: Any) -> str:
     """Hvorfor den dyre time er dyr — det er grunden til at der lades nu.
 
-    Prisen kan vaere hoej af to helt forskellige grunde, og de foerer til
-    samme handling men ikke samme historie: enten koster stroemmen mere, eller
-    ogsaa saelger vi paa det tidspunkt, og saa er varmen dyr fordi den koster
-    en indtaegt vi ellers ville have haft.
+    Prisen kan være høj af to helt forskellige grunde, og de fører til
+    samme handling men ikke samme historie: enten koster strømmen mere, eller
+    også sælger vi på det tidspunkt, og så er varmen dyr fordi den koster
+    en indtægt vi ellers ville have haft.
     """
     if target is None:
         return "lader op mod dyrere varme"
@@ -949,7 +949,7 @@ def _charge_because(target: Any) -> str:
 
 
 def _highlight_basis(why: str) -> str:
-    """Saet «net» i roedt. Resten staar som det er."""
+    """Sæt «net» i rødt. Resten står som det er."""
     text = _esc(why)
     lowered = text.lower()
     if not lowered.startswith("net"):
@@ -959,10 +959,10 @@ def _highlight_basis(why: str) -> str:
 
 
 def _held_source(decision: Any, command: Any) -> tuple[str, str]:
-    """Den kilde der staar paa entiteten, og teksten der forklarer den.
+    """Den kilde der står på entiteten, og teksten der forklarer den.
 
-    Skaermen skal vise det samme som ``sensor.varmeopt_beslutning``. Stod
-    der planlaeggerens raa svar her, ville UI'et og entiteten sige hver sit
+    Skærmen skal vise det samme som ``sensor.varmeopt_beslutning``. Stod
+    der planlæggerens rå svar her, ville UI'et og entiteten sige hver sit
     i hvert minut hvor vagten holder.
     """
     raw = decision.source
@@ -1093,8 +1093,8 @@ def _history_chart(history: Any) -> str:
         try:
             stamp = datetime.fromtimestamp(at).astimezone()
         except (OSError, OverflowError, ValueError):
-            # Et tidsstempel fra en maskine med et forkert ur maa koste en
-            # manglende datomaerkat, ikke hele siden.
+            # Et tidsstempel fra en maskine med et forkert ur må koste en
+            # manglende datomærkat, ikke hele siden.
             continue
         label = stamp.strftime("%d/%m")
         if label in seen or stamp.hour > 1:
@@ -1172,7 +1172,7 @@ def _load_curve_chart(curve: Any) -> str:
     dots = []
     for outdoor in temps:
         point = curve.point(outdoor)
-        # Punkter med faa maalinger tegnes svagt, saa tynde steder ses.
+        # Punkter med få målinger tegnes svagt, så tynde steder ses.
         opacity = min(1.0, 0.3 + point.count / 20)
         dots.append(
             f'<circle cx="{sx(outdoor):.1f}" cy="{sy(point.kw):.1f}" r="3" '
@@ -1253,7 +1253,7 @@ def _charge_card(status: dict[str, Any], dhw_temp: float | None = None) -> str:
             )
         )
     if decision.window_starts_in is not None:
-        # Fristen kan komme to steder fra, og raekken skal sige hvilket. Er
+        # Fristen kan komme to steder fra, og rækken skal sige hvilket. Er
         # det uret der har sat den, er "strømmen bliver dyr kl. 17" en
         # påstand om priserne som ingen har efterprøvet - tidspunktet kommer
         # fra at der bades om aftenen.
@@ -1303,11 +1303,11 @@ def _balance_section(balance: Any, buffer: Any, status: Any = None) -> str:
         rows = [("Kilder", "ingen leverer lige nu")]
 
     load_kw = balance.load.kw
-    # Hvor tallet kom fra. Flowmaaleren har en bund den ikke maaler under, og
-    # saa svarer lageret i stedet - det skal kunne ses, for de to er ikke
+    # Hvor tallet kom fra. Flowmåleren har en bund den ikke måler under, og
+    # så svarer lageret i stedet - det skal kunne ses, for de to er ikke
     # lige sikre.
     source = balance.load.source
-    told = {"flowmaaler": "flowmåleren", "lager": "lagerets energiændring"}
+    told = {"flowmåler": "flowmåleren", "lager": "lagerets energiændring"}
     rows += [
         (
             "Husets behov",
@@ -1442,8 +1442,8 @@ def _vessel_section(status: dict[str, Any]) -> str:
         ("Spa mål", _fmt(status.get("spa_target"), "°C", 1)),
     ]
     # Kortet er tomt hvis der ikke er en eneste temperatur. Et ja/nej alene
-    # er ikke et kort vaerd — og det taeller derfor ikke med her. Foer stod
-    # tjekket paa hele listen, saa et enkelt spa-flag kunne holde et ellers
+    # er ikke et kort værd — og det tæller derfor ikke med her. Før stod
+    # tjekket på hele listen, så et enkelt spa-flag kunne holde et ellers
     # tomt kort i live.
     if all(value == "—" for _, value in temperatures):
         return ""
@@ -1451,7 +1451,7 @@ def _vessel_section(status: dict[str, Any]) -> str:
     rows: list[tuple[str, str]] = []
     for label, value in temperatures:
         rows.append((label, value))
-        # Varmer-flaget hoerer sammen med den beholder det gaelder, ikke
+        # Varmer-flaget hører sammen med den beholder det gælder, ikke
         # nederst i en samlet klump.
         if label == "VVB bund":
             rows += _heating_row("VVB varmer", status.get("dhw_active"))

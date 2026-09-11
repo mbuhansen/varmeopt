@@ -71,33 +71,33 @@ SENSOR_TANK = "sensor.varmeopt_lager"
 SENSOR_DEMAND = "sensor.varmeopt_behov"
 SENSOR_PRICE = "sensor.varmeopt_elpris"
 SENSOR_DECISION = "sensor.varmeopt_beslutning"
-# Husets forbrug som lageret maaler det. Det staar ogsaa som attribut paa
-# behovssensoren, men kun *nogle gange* som dens vaerdi - naar flowmaaleren
-# tier. En attribut kommer ikke i Home Assistants langtidsstatistik, og saa
-# kan tallet ikke tegnes en maaned tilbage. Derfor sin egen sensor.
+# Husets forbrug som lageret måler det. Det står også som attribut på
+# behovssensoren, men kun *nogle gange* som dens værdi - når flowmåleren
+# tier. En attribut kommer ikke i Home Assistants langtidsstatistik, og så
+# kan tallet ikke tegnes en måned tilbage. Derfor sin egen sensor.
 SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
-# Opladningen som sit eget flag. Den staar ogsaa som attribut paa
-# beslutningen, men et flag man kan spoerge direkte om, er lettere at koble
+# Opladningen som sit eget flag. Den står også som attribut på
+# beslutningen, men et flag man kan spørge direkte om, er lettere at koble
 # videre end en attribut man skal grave ud - og en styring der er let at
-# laese rigtigt, bliver oftere laest rigtigt.
+# læse rigtigt, bliver oftere læst rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
 
 def _clock_ahead(minutes: float) -> str:
-    """Saa mange minutter frem som et klokkeslaet paa vaeggen.
+    """Så mange minutter frem som et klokkeslæt på væggen.
 
-    Planlaeggeren faar den ind udefra i stedet for at kende uret selv, saa
-    den bliver ved med at vaere til at proeve af uden en systemklokke.
+    Planlæggeren får den ind udefra i stedet for at kende uret selv, så
+    den bliver ved med at være til at prøve af uden en systemklokke.
     """
     return "kl. " + (
         datetime.now().astimezone() + timedelta(minutes=minutes)
     ).strftime("%H:%M")
 
 
-# Saa laenge en tavs tank maa svare med sin sidste gode aflaesning. Lageret
-# flytter sig ikke langt paa en halv time - pumpen kan laegge 11 kW i, huset
-# tager 1-3 - saa et par kelvin er det vaerste der kan ske, og det ligger
-# inden for stoejen paa «tre foelere repraesenterer en tank». Derudover er
-# tallet en fiktion, og saa er «ved ikke» det aerlige svar.
+# Så længe en tavs tank må svare med sin sidste gode aflæsning. Lageret
+# flytter sig ikke langt på en halv time - pumpen kan lægge 11 kW i, huset
+# tager 1-3 - så et par kelvin er det værste der kan ske, og det ligger
+# inden for støjen på «tre følere repræsenterer en tank». Derudover er
+# tallet en fiktion, og så er «ved ikke» det ærlige svar.
 TANK_HOLD_SECONDS = 30 * 60
 
 # Tabellen gemmes højst så ofte, selv om der læres hvert minut. En skrivning
@@ -129,24 +129,24 @@ class Varmeopt:
             charge_kw=options.hp_charge_kw,
             horizon_minutes=int(options.planner_horizon_hours * 60),
             dhw_temp=options.dhw_usable_temp,
-            # Begrundelserne skriver klokkeslaet i stedet for minutter.
-            # «kl. 13:26» kan laeses; «om 510 min» skal regnes.
+            # Begrundelserne skriver klokkeslæt i stedet for minutter.
+            # «kl. 13:26» kan læses; «om 510 min» skal regnes.
             clock=_clock_ahead,
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
-        # Staatabsmaalingen. Den maaler kun naar brugeren selv har aabnet et
-        # vindue - se standby.py for hvorfor den ikke bare kan aflaese det.
+        # Ståtabsmålingen. Den måler kun når brugeren selv har åbnet et
+        # vindue - se standby.py for hvorfor den ikke bare kan aflæse det.
         self.standby = StandbyTest()
-        # Husets forbrug laest af lageret, som bagstopper naar
-        # flowmaaleren ligger under sin bund - se houseload.py.
+        # Husets forbrug læst af lageret, som bagstopper når
+        # flowmåleren ligger under sin bund - se houseload.py.
         self.house_load = HouseLoad()
         # Typeskiltet siger 16 kW; maskinen bestemmer selv og lander omkring
-        # 12. Raten maales derfor frem for at gaettes - se capacity.py.
+        # 12. Raten måles derfor frem for at gættes - se capacity.py.
         self.charge_rate = ChargeRate(nameplate_kw=options.hp_charge_kw)
-        # Opladningen som en blok: planlagt én gang, koert én gang. Se
+        # Opladningen som en blok: planlagt én gang, kørt én gang. Se
         # charge.py for hvorfor det ikke er en beslutning pr. minut.
         self.charge_plan = ChargePlan()
-        # Sidste gode aflaesning pr. tank, saa et enkelt minuts tavshed ikke
+        # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
         # halverer lageret. Kun i hukommelsen: efter en genstart er svaret
         # «ved ikke», og det er det rigtige svar.
         self._tank_last: dict[str, tuple[float, Tank]] = {}
@@ -180,9 +180,9 @@ class Varmeopt:
                 measured_stamp = measured.last_changed
 
         buffer = await self._read_tank(ha)
-        # Bagstopperen er forrige cyklus' maaling. Den er hoejst et minut
-        # gammel mod et vindue paa en halv time, og raekkefoelgen kan ikke
-        # vendes: maalingen har brug for den balance vi er ved at bygge.
+        # Bagstopperen er forrige cyklus' måling. Den er højst et minut
+        # gammel mod et vindue på en halv time, og rækkefølgen kan ikke
+        # vendes: målingen har brug for den balance vi er ved at bygge.
         balance = await self._read_balance(
             ha, measured_cop, self.house_load.kw_at(time.time(), outdoor_temp)
         )
@@ -190,9 +190,9 @@ class Varmeopt:
         solar = await self._read_solar(ha, buffer)
 
         # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
-        # med et fast setpunkt, og de maalinger hoerer ikke til i kurven.
+        # med et fast setpunkt, og de målinger hører ikke til i kurven.
         # Udgangene siger det som en kendsgerning; setpunktet ville kun
-        # vaere et gaet.
+        # være et gæt.
         room_temp = (
             await self._number(ha, self.options.entity_room_temp) if ha else None
         )
@@ -205,31 +205,31 @@ class Varmeopt:
             outdoor_temp,
         )
 
-        # Udgangen naar den svarer, setpunktet naar den ikke goer.
+        # Udgangen når den svarer, setpunktet når den ikke gør.
         dhw_fact = dhw_active if dhw_active is not None else is_dhw
 
-        # Husets forbrug laest af lagerets energiaendring. Den koerer efter
+        # Husets forbrug læst af lagerets energiændring. Den kører efter
         # brugsvandsflaget, for et bad tapper de samme tanke som huset, og en
-        # energibalance kan ikke se forskel paa de to.
+        # energibalance kan ikke se forskel på de to.
         load_note = self.house_load.observe(
             time.time(),
             buffer.heat_kwh if buffer is not None else None,
             balance.sources if balance is not None else None,
             inputs_known=balance.inputs_known if balance is not None else False,
             # Samme kendsgerning som varmekurven bruger. Falder
-            # varmtvandsudgangen ud, er det raa flag None, vinduet kasseres
-            # ikke, og et bad paa op til 8 kW bogfoeres som husets forbrug -
-            # og laeres varigt ind i forbrugskurven. ``is_dhw`` genkender
-            # ogsaa setpunktet, saa der er noget at falde tilbage paa.
+            # varmtvandsudgangen ud, er det rå flag None, vinduet kasseres
+            # ikke, og et bad på op til 8 kW bogføres som husets forbrug -
+            # og læres varigt ind i forbrugskurven. ``is_dhw`` genkender
+            # også setpunktet, så der er noget at falde tilbage på.
             dhw=dhw_fact,
             spa=vessels.get("spa_heating"),
-            # De *maalte* foelere, ikke lagene. ``sensor_count`` taeller
+            # De *målte* følere, ikke lagene. ``sensor_count`` tæller
             # ``len(layers)``, og ``layers`` interpolerer det manglende lag og
-            # giver stadig tre - saa én doed foeler aendrede ikke tallet, og
-            # vagten mod at maale hen over et foelerskift kunne aldrig
-            # udloeses. Naar foeleren kommer igen, springer ``heat_kwh``
-            # naesten to kWh, og hældningen over vinduet bliver til flere kW
-            # husforbrug der laeres permanent ind i kurven.
+            # giver stadig tre - så én død føler ændrede ikke tallet, og
+            # vagten mod at måle hen over et følerskift kunne aldrig
+            # udløses. Når føleren kommer igen, springer ``heat_kwh``
+            # næsten to kWh, og hældningen over vinduet bliver til flere kW
+            # husforbrug der læres permanent ind i kurven.
             sensors=buffer.sensors_lost if buffer is not None else None,
             outdoor=outdoor_temp,
             meter_kw=balance.load.kw if balance is not None and balance.load.trustworthy else None,
@@ -243,17 +243,17 @@ class Varmeopt:
         if self.house_load.measured_at is not None:
             self._dirty = True
 
-        # Hvor hurtigt pumpen faktisk fylder lageret. Planlaeggeren regner
-        # baade tid og maengde ud fra den, saa et typeskilt der lyver en
-        # tredjedel, faar den til at starte for sent.
+        # Hvor hurtigt pumpen faktisk fylder lageret. Planlæggeren regner
+        # både tid og mængde ud fra den, så et typeskilt der lyver en
+        # tredjedel, får den til at starte for sent.
         self.charge_rate.observe(balance.heatpump_kw if balance is not None else None)
         self.planner.charge_kw = self.charge_rate.effective_kw
-        # Og mindstetraekket med. Det er ét minimumstraek - de minutter
-        # pumpen skal koere for ikke at kortcykle - og det er kun det samme
-        # tal som typeskiltets naar pumpen leverer typeskiltets kW. Den
-        # leverer omkring 11, saa de 4,0 kWh fra options svarede til 22
-        # minutter og ikke til de 15 reglen handler om. Blokken laegges i
-        # forvejen med den maalte rate; nu regner begge ender med den samme.
+        # Og mindstetrækket med. Det er ét minimumstræk - de minutter
+        # pumpen skal køre for ikke at kortcykle - og det er kun det samme
+        # tal som typeskiltets når pumpen leverer typeskiltets kW. Den
+        # leverer omkring 11, så de 4,0 kWh fra options svarede til 22
+        # minutter og ikke til de 15 reglen handler om. Blokken lægges i
+        # forvejen med den målte rate; nu regner begge ender med den samme.
         self.planner.min_charge_kwh = (
             self.charge_rate.effective_kw * self.options.hp_min_runtime_minutes / 60
         )
@@ -278,20 +278,20 @@ class Varmeopt:
         await self._refresh_forecast(ha)
         prices = await self._read_prices(ha, lookup)
 
-        # Planlaeggeren binder pris, COP, lager og sol sammen. Den svarer
-        # ogsaa uden en plan - saa er det bare kildevalget.
-        # Lageret maa kun *handles* paa naar alle tankene svarer. Svarer
-        # kun den ene, er summen ikke en ringere maaling - den er forkert, og
-        # en halveret plads er praecis det der lagde en blok der ikke skulle
-        # laegges. Vises maa den gerne; det er en anden ting.
+        # Planlæggeren binder pris, COP, lager og sol sammen. Den svarer
+        # også uden en plan - så er det bare kildevalget.
+        # Lageret må kun *handles* på når alle tankene svarer. Svarer
+        # kun den ene, er summen ikke en ringere måling - den er forkert, og
+        # en halveret plads er præcis det der lagde en blok der ikke skulle
+        # lægges. Vises må den gerne; det er en anden ting.
         store = buffer if buffer is not None and buffer.complete else None
         decision = self.planner.decide(
             plan=prices.get("plan"),
             cop_now=lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
             charge_cop_at=self._charge_cop_at,
-            # Pladsen maales op til den temperatur blokken lader ved, ikke op
-            # til varmepumpens loft. De sidste grader op til 60 hoerer til
+            # Pladsen måles op til den temperatur blokken lader ved, ikke op
+            # til varmepumpens loft. De sidste grader op til 60 hører til
             # solvarmen og ACthor, og en blok kan ikke fylde dem.
             headroom_kwh=(
                 store.room_to(self.options.hp_charge_temp)
@@ -308,15 +308,15 @@ class Varmeopt:
                 if store is not None
                 else None
             ),
-            # Varmtvandet i det dyre vindue, ikke i de naeste timer: profilen
-            # laeses fra vinduets begyndelse.
+            # Varmtvandet i det dyre vindue, ikke i de næste timer: profilen
+            # læses fra vinduets begyndelse.
             dhw_kwh_over=lambda start_min, hours: (
                 self.house_load.vessels.kwh_between(
                     time.time() + start_min * 60, hours
                 )
             ),
-            # Og hvad det koster at faa den varme til at *staa* der. Lagerets
-            # fysik hoerer hjemme i tank.py, ikke i planlaeggeren.
+            # Og hvad det koster at få den varme til at *stå* der. Lagerets
+            # fysik hører hjemme i tank.py, ikke i planlæggeren.
             dhw_input_for=(
                 (lambda kwh: store.energy_to_reach(kwh, self.options.dhw_usable_temp))
                 if store is not None
@@ -326,41 +326,41 @@ class Varmeopt:
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
             demand_kw_at=self._demand_at,
-            # Fristen paa uret. Den regnes her og ikke i planlaeggeren:
-            # planlaeggeren faar minutter, ikke et klokkeslaet, saa den kan
-            # proeves af uden at nogen skal stille en systemklokke.
+            # Fristen på uret. Den regnes her og ikke i planlæggeren:
+            # planlæggeren får minutter, ikke et klokkeslæt, så den kan
+            # prøves af uden at nogen skal stille en systemklokke.
             deadline_minutes=minutes_until_hour(
                 self.options.store_full_by_hour, time.time()
             ),
         )
-        # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere
-        # det. Siger den nej, staar beslutningen der stadig, men flaget
+        # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
+        # det. Siger den nej, står beslutningen der stadig, men flaget
         # siger nej, og Node-RED bruger sin egen logik.
-        # Vaegurstid, ikke monoton - kun den giver mening paa tvaers af en
-        # genstart, og opholdstiden skal fortsaette hvor den slap.
+        # Vægurstid, ikke monoton - kun den giver mening på tværs af en
+        # genstart, og opholdstiden skal fortsætte hvor den slap.
         #
-        # Vagten spoerges *foer* blokken. Blokken skal kende den kilde vagten
-        # staar ved, ikke planlaeggerens raa svar: ladeflaget var det eneste
-        # udgang i huset uden hviletid, saa ét minuts udsving i COP eller pris
-        # kunne afslutte en opladning som vagten samtidig holdt paa
-        # varmepumpen. Vagten laeser kun ``source`` og ``heat_price``, aldrig
-        # ``charge``, saa den kan trygt gaa foerst.
+        # Vagten spørges *før* blokken. Blokken skal kende den kilde vagten
+        # står ved, ikke planlæggerens rå svar: ladeflaget var det eneste
+        # udgang i huset uden hviletid, så ét minuts udsving i COP eller pris
+        # kunne afslutte en opladning som vagten samtidig holdt på
+        # varmepumpen. Vagten læser kun ``source`` og ``heat_price``, aldrig
+        # ``charge``, så den kan trygt gå først.
         command = self.guard.check(
             decision, lookup, prices.get("plan"), time.time()
         )
 
         # Opladningen er en blok, ikke en beslutning pr. minut. Den siger
-        # ja eller nej for hele sit forloeb, og beslutningens flag rettes ind
-        # efter den, saa flaget, attributterne og planen siger det samme.
+        # ja eller nej for hele sit forløb, og beslutningens flag rettes ind
+        # efter den, så flaget, attributterne og planen siger det samme.
         charging = self.charge_plan.update(
             time.time(),
             decision,
             prices.get("plan"),
             self.charge_rate.effective_kw,
-            # Og «fuldt» maa heller ikke afgoeres paa et halvt lager: det
-            # afslutter en koerende blok. Samme loft som pladsen ovenfor -
-            # ellers ville planlaeggeren sige «ingen plads» mens blokken kunne
-            # koere videre mod et loft den ikke kan naa.
+            # Og «fuldt» må heller ikke afgøres på et halvt lager: det
+            # afslutter en kørende blok. Samme loft som pladsen ovenfor -
+            # ellers ville planlæggeren sige «ingen plads» mens blokken kunne
+            # køre videre mod et loft den ikke kan nå.
             full=(
                 store is not None
                 and store.room_to(self.options.hp_charge_temp) <= 0.01
@@ -414,8 +414,8 @@ class Varmeopt:
             ),
             hp_power_kw=balance.hp_power_kw if balance is not None else None,
             hp_heat_kw=balance.heatpump_kw if balance is not None else None,
-            # Varmeydelse delt med elforbrug - anlaeggets egen COP, regnet af
-            # to maalinger i stedet for laest af en foeler.
+            # Varmeydelse delt med elforbrug - anlæggets egen COP, regnet af
+            # to målinger i stedet for læst af en føler.
             hp_cop_measured=self._hp_cop,
             house_load=load_note,
             house_load_kw=self.house_load.kw,
@@ -442,16 +442,16 @@ class Varmeopt:
         )
 
         if ha is not None:
-            # Flaget foerst. Det er den ene skrivning der er
-            # sikkerhedskritisk, og foer laa den sidst - efter fem andre
-            # der hver kunne afbryde cyklussen foer den blev naaet.
+            # Flaget først. Det er den ene skrivning der er
+            # sikkerhedskritisk, og før lå den sidst - efter fem andre
+            # der hver kunne afbryde cyklussen før den blev nået.
             #
             # Loggen skriver den *udgivne* kilde, for det er den entiteten
-            # staar paa. Den raa kommer i parentes naar vagten holder noget
-            # andet, saa linjen viser baade hvad planlaeggeren mente og hvad
+            # står på. Den rå kommer i parentes når vagten holder noget
+            # andet, så linjen viser både hvad planlæggeren mente og hvad
             # der faktisk stod.
             published = command.source or decision.source
-            raw = "" if published == decision.source else f" (raa {decision.source})"
+            raw = "" if published == decision.source else f" (rå {decision.source})"
             log.info(
                 "beslutning: %s%s | %s | styring: %s",
                 published,
@@ -466,7 +466,7 @@ class Varmeopt:
 
         if lookup is not None:
             log.info(
-                "COP %.2f (%s: %s) | %s: setpunkt %.1f, maalt %s, ude %.1f | laering: %s",
+                "COP %.2f (%s: %s) | %s: setpunkt %.1f, målt %s, ude %.1f | læring: %s",
                 lookup.cop,
                 lookup.source,
                 lookup.detail,
@@ -499,7 +499,7 @@ class Varmeopt:
                     left = balance.hours_left(buffer.stored_kwh)
                     full = balance.hours_to_full(buffer.headroom_kwh)
                     if left is not None:
-                        horizon = f" | raekker {left:.1f} t"
+                        horizon = f" | rækker {left:.1f} t"
                     elif full is not None:
                         horizon = f" | fuld om {full:.1f} t"
                 net = balance.net_kw
@@ -542,24 +542,24 @@ class Varmeopt:
                 "icon": "mdi:heat-pump",
                 "kilde": lookup.source,
                 "metode": lookup.detail,
-                "laert_cop": lookup.learned_cop,
-                "laert_antal": round(lookup.learned_count, 1),
-                # "fremloeb" hed det, men det er UVR'ens setpunkt, ikke en
+                "lært_cop": lookup.learned_cop,
+                "lært_antal": round(lookup.learned_count, 1),
+                # "fremløb" hed det, men det er UVR'ens setpunkt, ikke en
                 # måling. Nu står begge, så de ikke kan forveksles.
                 "setpunkt": self.status.get("flow_temp"),
-                "freml_maalt": self.status.get("flow_measured"),
+                "freml_målt": self.status.get("flow_measured"),
                 "afvigelse": _round(_difference(
                     self.status.get("flow_measured"), self.status.get("flow_temp")
                 ), 1),
                 "tilstand": self.status.get("mode"),
                 "vp_frem_bt12": self.status.get("hp_flow"),
                 "vp_retur_bt3": self.status.get("hp_return"),
-                "vp_loeft": _round(self.status.get("hp_lift"), 1),
+                "vp_løft": _round(self.status.get("hp_lift"), 1),
                 "setpunkt_forudsagt": _round(self.status.get("predicted_setpoint"), 1),
                 "ude": self.status.get("outdoor_temp"),
-                "maalt_cop": self.status.get("measured_cop"),
+                "målt_cop": self.status.get("measured_cop"),
                 "celler": self.table.cell_count,
-                "maalinger": round(self.table.sample_count),
+                "målinger": round(self.table.sample_count),
             },
         )
 
@@ -589,12 +589,12 @@ class Varmeopt:
                 # En tank uden ét eneste svar er ikke en koldere tank, den er
                 # en ukendt tank - og uden det her halverer summen sig i
                 # tavshed. Natten til den 10. september skete det i ét minut:
-                # 22,6 -> 11,8 kWh, og baade opladningen og «lageret er
-                # fuldt» laeser den sum.
+                # 22,6 -> 11,8 kWh, og både opladningen og «lageret er
+                # fuldt» læser den sum.
                 #
-                # Mangler den kun *nogle* foelere, holdes den ikke. Det er
-                # praecis det tilfaelde gradientreglen i tank.py er skrevet
-                # til, og en gammel aflaesning ville overtroeve den.
+                # Mangler den kun *nogle* følere, holdes den ikke. Det er
+                # præcis det tilfælde gradientreglen i tank.py er skrevet
+                # til, og en gammel aflæsning ville overtrumfe den.
                 cached = self._tank_last.get(name)
                 if cached is not None and now - cached[0] <= TANK_HOLD_SECONDS:
                     tank = cached[1]
@@ -623,24 +623,24 @@ class Varmeopt:
             "middel_temp": _round(buffer.mean_temp, 1),
             "leverer_op_til": _round(buffer.deliverable, 1),
             "ubalance_k": _round(buffer.imbalance, 1),
-            "foelere": buffer.sensor_count,
+            "følere": buffer.sensor_count,
             "reference_temp": buffer.reference,
             "loft_temp": buffer.ceiling,
             "plads_i_alt_kwh": round(buffer.peak_headroom_kwh, 2),
             "over_vp_loft": buffer.above_heatpump_ceiling,
-            # En manglende dybdefoeler goer lagerenergien til et skoen. Det
-            # skal kunne ses, ikke bare regnes videre paa.
-            "foelere_mangler": buffer.sensors_lost,
-            # Og en helt tavs tank goer den til noget vaerre end et skoen.
-            # Saa laenge den holdes paa sin sidste gode aflaesning, staar
-            # tallet der stadig - men det er ikke maalt lige nu, og
-            # opladningen roerer det ikke.
+            # En manglende dybdeføler gør lagerenergien til et skøn. Det
+            # skal kunne ses, ikke bare regnes videre på.
+            "følere_mangler": buffer.sensors_lost,
+            # Og en helt tavs tank gør den til noget værre end et skøn.
+            # Så længe den holdes på sin sidste gode aflæsning, står
+            # tallet der stadig - men det er ikke målt lige nu, og
+            # opladningen rører det ikke.
             "lager_komplet": buffer.complete,
             "lager_holdt": ", ".join(self._tank_held) or "—",
-            # Rummet tankene staar i. Staatabet foelger forskellen til det
-            # her, ikke til en antaget kaeldertemperatur - og de to tal
-            # sammen er raamaterialet til at maale tabet naar der en nat
-            # hverken tilfoeres eller traekkes noget.
+            # Rummet tankene står i. Ståtabet følger forskellen til det
+            # her, ikke til en antaget kældertemperatur - og de to tal
+            # sammen er råmaterialet til at måle tabet når der en nat
+            # hverken tilføres eller trækkes noget.
             "rum_temp": _round(self.status.get("room_temp"), 1),
             "over_rummet_k": _round(
                 None
@@ -648,10 +648,10 @@ class Varmeopt:
                 else buffer.mean_temp - self.status["room_temp"],
                 1,
             ),
-            # Hvor meget af varmepumpens baand solen selv tager i dag, og hvad
-            # der saa er tilbage at lade uden at fortraenge gratis varme.
+            # Hvor meget af varmepumpens bånd solen selv tager i dag, og hvad
+            # der så er tilbage at lade uden at fortrænge gratis varme.
             "forventet_solvarme_kwh": _round(self.status.get("solar_expected"), 1),
-            "vp_maa_lade_kwh": _round(self.status.get("solar_may_charge"), 1),
+            "vp_må_lade_kwh": _round(self.status.get("solar_may_charge"), 1),
             "solvarme_i_dag_kwh": self.status.get("solar_today"),
             "solar_k": _round(self.status.get("solar_scale"), 3),
             # Beholderne ved siden af: de deler varmekilder med tankene, men
@@ -659,9 +659,9 @@ class Varmeopt:
             "vvb_top": self.status.get("vvb_top"),
             "vvb_bund": self.status.get("vvb_bottom"),
             "spa_temp": self.status.get("spa_temp"),
-            "spa_maal": self.status.get("spa_target"),
+            "spa_mål": self.status.get("spa_target"),
             "spa_varmer": self.status.get("spa_heating"),
-            "varmtvand_koerer": self.status.get("dhw_active"),
+            "varmtvand_kører": self.status.get("dhw_active"),
         }
         for tank in buffer.measured:
             key = tank.name.lower()
@@ -735,13 +735,13 @@ class Varmeopt:
         return value / 1000 if unit in ("w", "watt") else value
 
     async def _round_trip(self, ha: HomeAssistant) -> float:
-        """Hvor stor en del af en koebt kWh der naar ud af batteriet igen.
+        """Hvor stor en del af en købt kWh der når ud af batteriet igen.
 
-        Tabene laeses af Predbats egne indstillinger i stedet for at skrives
-        af. Saa er der ét sted de staar, og aendrer man dem dér, foelger
-        genanskaffelsesprisen med. Svarer entiteterne ikke, gaelder
-        ``prices.py``s standardvaerdier - det er et par procent, ikke en
-        anden beslutning, saa det maa ikke standse en cyklus.
+        Tabene læses af Predbats egne indstillinger i stedet for at skrives
+        af. Så er der ét sted de står, og ændrer man dem dér, følger
+        genanskaffelsesprisen med. Svarer entiteterne ikke, gælder
+        ``prices.py``s standardværdier - det er et par procent, ikke en
+        anden beslutning, så det må ikke standse en cyklus.
         """
         losses: list[float] = []
         for entity, fallback in (
@@ -750,14 +750,14 @@ class Varmeopt:
             (self.options.entity_battery_loss_discharge, BATTERY_LOSS_DISCHARGE),
         ):
             value = await self._number(ha, entity) if entity else None
-            # Et tab er en broekdel, ikke en procent. Melder entiteten 4 i
+            # Et tab er en brøkdel, ikke en procent. Melder entiteten 4 i
             # stedet for 0,04, ville rundturen blive negativ - og et
-            # batteri der leverer mere end det faar, er ikke en pris vi
-            # skal regne videre paa.
+            # batteri der leverer mere end det får, er ikke en pris vi
+            # skal regne videre på.
             if value is None or not 0 <= value < 1:
                 if not self._warned_losses:
                     log.warning(
-                        "kunne ikke laese Predbats tab fra %s - regner med "
+                        "kunne ikke læse Predbats tab fra %s - regner med "
                         "add-on'ens egne tal",
                         entity or "(ikke sat)",
                     )
@@ -767,12 +767,12 @@ class Varmeopt:
         return round_trip(*losses)
 
     async def _charge_limit(self, ha: HomeAssistant) -> float | None:
-        """Predbats graense, som en ladetilstand i procent.
+        """Predbats grænse, som en ladetilstand i procent.
 
         Den skal kunne sammenlignes med planens ``soc_percent``, og de to er
         kun sammenlignelige hvis begge er procent. Melder entiteten kWh, kan
-        vi ikke regne om uden batteriets stoerrelse, og saa er det rigtige
-        svar ingenting - sagt hoejt én gang, ikke gaettet hver cyklus.
+        vi ikke regne om uden batteriets størrelse, og så er det rigtige
+        svar ingenting - sagt højt én gang, ikke gættet hver cyklus.
         """
         state = await self._state(ha, self.options.entity_predbat_charge_limit)
         if state is None:
@@ -784,7 +784,7 @@ class Varmeopt:
         if unit not in ("", "%", "percent"):
             if not self._warned_limit_unit:
                 log.warning(
-                    "%s melder %r og ikke procent - graensen bruges ikke",
+                    "%s melder %r og ikke procent - grænsen bruges ikke",
                     self.options.entity_predbat_charge_limit,
                     unit,
                 )
@@ -849,27 +849,27 @@ class Varmeopt:
                 max(t for _, t in forecast.points),
             )
         else:
-            # Sig hvad der kom tilbage. Stod der bare "kunne ikke laeses",
+            # Sig hvad der kom tilbage. Stod der bare "kunne ikke læses",
             # var det umuligt at se om entiteten var forkert, eller om svaret
             # havde en anden form end den vi pakker ud.
             keys = sorted(response) if isinstance(response, dict) else type(response).__name__
             log.warning(
-                "vejrudsigten fra %s kunne ikke laeses - svaret indeholdt %s",
+                "vejrudsigten fra %s kunne ikke læses - svaret indeholdt %s",
                 self.options.entity_weather,
                 keys,
             )
 
     def _charge_cop_at(self, minutes: int) -> float | None:
-        """COP'en ved ladetemperaturen om saa mange minutter.
+        """COP'en ved ladetemperaturen om så mange minutter.
 
-        Samme kaede som ``_cop_at``, men uden varmekurven: setpunktet er
-        givet. En blok koerer ``hp_charge_temp`` - 56 grader - og det er
-        derfor varmen bagefter ogsaa kan lave et bad.
+        Samme kæde som ``_cop_at``, men uden varmekurven: setpunktet er
+        givet. En blok kører ``hp_charge_temp`` - 56 grader - og det er
+        derfor varmen bagefter også kan lave et bad.
 
         Ikke ``dhw_setpoint``. Den er det setpunkt beholderen *kalder* med, og
-        paa anlaegget her staar den paa 53. De to stod som ét i et doegn, og
-        saa blev COP'en slaaet op tre grader for lavt og pladsen maalt til en
-        temperatur lavere end den blokken naar.
+        på anlægget her står den på 53. De to stod som ét i et døgn, og
+        så blev COP'en slået op tre grader for lavt og pladsen målt til en
+        temperatur lavere end den blokken når.
         """
         temp = self.forecast.temperature_at(minutes)
         if temp is None:
@@ -877,15 +877,15 @@ class Varmeopt:
         return self.table.lookup(self.options.hp_charge_temp, temp).cop
 
     def _demand_at(self, minutes: int) -> float | None:
-        """Hvad huset ventes at traekke om saa mange minutter.
+        """Hvad huset ventes at trække om så mange minutter.
 
-        Samme kaede som ``_cop_at``, men den korte ende af den: forudsagt
-        temperatur gennem den indlaerte forbrugskurve. Udsigten klemmer fast
-        paa yderpunkterne i stedet for at svare ingenting, saa naar der
-        overhovedet er en udsigt, er der ogsaa et svar - og kurven svarer kun
-        ``None`` foer den har laert sit foerste punkt.
+        Samme kæde som ``_cop_at``, men den korte ende af den: forudsagt
+        temperatur gennem den indlærte forbrugskurve. Udsigten klemmer fast
+        på yderpunkterne i stedet for at svare ingenting, så når der
+        overhovedet er en udsigt, er der også et svar - og kurven svarer kun
+        ``None`` før den har lært sit første punkt.
 
-        Den maalte vaerdi staar med vilje ikke her. Den hoerer til nuet, og
+        Den målte værdi står med vilje ikke her. Den hører til nuet, og
         det her er en udsigt - se ``Planner._displaced_kwh``.
         """
         temp = self.forecast.temperature_at(minutes)
@@ -894,11 +894,11 @@ class Varmeopt:
         return self.house_load.curve.predict(temp)
 
     def _cop_at(self, minutes: int) -> float | None:
-        """COP om saa mange minutter, hele vejen gennem kaeden.
+        """COP om så mange minutter, hele vejen gennem kæden.
 
         Forudsagt temperatur -> varmekurven giver setpunktet -> COP-tabellen
-        giver virkningsgraden. Uden udsigt er der intet svar, og planlaeggeren
-        falder tilbage paa den COP vi har nu.
+        giver virkningsgraden. Uden udsigt er der intet svar, og planlæggeren
+        falder tilbage på den COP vi har nu.
         """
         temp = self.forecast.temperature_at(minutes)
         if temp is None:
@@ -921,8 +921,8 @@ class Varmeopt:
         if state is None:
             return {}
 
-        # En foraeldet plan er farligere end ingen plan: priserne ser
-        # gyldige ud, saa vagten gaar igennem alle porte paa tal fra et
+        # En forældet plan er farligere end ingen plan: priserne ser
+        # gyldige ud, så vagten går igennem alle porte på tal fra et
         # andet tidspunkt.
         age = state.age_seconds()
         if age is not None and age > self.options.plan_max_age_minutes * 60:
@@ -938,19 +938,19 @@ class Varmeopt:
         )
         if not len(plan):
             log.warning(
-                "kunne ikke laese Predbats plan fra %s", self.options.entity_predbat_plan
+                "kunne ikke læse Predbats plan fra %s", self.options.entity_predbat_plan
             )
             return {}
 
-        # Raekker Predbats plan laengere end vi kigger, ser vi ikke enden paa
-        # det dyre. Saa bliver straekket afkortet, behovet for lille, og
+        # Rækker Predbats plan længere end vi kigger, ser vi ikke enden på
+        # det dyre. Så bliver strækket afkortet, behovet for lille, og
         # blokken for kort - og intet siger det. Sig det én gang.
         if plan.horizon_minutes > self.planner.horizon_minutes and not self._warned_horizon:
             self._warned_horizon = True
             log.warning(
-                "Predbats plan raekker %.0f timer, men horisonten er %.0f - "
-                "det dyre straek bliver afkortet, og opladningen for lille. "
-                "Saet planner_horizon_hours op i add-on'ens indstillinger.",
+                "Predbats plan rækker %.0f timer, men horisonten er %.0f - "
+                "det dyre stræk bliver afkortet, og opladningen for lille. "
+                "Sæt planner_horizon_hours op i add-on'ens indstillinger.",
                 plan.horizon_minutes / 60,
                 self.planner.horizon_minutes / 60,
             )
@@ -966,11 +966,11 @@ class Varmeopt:
         if now is None:
             return {}
 
-        # Predbats egen tilstand lige nu. Planens raekker bruger samme
-        # ordforraad pr. halvtime, saa den her er den eneste maade at se hvad
-        # *dette* anlaegs Predbat faktisk skriver - i stedet for at gaette paa
+        # Predbats egen tilstand lige nu. Planens rækker bruger samme
+        # ordforråd pr. halvtime, så den her er den eneste måde at se hvad
+        # *dette* anlægs Predbat faktisk skriver - i stedet for at gætte på
         # dokumentationen. Siger de to noget forskelligt om den halvtime vi
-        # staar i, er det os der laeser planen forkert.
+        # står i, er det os der læser planen forkert.
         status = await self._state(ha, self.options.entity_predbat_status)
         if status is not None and plan.slots:
             self._check_predbat_status(status.state, plan.slots[0])
@@ -1010,11 +1010,11 @@ class Varmeopt:
         return None
 
     def _check_predbat_status(self, status: str, slot: Any) -> None:
-        """Siger Predbat og vores laesning af planen det samme om nu?
+        """Siger Predbat og vores læsning af planen det samme om nu?
 
         Kun en kontrol - der styres ikke efter den. Men er de uenige om
-        indevaerende halvtime, laeser vi planens tilstandsstrenge forkert, og
-        saa er hver eneste pris i horisonten et gaet. Det skal staa i loggen,
+        indeværende halvtime, læser vi planens tilstandsstrenge forkert, og
+        så er hver eneste pris i horisonten et gæt. Det skal stå i loggen,
         ikke opdages en vinter senere.
         """
         text = (status or "").strip().lower()
@@ -1025,7 +1025,7 @@ class Varmeopt:
             return
         if text != self._last_status_warning:
             log.warning(
-                "Predbat siger %r, men planens foerste raekke %r laeses som "
+                "Predbat siger %r, men planens første række %r læses som "
                 "%s - tjek tilstandsstrengene",
                 status,
                 slot.state,
@@ -1049,9 +1049,9 @@ class Varmeopt:
             "state_class": "measurement",
             "icon": "mdi:cash-clock",
             "begrundelse": price.reason,
-            # Samme hold-note som paa beslutningen. Den her sensor udgiver
-            # de samme to varmepriser, saa modsigelsen mellem tilstand og
-            # tal ville ellers staa uforklaret to steder i stedet for ét.
+            # Samme hold-note som på beslutningen. Den her sensor udgiver
+            # de samme to varmepriser, så modsigelsen mellem tilstand og
+            # tal ville ellers stå uforklaret to steder i stedet for ét.
             "kilde_grund": self._held_reason(decision, command)
             if decision is not None
             else None,
@@ -1088,18 +1088,18 @@ class Varmeopt:
             log.warning("kunne ikke udgive %s: %s", what, exc)
 
     async def release_control(self, ha: HomeAssistant) -> None:
-        """Saet begge flag falske, saa Node-RED tager over igen.
+        """Sæt begge flag falske, så Node-RED tager over igen.
 
         Kaldes ved nedlukning. De to skrives hver for sig og med hver sin
-        fejlhaandtering: laa de i samme forsoeg, ville en fejl paa det
-        foerste betyde at det andet aldrig blev sluppet — og saa ville et
-        stop efterlade praecis den frosne kommando det hele er til for at
-        undgaa.
+        fejlhåndtering: lå de i samme forsøg, ville en fejl på det
+        første betyde at det andet aldrig blev sluppet — og så ville et
+        stop efterlade præcis den frosne kommando det hele er til for at
+        undgå.
 
-        Opladningen slippes foerst, for den er den farligste at efterlade
-        taendt. En frossen kilde ville bare fortsaette som den koerte; et
+        Opladningen slippes først, for den er den farligste at efterlade
+        tændt. En frossen kilde ville bare fortsætte som den kørte; et
         frossent "lad op" ville blive ved med at fylde tankene efter vi er
-        holdt op med at kunne se paa dem.
+        holdt op med at kunne se på dem.
         """
         self.guard.release()
 
@@ -1114,11 +1114,11 @@ class Varmeopt:
                 "begrundelse": "add-on'en er stoppet",
             },
         )
-        # Den kilde entiteten stod paa, ikke planlaeggerens raa svar - ellers
-        # ville et stop selv vaere et tilstandsskifte i HA's historik.
+        # Den kilde entiteten stod på, ikke planlæggerens rå svar - ellers
+        # ville et stop selv være et tilstandsskifte i HA's historik.
         # ``release()`` ovenfor har ryddet vagtens binding, men kommandoen fra
-        # sidste cyklus staar stadig i status og baerer kilden. Nøglen mangler
-        # helt hvis vi stopper foer foerste cyklus er faerdig.
+        # sidste cyklus står stadig i status og bærer kilden. Nøglen mangler
+        # helt hvis vi stopper før første cyklus er færdig.
         decision = self.status.get("decision")
         command = self.status.get("command")
         last = command.source if command is not None else None
@@ -1141,13 +1141,13 @@ class Varmeopt:
     async def _release_one(
         self, ha: HomeAssistant, entity: str, state: Any, attributes: dict[str, Any]
     ) -> None:
-        """Slip ét flag. Fejler det, er der ikke mere vi kan goere end at raabe."""
+        """Slip ét flag. Fejler det, er der ikke mere vi kan gøre end at råbe."""
         try:
             await ha.set_state(entity, state, attributes)
-            log.info("gav slip paa %s", entity)
+            log.info("gav slip på %s", entity)
         except HaError as exc:
             log.error(
-                "KUNNE IKKE give slip paa %s: %s - den kan staa med styrer=true",
+                "KUNNE IKKE give slip på %s: %s - den kan stå med styrer=true",
                 entity,
                 exc,
             )
@@ -1157,15 +1157,15 @@ class Varmeopt:
     ) -> None:
         """Opladningen som et flag, ikke som en attribut.
 
-        Tilstanden er ``on``/``off`` som ethvert andet binary_sensor, saa den
-        kan spoerges direkte i stedet for at skulle graves ud af
+        Tilstanden er ``on``/``off`` som ethvert andet binary_sensor, så den
+        kan spørges direkte i stedet for at skulle graves ud af
         beslutningens attributter.
 
-        **Samme regel som paa beslutningen:** tilstanden er hvad
-        planlaeggeren *vil*, og ``styrer`` siger om det maa foelges. De to er
-        med vilje adskilt — flaget skal kunne ses ogsaa mens styringen er
-        slaaet fra, ellers kan man ikke vurdere planen inden man kobler den
-        til. Foelg det kun naar ``styrer`` er sand, praecis som med kilden.
+        **Samme regel som på beslutningen:** tilstanden er hvad
+        planlæggeren *vil*, og ``styrer`` siger om det må følges. De to er
+        med vilje adskilt — flaget skal kunne ses også mens styringen er
+        slået fra, ellers kan man ikke vurdere planen inden man kobler den
+        til. Følg det kun når ``styrer`` er sand, præcis som med kilden.
         """
         await ha.set_state(
             SENSOR_CHARGE,
@@ -1173,16 +1173,16 @@ class Varmeopt:
             {
                 "friendly_name": "Varmeopt lad op",
                 "icon": "mdi:battery-charging-high",
-                # Samme port som paa beslutningen. Uden den ville flaget se
-                # ud som en ordre selv naar ingen har lov at give den.
+                # Samme port som på beslutningen. Uden den ville flaget se
+                # ud som en ordre selv når ingen har lov at give den.
                 "styrer": command.acting,
                 "begrundelse": decision.reason,
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
                 "vindue_min": decision.window_minutes,
-                # Blokken: hvornaar den ligger, og hvor meget den er sat til.
-                # Opladningen er planlagt én gang og koeres én gang - se
-                # charge.py - saa det her er et skema og ikke et oejebliksbud.
+                # Blokken: hvornår den ligger, og hvor meget den er sat til.
+                # Opladningen er planlagt én gang og køres én gang - se
+                # charge.py - så det her er et skema og ikke et øjebliksbud.
                 "plan": self.charge_plan.note,
                 "starter_om_min": _round(self._charge_minutes()[0], 0),
                 "slutter_om_min": _round(self._charge_minutes()[1], 0),
@@ -1191,12 +1191,12 @@ class Varmeopt:
 
     @staticmethod
     def _held_reason(decision: Any, command: Any) -> str:
-        """Begrundelsen, med vagtens hold sat bagpaa naar den holder.
+        """Begrundelsen, med vagtens hold sat bagpå når den holder.
 
-        Uden det her ville sensoren staa paa ``pillefyr`` med teksten
-        "VP 0.55 < pille 0.71" ved siden af, og det er vaerre end at vippe:
-        tallene i attributterne beskriver stadig det raa svar, saa der skal
-        staa hvorfor tilstanden er en anden.
+        Uden det her ville sensoren stå på ``pillefyr`` med teksten
+        "VP 0.55 < pille 0.71" ved siden af, og det er værre end at vippe:
+        tallene i attributterne beskriver stadig det rå svar, så der skal
+        stå hvorfor tilstanden er en anden.
         """
         reason = decision.reason
         if command is None or command.source in (None, decision.source):
@@ -1208,21 +1208,21 @@ class Varmeopt:
     ) -> None:
         await ha.set_state(
             SENSOR_DECISION,
-            # Den kilde vagten staar ved - ikke planlaeggerens raa svar.
+            # Den kilde vagten står ved - ikke planlæggerens rå svar.
             #
-            # Det er entitetens *tilstand*, og den er det Node-RED haenger
-            # sin ``server-state-changed`` paa. Stod den paa det raa svar,
-            # ville en enkelt cyklus med stoej vaere et tilstandsskifte i
-            # HA's historik: den 10. september blev det til fjorten paa seks
-            # timer. Det raa svar staar i ``raa_kilde``, saa man stadig kan
-            # se hvad planlaeggeren ville have sagt.
+            # Det er entitetens *tilstand*, og den er det Node-RED hænger
+            # sin ``server-state-changed`` på. Stod den på det rå svar,
+            # ville en enkelt cyklus med støj være et tilstandsskifte i
+            # HA's historik: den 10. september blev det til fjorten på seks
+            # timer. Det rå svar står i ``rå_kilde``, så man stadig kan
+            # se hvad planlæggeren ville have sagt.
             command.source if command.source is not None else decision.source,
             {
                 "friendly_name": "Varmeopt beslutning",
                 "icon": "mdi:scale-balance",
                 "begrundelse": self._held_reason(decision, command),
-                "raa_kilde": decision.source,
-                # Node-RED skal kun foelge os naar "styrer" er sand.
+                "rå_kilde": decision.source,
+                # Node-RED skal kun følge os når "styrer" er sand.
                 # Ellers bruger den sin egen logik, og det er meningen.
                 "styrer": command.acting,
                 "styr_til": command.source,
@@ -1250,13 +1250,13 @@ class Varmeopt:
         today = await self._number(ha, self.options.entity_solar_today)
 
         now = datetime.now().astimezone()
-        # Maetningen skal ses undervejs. Ved midnat er tankene koelet af, og
+        # Mætningen skal ses undervejs. Ved midnat er tankene kølet af, og
         # en dag hvor solen bankede mod et fuldt lager ville se normal ud.
         #
-        # Og den skal maales mod det *fysiske* loft. Stod der
+        # Og den skal måles mod det *fysiske* loft. Stod der
         # above_heatpump_ceiling, ville hver eneste god soldag blive kasseret,
-        # for solen presser rutinemaessigt tankene forbi varmepumpens 60 °C -
-        # og det er netop de dage der baerer information.
+        # for solen presser rutinemæssigt tankene forbi varmepumpens 60 °C -
+        # og det er netop de dage der bærer information.
         full_now = buffer.at_peak_ceiling if buffer is not None else False
         finished = self.solar_day.observe(
             now.strftime("%Y-%m-%d"), now.hour, remaining, today, store_full=full_now
@@ -1267,7 +1267,7 @@ class Varmeopt:
             thermal, forecast, date, saturated = finished
             day_of_year = datetime.strptime(date, "%Y-%m-%d").timetuple().tm_yday
             note = self.solar.learn(thermal, forecast, day_of_year, store_was_full=saturated)
-            log.info("solvarme, doegnet %s: %s", date, note)
+            log.info("solvarme, døgnet %s: %s", date, note)
             self._dirty = True
 
         day_of_year = now.timetuple().tm_yday
@@ -1278,8 +1278,8 @@ class Varmeopt:
         if expected is not None and buffer is not None:
             # Det varmepumpen kan lade uden at tage plads fra solen.
             may_charge = max(0.0, buffer.headroom_kwh - expected)
-            # Men er der mindre plads end ét minimumstraek fylder, er svaret
-            # "lad vaere". En start der straks foelges af et stop er slid
+            # Men er der mindre plads end ét minimumstræk fylder, er svaret
+            # "lad være". En start der straks følges af et stop er slid
             # uden udbytte.
             worth_starting = may_charge >= self.options.min_charge_kwh
 
@@ -1339,10 +1339,10 @@ class Varmeopt:
             element_kw=await self._power_kw(ha, self.options.entity_element_power),
             boiler_kw=await self._power_kw(ha, self.options.entity_boiler_power),
             heatpump_kw=heatpump_kw,
-            # Koerer pumpen uden at vi kan sige hvad den laver, mangler der en
-            # kilde i summen, og en energibalance bygget paa den ville
-            # tilskrive huset varmen. Maales ydelsen direkte, sker det ikke
-            # laengere fordi COP-foeleren tier.
+            # Kører pumpen uden at vi kan sige hvad den laver, mangler der en
+            # kilde i summen, og en energibalance bygget på den ville
+            # tilskrive huset varmen. Måles ydelsen direkte, sker det ikke
+            # længere fordi COP-føleren tier.
             inputs_known=not (
                 hp_power is not None and hp_power > 0.05 and heatpump_kw is None
             ),
@@ -1373,7 +1373,7 @@ class Varmeopt:
         if not self._warned_hp_cop:
             log.warning(
                 "varmepumpens egne tal giver COP %.2f (%.2f kW varme / %.2f kW el), "
-                "men %s melder %.2f - tabellen er bygget paa foeleren",
+                "men %s melder %.2f - tabellen er bygget på føleren",
                 implied,
                 heat_kw,
                 power_kw,
@@ -1392,15 +1392,15 @@ class Varmeopt:
         """Blokkens start og slut som minutter frem, til plan-tabellen.
 
         Regnet fra **halvtimens begyndelse**, ikke fra dette sekund. Planens
-        raekker er nummereret sadan: raekke 0 er den halvtime vi staar i, og
-        web-siden skriver klokkeslaettet som halvtimens start. Blokken ligger
-        ogsaa paa det gitter, saa de to skal maales fra det samme nulpunkt.
+        rækker er nummereret sadan: række 0 er den halvtime vi står i, og
+        web-siden skriver klokkeslættet som halvtimens start. Blokken ligger
+        også på det gitter, så de to skal måles fra det samme nulpunkt.
 
-        Her stod ``starts - now``, og det var rigtigt saa laenge blokkens
-        start selv laa paa ``now + offset``. Da starten blev lagt paa
+        Her stod ``starts - now``, og det var rigtigt så længe blokkens
+        start selv lå på ``now + offset``. Da starten blev lagt på
         halvtimen, kom de to ud af trit med hvor langt vi er inde i
         halvtimen: kl. 04:56 blev en blok kl. 13:00 til 484 minutter, og 484
-        rammer raekken der hedder 12:30. Maerket stod én raekke for tidligt.
+        rammer rækken der hedder 12:30. Mærket stod én række for tidligt.
         """
         slots = self.charge_plan.slots()
         if slots is None:
@@ -1427,8 +1427,8 @@ class Varmeopt:
             if vvb_bottom is None:
                 total += (cold + hot) / 2
             else:
-                # 40 °C er en toemt beholder, 55 en fuldt opvarmet. Uden for
-                # spaendet klemmes der fast paa yderpunktet.
+                # 40 °C er en tømt beholder, 55 en fuldt opvarmet. Uden for
+                # spændet klemmes der fast på yderpunktet.
                 share = min(1.0, max(0.0, (vvb_bottom - 40.0) / 15.0))
                 total += cold + (hot - cold) * share
         return total if total > 0 else None
@@ -1454,8 +1454,8 @@ class Varmeopt:
                 "device_class": "power",
                 "state_class": "measurement",
                 "icon": "mdi:home-thermometer",
-                "kilde": "maalt paa lageret" if fresh else "forbrugskurven",
-                "maalt_kw": _round(self.house_load.kw, 2),
+                "kilde": "målt på lageret" if fresh else "forbrugskurven",
+                "målt_kw": _round(self.house_load.kw, 2),
                 "kurve_kw": _round(
                     self.house_load.curve.predict(outdoor)
                     if outdoor is not None
@@ -1463,14 +1463,14 @@ class Varmeopt:
                     2,
                 ),
                 "kurvepunkter": self.house_load.curve.point_count,
-                # Doegnprofilen for beholderen og spaen. Den er ikke husets
-                # forbrug - den er det der skal traekkes fra for at finde det -
-                # men den afgoer hvor meget der skal lades op til aftenen.
-                "varmtvand_timer_laert": self.house_load.vessels.known_hours,
-                "varmtvand_kwh_i_doegn": _round(
+                # Døgnprofilen for beholderen og spaen. Den er ikke husets
+                # forbrug - den er det der skal trækkes fra for at finde det -
+                # men den afgør hvor meget der skal lades op til aftenen.
+                "varmtvand_timer_lært": self.house_load.vessels.known_hours,
+                "varmtvand_kwh_i_døgn": _round(
                     self.house_load.vessels.kwh_between(now, 24.0), 1
                 ),
-                "afvigelse_mod_maaler_kw": _round(self.house_load.bias_kw, 2),
+                "afvigelse_mod_måler_kw": _round(self.house_load.bias_kw, 2),
                 "note": self.house_load.note,
             },
         )
@@ -1495,9 +1495,9 @@ class Varmeopt:
             "delta_t": _round(balance.load.delta, 1),
             "flow_lh": balance.load.litres_per_hour,
             "cirkulerer": balance.load.circulating,
-            # Hvor tallet kom fra. Flowmaaleren maaler huset direkte; lageret
+            # Hvor tallet kom fra. Flowmåleren måler huset direkte; lageret
             # regner sig frem til det gennem fire kilder og et energiregnskab,
-            # og det staar der saa.
+            # og det står der så.
             "kilde": balance.load.source,
             "lager_kw": _round(self.house_load.kw, 2),
             "lager_alder_min": _round(
@@ -1542,9 +1542,9 @@ class Varmeopt:
             self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
-            # Vagtens binding. Den blev aldrig gemt, saa opholdstiden
+            # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
-            # binding" kunne aldrig udloeses.
+            # binding" kunne aldrig udløses.
             self.store.save(GUARD_FILE, self.guard.to_raw())
             self._dirty = False
             log.debug(
@@ -1572,8 +1572,8 @@ async def run() -> None:
     app = Varmeopt(options, store)
 
     if selfupdate.boot_failed():
-        # Sidste opstart naaede aldrig frem. Den hentede kode faar ikke
-        # lov at proeve igen.
+        # Sidste opstart nåede aldrig frem. Den hentede kode får ikke
+        # lov at prøve igen.
         log.error("forrige opstart fejlede - ruller den hentede kode tilbage")
         selfupdate.rollback()
         selfupdate.clear_boot()
@@ -1584,18 +1584,18 @@ async def run() -> None:
         try:
             ha: HomeAssistant | None = HomeAssistant(session)
         except HaError as exc:
-            # Uden HA er der ingen maalinger at laere af og intet at udstille.
-            # Add-on'en koerer videre, saa den kan proeves lokalt.
+            # Uden HA er der ingen målinger at lære af og intet at udstille.
+            # Add-on'en kører videre, så den kan prøves lokalt.
             log.warning("kører uden Home Assistant: %s", exc)
             ha = None
 
         if not options.entity_outdoor_temp:
             # Uden udetemperatur kan hverken varmekurven eller COP-tabellen
-            # slaa op, og hver cyklus springer over. Det skal staa i loggen
-            # ved opstart og ikke opdages som en tavs raekke advarsler.
+            # slå op, og hver cyklus springer over. Det skal stå i loggen
+            # ved opstart og ikke opdages som en tavs række advarsler.
             log.error(
                 "entity_outdoor_temp er ikke sat - uden udetemperatur kan der "
-                "hverken laeres eller slaas op, og hver cyklus springes over"
+                "hverken læres eller slås op, og hver cyklus springes over"
             )
 
         app.table, note = load_cop_table(store)
@@ -1605,10 +1605,10 @@ async def run() -> None:
         app.curve, curve_note = load_heat_curve(store, app.table, options.dhw_setpoint)
         log.info(curve_note)
 
-        # Azimut har to gaengse konventioner, og de er 180 grader fra
+        # Azimut har to gængse konventioner, og de er 180 grader fra
         # hinanden: kompassets med nord som 0, og den soltekniske med syd
-        # som 0, som den her bruger. Solcast bruger den anden, saa tal
-        # kopieret derfra peger stik modsat. Derfor staar retningerne i ord.
+        # som 0, som den her bruger. Solcast bruger den anden, så tal
+        # kopieret derfra peger stik modsat. Derfor står retningerne i ord.
         geometry = options.geometry
         log.info(
             "solgeometri: solfangere %.0f grader mod %s, solceller %s",
@@ -1634,15 +1634,15 @@ async def run() -> None:
         log.info("ladehastighed: %s", app.charge_rate.note)
         if app.house_load.curve.point_count:
             log.info(
-                "forbrugskurve fra eget lager: %d punkter, %.0f maalinger",
+                "forbrugskurve fra eget lager: %d punkter, %.0f målinger",
                 app.house_load.curve.point_count,
                 app.house_load.curve.sample_count,
             )
         if app.guard.committed:
             log.info(
-                "vagten genoptager binding: %s (hviletiden fortsaetter hvor "
-                "den slap - den gaelder beslutningen, ogsaa naar styringen "
-                "er slaaet fra)",
+                "vagten genoptager binding: %s (hviletiden fortsætter hvor "
+                "den slap - den gælder beslutningen, også når styringen "
+                "er slået fra)",
                 app.guard.committed,
             )
 
@@ -1652,7 +1652,7 @@ async def run() -> None:
             revision = await selfupdate.download(session)
             if revision is None:
                 return "Kunne ikke hente koden. Se loggen for hvorfor."
-            # Svar foerst, genstart bagefter - ellers dor forbindelsen
+            # Svar først, genstart bagefter - ellers dor forbindelsen
             # midt i, og brugeren ser en fejl i stedet for en kvittering.
             selfupdate.mark_boot()
             loop.call_later(1.0, selfupdate.restart)
@@ -1671,8 +1671,8 @@ async def run() -> None:
             house_load=lambda: app.house_load,
         )
         await web.start()
-        log.info("web-UI lytter paa port %d (ingress)", web.port)
-        # Naaede vi hertil, virker koden. Maerket kan ryddes.
+        log.info("web-UI lytter på port %d (ingress)", web.port)
+        # Nåede vi hertil, virker koden. Mærket kan ryddes.
         selfupdate.clear_boot()
 
         stopping = asyncio.Event()
@@ -1695,8 +1695,8 @@ async def run() -> None:
         finally:
             log.info("stopper, gemmer COP-tabellen")
             app.save()
-            # Giv slip foer vi doer. En HA-tilstand forsvinder ikke af sig
-            # selv, saa uden det her ville Node-RED foelge en frossen
+            # Giv slip før vi dør. En HA-tilstand forsvinder ikke af sig
+            # selv, så uden det her ville Node-RED følge en frossen
             # kommando indtil nogen opdagede det.
             if ha is not None:
                 await app.release_control(ha)
@@ -1713,9 +1713,9 @@ async def _self_update_on_start(
     if revision is None or not revision.sha:
         return
     if revision.sha == selfupdate.current():
-        log.info("koden er nyeste paa master (%s)", revision.short)
+        log.info("koden er nyeste på master (%s)", revision.short)
         return
-    log.info("ny kode paa master: %s - %s", revision.short, revision.message)
+    log.info("ny kode på master: %s - %s", revision.short, revision.message)
     if await selfupdate.download(session) is not None:
         selfupdate.mark_boot()
         selfupdate.restart()
@@ -1747,7 +1747,7 @@ def _mode(
         return " + ".join(names), True
     if setpoint is None:
         return ("varme", False) if dhw is not None or spa is not None else (None, None)
-    # Ordet paa skaermen skal sige det samme som kurven gjorde ved sig selv.
+    # Ordet på skærmen skal sige det samme som kurven gjorde ved sig selv.
     if curve.is_dhw(setpoint, outdoor):
         return "varmt vand / spa (gættet)", True
     return "varme", False
@@ -1781,15 +1781,15 @@ if __name__ == "__main__":
 
 
 def _toggle_standby(app: Any, arm: bool) -> str:
-    """Aabn eller luk et staatabsvindue, og gem resultatet med det samme.
+    """Aabn eller luk et ståtabsvindue, og gem resultatet med det samme.
 
-    Gemmes der ikke her, ville en maaling der lige er afsluttet kunne gaa
-    tabt ved en genstart inden naeste automatiske gemning - og den maaling
+    Gemmes der ikke her, ville en måling der lige er afsluttet kunne gå
+    tabt ved en genstart inden næste automatiske gemning - og den måling
     kostede en nat uden cirkulation.
     """
     now = time.time()
     note = app.standby.arm(now) if arm else app.standby.disarm(now)
-    log.info("staatabsmaaling: %s", note)
+    log.info("ståtabsmåling: %s", note)
     if not arm:
         app._dirty = True
         app.save()

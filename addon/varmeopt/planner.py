@@ -50,8 +50,8 @@ DEFAULT_HORIZON_MINUTES = 24 * 60
 
 SLOT_MINUTES = 30
 
-# Saa lang en billig pause maa der vaere midt i et dyrt vindue, foer det
-# taeller som to vinduer. Huset traekker videre af lageret i pausen, saa en
+# Så lang en billig pause må der være midt i et dyrt vindue, før det
+# tæller som to vinduer. Huset trækker videre af lageret i pausen, så en
 # enkelt halvtime deler ikke en aften i to.
 MAX_GAP_IN_WINDOW = 60
 
@@ -65,31 +65,31 @@ class Decision:
     pellet_price: float
     charge: bool = False
     charge_kwh: float | None = None
-    # Hvad der skal lades i alt, ogsaa naar svaret er "vent". ``charge_kwh``
+    # Hvad der skal lades i alt, også når svaret er "vent". ``charge_kwh``
     # er hvad der lades *nu*; det her er hensigten, og det er den planen
     # tegner "lad op" efter.
     planned_kwh: float | None = None
     # Hvor mange minutter der er til det *bliver* dyrt - ikke til det er
-    # dyrest. Det er den frist en opladning skal vaere faerdig inden.
+    # dyrest. Det er den frist en opladning skal være færdig inden.
     window_starts_in: int | None = None
     # Hvem satte den frist: prisen eller uret. De to betyder ikke det samme
-    # paa en skaerm. "Stroemmen bliver dyr kl. 17" er en paastand om
-    # priserne, og den er forkert naar det er badevandet der har sat
+    # på en skærm. "Strømmen bliver dyr kl. 17" er en påstand om
+    # priserne, og den er forkert når det er badevandet der har sat
     # tidspunktet.
     deadline_on_the_clock: bool = False
-    # Det dyre straek der lades op imod: hvornaar det begynder, og hvor
-    # laenge det varer. Det er ikke det samme som ``window_minutes``, som er
+    # Det dyre stræk der lades op imod: hvornår det begynder, og hvor
+    # længe det varer. Det er ikke det samme som ``window_minutes``, som er
     # den *dyreste* halvtime - og forskellen er hele grunden til at flaget
-    # flimrede. En blok hoerer til et straek, ikke til en halvtime, og
-    # ``charge.py`` bruger de to tal til at kende straekket igen naeste minut.
+    # flimrede. En blok hører til et stræk, ikke til en halvtime, og
+    # ``charge.py`` bruger de to tal til at kende strækket igen næste minut.
     dear_starts_in: int | None = None
     dear_span_minutes: int | None = None
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
     # Svaret i ét kort udsagn, sat af den gren der ved hvad der skete.
-    # ``reason`` er hele historien; det her er den linje der kan staa paa en
-    # skaerm uden at nogen skal laese sig frem til pointen.
+    # ``reason`` er hele historien; det her er den linje der kan stå på en
+    # skærm uden at nogen skal læse sig frem til pointen.
     charge_state: str = ""
     # Hvad opladningen er *til*: hvor meget lageret mangler til hver af de to,
     # talt ved hver sin temperatur. Varmt vand og spa kan kun tage af den del
@@ -126,8 +126,8 @@ class Shortfall:
     # Hvad lageret har til hver af dem, talt ved hver sin temperatur.
     dhw_have: float = 0.0
     space_have: float = 0.0
-    # Og hvad der saa mangler. Ikke bare differensen: varmtvandets mangel
-    # maales over brugstemperaturen, men det der skal lades, er energi *ind
+    # Og hvad der så mangler. Ikke bare differensen: varmtvandets mangel
+    # måles over brugstemperaturen, men det der skal lades, er energi *ind
     # i* lageret - se ``Planner._shortfall``.
     dhw_kwh: float = 0.0
     space_kwh: float = 0.0
@@ -150,30 +150,30 @@ class Projection:
     """
 
     minutes: int
-    # Marginalprisen: den af raapriserne der faktisk gaelder i timen.
-    # Raapriserne foelger med, saa man kan se hvor den kommer fra i stedet
+    # Marginalprisen: den af råpriserne der faktisk gælder i timen.
+    # Råpriserne følger med, så man kan se hvor den kommer fra i stedet
     # for at skulle regne det ud af begrundelsen.
     electricity: float
     reason: str
-    # Hvor stroemmen kommer fra i den halvtime: "net", "batteri" eller
-    # "eksport". Den staar her som sit eget felt, saa skaermen ikke skal
+    # Hvor strømmen kommer fra i den halvtime: "net", "batteri" eller
+    # "eksport". Den står her som sit eget felt, så skærmen ikke skal
     # udlede en kilde ved at klippe begrundelsen ved et kolon.
     power: str = "net"
     import_price: float | None = None
     export_price: float | None = None
     heat_price: float | None = None
-    # Predbats egen raekke: hvad planen siger, og ved hvilken ladetilstand.
+    # Predbats egen række: hvad planen siger, og ved hvilken ladetilstand.
     # Uden de to kan man ikke se *hvorfor* kilden er som den er - at der fx
-    # staar hold charge ved 37 % - uden at gaa over i Predbats egen tabel.
+    # står hold charge ved 37 % - uden at gå over i Predbats egen tabel.
     state: str = ""
     soc_percent: float | None = None
     source: str = "varmepumpe"
-    # Regner planlaeggeren med at lade op i den her halvtime? Det er en
-    # hensigt og ikke et loefte: den regnes forfra hvert minut, og bliver
-    # lageret fuldt hurtigere end ventet, forsvinder maerkerne af sig selv.
+    # Regner planlæggeren med at lade op i den her halvtime? Det er en
+    # hensigt og ikke et løfte: den regnes forfra hvert minut, og bliver
+    # lageret fuldt hurtigere end ventet, forsvinder mærkerne af sig selv.
     charging: bool = False
     # Hvorfor *den kilde* - ikke hvor prisen kommer fra. Det er den
-    # forklaring der hoerer hjemme paa en raekke hvor noget aendrer sig.
+    # forklaring der hører hjemme på en række hvor noget ændrer sig.
     note: str = ""
     target: bool = False
 
@@ -193,11 +193,11 @@ def _finite(value: Any) -> bool:
 def _on_sun(price: Any, grid: Any) -> bool:
     """Er det solen der leverer lige nu?
 
-    To veje til det samme svar, og de daekker hver sit tilfaelde. Prisen
-    siger det naar batteriet er ude af spillet og maaleren ser panelerne
-    baere huset. Maaleren siger det ogsaa naar batteriet staar frit - der er
-    prisen batteriets, men stroemmen i ledningen er stadig solens. Begge
-    taeller, for spoergsmaalet er hvor stroemmen kommer fra.
+    To veje til det samme svar, og de dækker hver sit tilfælde. Prisen
+    siger det når batteriet er ude af spillet og måleren ser panelerne
+    bære huset. Måleren siger det også når batteriet står frit - der er
+    prisen batteriets, men strømmen i ledningen er stadig solens. Begge
+    tæller, for spørgsmålet er hvor strømmen kommer fra.
     """
     if price is not None and getattr(price, "source", None) == SUN:
         return True
@@ -205,22 +205,22 @@ def _on_sun(price: Any, grid: Any) -> bool:
 
 
 def minutes_until_hour(hour: float | None, now: float) -> int | None:
-    """Minutter til naeste gang klokken slaar ``hour`` — i lokal tid.
+    """Minutter til næste gang klokken slår ``hour`` — i lokal tid.
 
-    Lokal tid, ikke UTC: fristen er et klokkeslaet paa en vaeg, og den skal
-    flytte sig med sommertiden ligesom badevandet goer.
+    Lokal tid, ikke UTC: fristen er et klokkeslæt på en væg, og den skal
+    flytte sig med sommertiden ligesom badevandet gør.
 
-    Et klokkeslaet uden for doegnet slaar fristen fra - det er saadan
-    indstillingen siges fra. Er tidspunktet passeret i dag, gaelder fristen i
-    morgen, og saa ligger den laengere ude end planlaegningshorisonten: den
-    binder kun den del af doegnet hvor den er foran os.
+    Et klokkeslæt uden for døgnet slår fristen fra - det er sådan
+    indstillingen siges fra. Er tidspunktet passeret i dag, gælder fristen i
+    morgen, og så ligger den længere ude end planlægningshorisonten: den
+    binder kun den del af døgnet hvor den er foran os.
     """
     if hour is None or not _finite(hour) or not 0 <= hour < 24:
         return None
     local = time.localtime(now)
     minutes_now = local.tm_hour * 60 + local.tm_min
     ahead = (int(round(hour * 60)) - minutes_now) % (24 * 60)
-    # Staar vi praecis paa fristen, er den her doegns frist forbi.
+    # Står vi præcis på fristen, er den her døgns frist forbi.
     return ahead or 24 * 60
 
 
@@ -234,9 +234,9 @@ def source_now(
     """
     if heat_price is None:
         return "varmepumpe", "ingen COP — antager varmepumpe"
-    # Slitagen staar med i tallet, men ikke i teksten. At varmepumpevarme
+    # Slitagen står med i tallet, men ikke i teksten. At varmepumpevarme
     # koster det den koster, er en egenskab ved prisen - ikke en oplysning der
-    # hoerer hjemme i hver eneste linje.
+    # hører hjemme i hver eneste linje.
     if heat_price > pellet_price + hysteresis:
         return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
     if heat_price < pellet_price - hysteresis:
@@ -260,9 +260,9 @@ class Planner:
     ) -> None:
         self.pellet_price = pellet_price
         self.hysteresis = hysteresis
-        # At koere varmepumpen koster noget ud over stroemmen. Tallet kommer
+        # At køre varmepumpen koster noget ud over strømmen. Tallet kommer
         # fra den ukoblede v4-node i Node-RED, hvor det var en konstant - her
-        # er det en indstilling, saa det kan efterproeves mod virkeligheden.
+        # er det en indstilling, så det kan efterprøves mod virkeligheden.
         self.wear = wear_kr_per_kwh
         self.min_charge_kwh = min_charge_kwh
         self.charge_kw = charge_kw
@@ -275,14 +275,14 @@ class Planner:
     # ------------------------------------------------------------------ pris
 
     def _when(self, minutes: float) -> str:
-        """Et tidspunkt forude, skrevet saa det kan laeses.
+        """Et tidspunkt forude, skrevet så det kan læses.
 
-        «kl. 13:26» kan laeses; «om 510 min» skal regnes - og saa bliver det
-        ikke laest. Uret kommer udefra, saa planlaeggeren bliver ved med at
-        vaere til at proeve af uden at nogen skal stille en systemklokke; uden
-        et ur svarer den som foer.
+        «kl. 13:26» kan læses; «om 510 min» skal regnes - og så bliver det
+        ikke læst. Uret kommer udefra, så planlæggeren bliver ved med at
+        være til at prøve af uden at nogen skal stille en systemklokke; uden
+        et ur svarer den som før.
 
-        Ét sted at formatere, saa loggen, sensorens attributter og nu-siden
+        Ét sted at formatere, så loggen, sensorens attributter og nu-siden
         bliver ved med at sige det samme.
         """
         if self.clock is not None:
@@ -294,10 +294,10 @@ class Planner:
     def _cop_for(self, minutes: int, cop_now: float | None, cop_later: Any) -> float | None:
         """COP i en given time.
 
-        ``cop_later`` maa gerne vaere et opslag frem for et tal. Med en
-        vejrudsigt faar hver time sin egen: forudsagt temperatur gennem
+        ``cop_later`` må gerne være et opslag frem for et tal. Med en
+        vejrudsigt får hver time sin egen: forudsagt temperatur gennem
         varmekurven giver setpunktet, og setpunktet giver COP'en. Uden
-        udsigt falder vi tilbage paa den vi har nu.
+        udsigt falder vi tilbage på den vi har nu.
         """
         if callable(cop_later):
             value = cop_later(minutes)
@@ -359,17 +359,17 @@ class Planner:
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
-        ``deadline_minutes`` er fristen paa uret: minutter til lageret skal
-        vaere fyldt. Den er ikke et prisargument og skal ikke udledes af et -
+        ``deadline_minutes`` er fristen på uret: minutter til lageret skal
+        være fyldt. Den er ikke et prisargument og skal ikke udledes af et -
         se ``_frist``.
 
-        ``demand_kw`` er husets forbrug *nu*, maalt. ``demand_kw_at`` er et
-        opslag: hvad huset ventes at traekke om saa mange minutter. Se
-        ``_displaced_kwh`` for hvorfor de to ikke er det samme spoergsmaal.
+        ``demand_kw`` er husets forbrug *nu*, målt. ``demand_kw_at`` er et
+        opslag: hvad huset ventes at trække om så mange minutter. Se
+        ``_displaced_kwh`` for hvorfor de to ikke er det samme spørgsmål.
 
-        ``charge_cop_at`` er COP'en ved *ladetemperaturen*. En blok koerer
-        56 grader fremloeb - derfor kan varmen bagefter ogsaa bruges til bad -
-        og det er en anden virkningsgrad end den rumvarmen koeres paa. Se
+        ``charge_cop_at`` er COP'en ved *ladetemperaturen*. En blok kører
+        56 grader fremløb - derfor kan varmen bagefter også bruges til bad -
+        og det er en anden virkningsgrad end den rumvarmen køres på. Se
         ``_charge_cop``.
 
         ``grid`` er den fysiske strømretning. Den gælder kun indeværende
@@ -396,10 +396,10 @@ class Planner:
         # ``vp_now``, som er hvad den varme huset vil have nu, koster.
         vp_charge = self._charge_price(0, now, cop_now, cop_later, charge_cop_at)
 
-        # Spoergsmaal 2: findes der en senere time hvor varmen bliver dyrere?
+        # Spørgsmål 2: findes der en senere time hvor varmen bliver dyrere?
         #
         # Nu-benet er opladningens egen pris, ikke rumvarmens. Marginen er
-        # forskellen mellem at *fylde lageret nu* og at lave varmen naar den
+        # forskellen mellem at *fylde lageret nu* og at lave varmen når den
         # skal bruges - to forskellige temperaturer, to forskellige COP'er.
         best_gap = 0.0
         best_when = None
@@ -412,23 +412,23 @@ class Planner:
             if gap > best_gap:
                 best_gap, best_when = gap, minutes
 
-        # Slitagen er allerede inde i begge led gennem ``heat_price``, saa
-        # den maa ikke traekkes fra igen. Skal varmen alligevel laves af
-        # varmepumpen, gaar den ud af sig selv - det er den samme slitage
-        # om pumpen koerer nu eller om tre timer. Skal den ellers laves af
-        # pillefyret, staar den tilbage i marginen, hvor den hoerer hjemme.
+        # Slitagen er allerede inde i begge led gennem ``heat_price``, så
+        # den må ikke trækkes fra igen. Skal varmen alligevel laves af
+        # varmepumpen, går den ud af sig selv - det er den samme slitage
+        # om pumpen kører nu eller om tre timer. Skal den ellers laves af
+        # pillefyret, står den tilbage i marginen, hvor den hører hjemme.
         margin = best_gap
 
-        # Straekket der skal daekkes, og fristen det skal vaere klart inden.
-        # Begge dele hoerer til her, hvor de kan regnes én gang og bruges af
-        # alle spoergsmaalene nedenfor: om det kan vente, hvor meget der er
+        # Strækket der skal dækkes, og fristen det skal være klart inden.
+        # Begge dele hører til her, hvor de kan regnes én gang og bruges af
+        # alle spørgsmålene nedenfor: om det kan vente, hvor meget der er
         # tid til, og hvor meget der skal bruges.
         #
-        # Det regnes *foer* den foerste udgang, og det er med vilje. Staar vi
-        # inde i et dyrt straek, er der ingen dyrere time forude, og saa gaar
-        # turen ud ad den her doer - men det er praecis dér ``charge.py``
-        # skal kunne se hvilket straek vi er inde i. Uden det ville spaerren
-        # miste hukommelsen paa de eneste cyklusser den findes for.
+        # Det regnes *før* den første udgang, og det er med vilje. Står vi
+        # inde i et dyrt stræk, er der ingen dyrere time forude, og så går
+        # turen ud ad den her dør - men det er præcis dér ``charge.py``
+        # skal kunne se hvilket stræk vi er inde i. Uden det ville spærren
+        # miste hukommelsen på de eneste cyklusser den findes for.
         starts, span = self._dear_stretch(plan, vp_now, cop_now, cop_later)
         stretch: dict[str, Any] = (
             {"dear_starts_in": starts, "dear_span_minutes": span}
@@ -448,33 +448,33 @@ class Planner:
         frist = self._frist(priced, deadline_minutes)
         on_the_clock = frist != priced
 
-        # Spoergsmaal 2a: er forskellen stor nok til at handle paa?
+        # Spørgsmål 2a: er forskellen stor nok til at handle på?
         #
-        # Her stod intet, og saa var enhver positiv forskel nok. En margin
-        # paa 0,04 kr/kWh mod en halvtime ti timer ude satte 13 kWh i
-        # bevaegelse - og de 0,04 er mindre end usikkerheden paa de tal de er
+        # Her stod intet, og så var enhver positiv forskel nok. En margin
+        # på 0,04 kr/kWh mod en halvtime ti timer ude satte 13 kWh i
+        # bevægelse - og de 0,04 er mindre end usikkerheden på de tal de er
         # regnet af: batteriets genanskaffelsespris, en COP fra en tabel og
         # Predbats plan for i morgen tidlig.
         #
         # Snittet er det samme som kildevalget bruger. Under det kan tallene
-        # ikke skelne de to muligheder, og en plan der handler paa stoej,
-        # handler hele tiden - hver aften faar man flyttet en lagerfuld varme
+        # ikke skelne de to muligheder, og en plan der handler på støj,
+        # handler hele tiden - hver aften får man flyttet en lagerfuld varme
         # rundt for at hente en forskel der ikke er der.
         #
-        # Og den gaelder ogsaa naar uret har sat fristen. Her stod
-        # ``and not on_the_clock``, saa en frist kunne tvinge en opladning
-        # igennem paa en margin ingen kunne skelne fra stoej. Det blev
-        # skrevet den 9. september, hvor hele doegnet laa paa 1,18 kr og der
+        # Og den gælder også når uret har sat fristen. Her stod
+        # ``and not on_the_clock``, så en frist kunne tvinge en opladning
+        # igennem på en margin ingen kunne skelne fra støj. Det blev
+        # skrevet den 9. september, hvor hele døgnet lå på 1,18 kr og der
         # kun var 0,03 at hente - men den flade dag var selv en fejl: prisen
-        # var forkert, og horisonten paa 12 timer kunne ikke se aftenen.
+        # var forkert, og horisonten på 12 timer kunne ikke se aftenen.
         #
-        # Begge dele er rettet, og saa staar valget rent: fristen siger
-        # *hvornaar* en opladning skal vaere faerdig, ikke *at* der skal
+        # Begge dele er rettet, og så står valget rent: fristen siger
+        # *hvornår* en opladning skal være færdig, ikke *at* der skal
         # lades. Kan det ikke svare sig, lades der ikke - heller ikke selv om
-        # klokken naermer sig sytten. Konsekvensen skal staa her: paa et
-        # virkelig fladt doegn bliver lageret ikke fyldt paa forhaand, og saa
-        # starter UVR'en selv pumpen ved det setpunkt fremloebet kraever. Det
-        # er billigere end at flytte en lagerfuld varme for tre oere.
+        # klokken nærmer sig sytten. Konsekvensen skal stå her: på et
+        # virkelig fladt døgn bliver lageret ikke fyldt på forhånd, og så
+        # starter UVR'en selv pumpen ved det setpunkt fremløbet kræver. Det
+        # er billigere end at flytte en lagerfuld varme for tre øre.
         if margin <= self.hysteresis:
             return _with(
                 decision,
@@ -489,18 +489,18 @@ class Planner:
                 ),
             )
 
-        # Spoergsmaal 3: hvor meget maa der lades?
+        # Spørgsmål 3: hvor meget må der lades?
         room = headroom_kwh if _finite(headroom_kwh) else 0.0
         if _finite(solar_expected_kwh):
-            # Solen faar sit foerst - dens varme er gratis. Men de to
+            # Solen får sit først - dens varme er gratis. Men de to
             # konkurrerer kun om pladsen under varmepumpens loft: solfangeren
             # kan presse videre til 90 grader, hvor pumpen stopper ved 60, og
             # den plads kan en opladning ikke tage fra den.
             #
             # Her stod hele den forventede solvarme, og det kostede en billig
             # formiddag hver gang eftermiddagen tegnede til sol. Den 6.
-            # september steg lageret 11,5 -> 25 kWh paa sol alene, og der var
-            # plads til baade den og en opladning hele dagen.
+            # september steg lageret 11,5 -> 25 kWh på sol alene, og der var
+            # plads til både den og en opladning hele dagen.
             above = 0.0
             if _finite(peak_headroom_kwh) and _finite(headroom_kwh):
                 above = max(0.0, peak_headroom_kwh - headroom_kwh)
@@ -521,37 +521,37 @@ class Planner:
                 ),
             )
 
-        # Gevinsten gaelder kun den varme der faktisk bliver fortraengt mens
-        # prisen er hoej - ikke hele lagerpladsen. Her stod ``margin * room``,
+        # Gevinsten gælder kun den varme der faktisk bliver fortrængt mens
+        # prisen er høj - ikke hele lagerpladsen. Her stod ``margin * room``,
         # og det overdrev 2-3 gange: 24 kWh lagerplads mod en dyr halvtime
-        # hvor huset bruger 3 kW er 1,5 kWh fortraengt varme, ikke 24.
+        # hvor huset bruger 3 kW er 1,5 kWh fortrængt varme, ikke 24.
         displaced = self._displaced_kwh(span, demand_kw, demand_kw_at, starts)
-        # Varmt vand og spa over det samme spaend. Doegnprofilen ved hvornaar
-        # de koerer; her spoerges den bare om de timer der er dyre.
+        # Varmt vand og spa over det samme spænd. Døgnprofilen ved hvornår
+        # de kører; her spørges den bare om de timer der er dyre.
         dhw_kwh = None
         if dhw_kwh_over is not None and span > 0:
-            # Profilen skal laeses over *vinduet*, ikke fra nu. Lades der kl.
+            # Profilen skal læses over *vinduet*, ikke fra nu. Lades der kl.
             # 11 mod en eksport kl. 18-20, er det de to timers varmtvand der
-            # skal daekkes - ikke de naeste to timers.
+            # skal dækkes - ikke de næste to timers.
             #
-            # Har uret sat fristen, laeses den fra fristen og frem: der bades
-            # kl. 19, uanset om den halvtime tilfaeldigvis er den dyreste, og
-            # et lager der foerst skal kunne lave badevand fra kl. 21, kan
-            # ikke lave det bad. Rumvarmen taeller stadig kun i det dyre -
+            # Har uret sat fristen, læses den fra fristen og frem: der bades
+            # kl. 19, uanset om den halvtime tilfældigvis er den dyreste, og
+            # et lager der først skal kunne lave badevand fra kl. 21, kan
+            # ikke lave det bad. Rumvarmen tæller stadig kun i det dyre -
             # den kan laves billigt lige inden, og den venter gerne.
             first = frist if on_the_clock and frist < starts else starts
             dhw_kwh = dhw_kwh_over(first, (starts + span - first) / 60)
 
-        # Og kun den del af den varme der ikke allerede staar i tankene. Den
-        # varme er lavet og betalt, og den bliver brugt foerst.
+        # Og kun den del af den varme der ikke allerede står i tankene. Den
+        # varme er lavet og betalt, og den bliver brugt først.
         #
-        # Men den maa taelles ved den temperatur den skal bruges ved, og det
-        # er her det gik galt den 6. september. Tankene stod paa 45/45/43 og
-        # 47/39/31 grader: 13,3 kWh over de 30 radiatorkredsen koerer paa, og
+        # Men den må tælles ved den temperatur den skal bruges ved, og det
+        # er her det gik galt den 6. september. Tankene stod på 45/45/43 og
+        # 47/39/31 grader: 13,3 kWh over de 30 radiatorkredsen kører på, og
         # *nul* over 50. Koden lagde de 13,3 op mod en aften der delvis er
         # varmt vand og sagde "intet at lade op til" - mens lageret ikke
-        # kunne lave et eneste bad. Stroemmen kostede 0,37 om formiddagen og
-        # 1,57 om aftenen, hvor den kunne vaere solgt.
+        # kunne lave et eneste bad. Strømmen kostede 0,37 om formiddagen og
+        # 1,57 om aftenen, hvor den kunne være solgt.
         need = displaced
         driver = ""
         short = None
@@ -576,31 +576,31 @@ class Planner:
                 )
 
         # Der lades det der skal bruges - ikke hele lagerpladsen. Mindre end
-        # mindstetraekket kan pumpen ikke levere, saa der rundes op til det;
-        # gevinsten gaelder stadig kun den varme der faktisk fortraenges.
+        # mindstetrækket kan pumpen ikke levere, så der rundes op til det;
+        # gevinsten gælder stadig kun den varme der faktisk fortrænges.
         want = room if need is None else min(room, max(need, self.min_charge_kwh))
 
-        # Spoergsmaal 3b: er *nu* overhovedet det rigtige tidspunkt?
+        # Spørgsmål 3b: er *nu* overhovedet det rigtige tidspunkt?
         #
-        # Her stod intet, og det var en dyr tavshed. Loekken ovenfor finder
-        # den dyreste time forude, men spurgte aldrig om der laa en billigere
+        # Her stod intet, og det var en dyr tavshed. Løkken ovenfor finder
+        # den dyreste time forude, men spurgte aldrig om der lå en billigere
         # halvtime imellem. Med priserne 1,00 -> 0,30 -> 0,30 -> 3,00 lader
-        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter paa 0,30 -
-        # 4,20 kr smidt vaek paa ét traek, og lageret er fuldt naar den
+        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter på 0,30 -
+        # 4,20 kr smidt væk på ét træk, og lageret er fuldt når den
         # billige time kommer.
         #
-        # Spoergsmaalet stod foer *foer* maengden blev regnet, og saa var
+        # Spørgsmålet stod før *før* mængden blev regnet, og så var
         # hensigten ukendt mens den ventede. Planen kunne derfor ikke tegne
-        # "lad op" paa de halvtimer den ventede paa - og det er netop dem man
+        # "lad op" på de halvtimer den ventede på - og det er netop dem man
         # vil se, inden styringen kobles til.
         cheaper = self._cheaper_moment_before(
             plan, frist, vp_charge, cop_now, cop_later, charge_cop_at
         )
-        # Kommer stroemmen fra solen lige nu, ventes der ikke. Den billigere
-        # halvtime forude er en anden slags stroem end den der staar paa
-        # taget i det her oejeblik, og lageret skal alligevel vaere fyldt
+        # Kommer strømmen fra solen lige nu, ventes der ikke. Den billigere
+        # halvtime forude er en anden slags strøm end den der står på
+        # taget i det her øjeblik, og lageret skal alligevel være fyldt
         # inden fristen: er det solen der leverer, skal tankene bare fyldes.
-        # Det er kun naar der lades fra nettet at timen skal vaere den
+        # Det er kun når der lades fra nettet at timen skal være den
         # billigste.
         if _on_sun(price_now, grid):
             cheaper = None
@@ -627,27 +627,27 @@ class Planner:
                     f"{why}; venter - {self._when(when)} koster varmen "
                     f"{price:.2f} mod {vp_now:.2f} nu, og der er stadig tid inden "
                     + (
-                        f"lageret skal vaere fyldt {self._when(frist)}"
+                        f"lageret skal være fyldt {self._when(frist)}"
                         if on_the_clock
                         else f"toppen {self._when(best_when)}"
                     )
                 ),
             )
-        # Gevinsten gaelder det der faktisk bliver ladet. Her stod ``need``,
-        # og naar pladsen var mindre end behovet, lovede den en besparelse paa
+        # Gevinsten gælder det der faktisk bliver ladet. Her stod ``need``,
+        # og når pladsen var mindre end behovet, lovede den en besparelse på
         # varme der aldrig kom i tanken: "lad 5,9 kWh nu og spar 13,02 kr" er
-        # 2,2 kr/kWh, hvor marginen hoejst kan vaere forskellen op til
+        # 2,2 kr/kWh, hvor marginen højst kan være forskellen op til
         # pillefyret.
         saving = margin * (want if need is None else min(want, need))
 
-        # Raekker det ikke hele vejen, skal det staa der. Her blev maengden
+        # Rækker det ikke hele vejen, skal det stå der. Her blev mængden
         # kappet i stilhed af pladsen eller af tiden inden prisen stiger, og
-        # saa saa en halv loesning ud som en hel: lageret loeber toert midt i
-        # det dyre vindue, og UVR'en starter varmepumpen selv - praecis det
-        # opladningen var sat i verden for at undgaa.
+        # så så en halv løsning ud som en hel: lageret løber tørt midt i
+        # det dyre vindue, og UVR'en starter varmepumpen selv - præcis det
+        # opladningen var sat i verden for at undgå.
         shortfall = ""
         if need is not None and want + 0.05 < need:
-            shortfall = f" — daekker ikke vinduet, mangler {need - want:.1f} kWh"
+            shortfall = f" — dækker ikke vinduet, mangler {need - want:.1f} kWh"
 
         return _with(
             decision,
@@ -667,7 +667,7 @@ class Planner:
             space_need_kwh=None if short is None else short.space_need,
             space_have_kwh=None if short is None else short.space_have,
             reason=(
-                f"{why}; lad {want:.1f} kWh{driver} nu — lageret skal vaere "
+                f"{why}; lad {want:.1f} kWh{driver} nu — lageret skal være "
                 f"fyldt {self._when(frist)}{shortfall}"
                 if on_the_clock
                 else (
@@ -677,25 +677,25 @@ class Planner:
             ),
         )
 
-    # ------------------------------------------------------- hjaelp til valget
+    # ------------------------------------------------------- hjælp til valget
 
     def _charge_cop(
         self, minutes: int, cop_now: Any, cop_later: Any, charge_cop_at: Any
     ) -> float | None:
-        """COP'en ved ladetemperaturen, om saa mange minutter.
+        """COP'en ved ladetemperaturen, om så mange minutter.
 
-        En blok koerer 56 grader fremloeb, og det er derfor varmen bagefter
-        ogsaa kan bruges til bad. Men ``_cop_at`` gaar udetemperatur ->
-        varmekurven -> setpunkt, altsaa **rumvarmens** setpunkt - 38,4 grader
-        den 10. september. Hele opladningens oekonomi blev regnet paa en
-        virkningsgrad anlaegget ikke koerer med naar det lader op.
+        En blok kører 56 grader fremløb, og det er derfor varmen bagefter
+        også kan bruges til bad. Men ``_cop_at`` går udetemperatur ->
+        varmekurven -> setpunkt, altså **rumvarmens** setpunkt - 38,4 grader
+        den 10. september. Hele opladningens økonomi blev regnet på en
+        virkningsgrad anlægget ikke kører med når det lader op.
 
-        I mildt vejr er forskellen faa procent: ved 13 grader ude staar
-        tabellen paa 4,20 ved 56 og 4,82 ved 38. Om vinteren, hvor kurven
-        kalder paa 30-35, bliver spaendet stort - og saa lover regnestykket en
+        I mildt vejr er forskellen få procent: ved 13 grader ude står
+        tabellen på 4,20 ved 56 og 4,82 ved 38. Om vinteren, hvor kurven
+        kalder på 30-35, bliver spændet stort - og så lover regnestykket en
         billigere opladning end der findes.
 
-        Svarer opslaget ikke, falder vi tilbage paa rumvarmens COP. Det er
+        Svarer opslaget ikke, falder vi tilbage på rumvarmens COP. Det er
         det gamle svar, og det er bedre end ingenting.
         """
         if charge_cop_at is not None:
@@ -712,7 +712,7 @@ class Planner:
         cop_later: Any,
         charge_cop_at: Any,
     ) -> float:
-        """Hvad det koster at laegge en kWh i lageret i den halvtime."""
+        """Hvad det koster at lægge en kWh i lageret i den halvtime."""
         price = self.heat_price(
             electricity, self._charge_cop(minutes, cop_now, cop_later, charge_cop_at)
         )
@@ -732,13 +732,13 @@ class Planner:
     ) -> tuple[int, float] | None:
         """Ligger der en billigere halvtime mellem nu og toppen?
 
-        Begge led er opladningens egen pris. Spoergsmaalet er ikke om varmen
+        Begge led er opladningens egen pris. Spørgsmålet er ikke om varmen
         bliver billigere, men om det bliver billigere at *fylde lageret*, og
         det sker ved samme temperatur nu og om en time.
 
-        Den skal ogsaa vaere til at naa: der skal vaere tid nok tilbage til at
-        lade mindstetraekket inden prisen stiger. Ellers er en billigere
-        halvtime uden vaerdi - man naar ikke at bruge den.
+        Den skal også være til at nå: der skal være tid nok tilbage til at
+        lade mindstetrækket inden prisen stiger. Ellers er en billigere
+        halvtime uden værdi - man når ikke at bruge den.
         """
         best: tuple[int, float] | None = None
         for minutes in range(SLOT_MINUTES, best_when, SLOT_MINUTES):
@@ -779,16 +779,16 @@ class Planner:
         """
         warm = stored_kwh if _finite(stored_kwh) else 0.0
         hot = hot_kwh if _finite(hot_kwh) else 0.0
-        # Uden en profil ved vi ikke hvor meget varmt vand der kommer, og saa
-        # er nul det eneste aerlige - men saa siger begrundelsen det ogsaa.
+        # Uden en profil ved vi ikke hvor meget varmt vand der kommer, og så
+        # er nul det eneste ærlige - men så siger begrundelsen det også.
         dhw = dhw_kwh if _finite(dhw_kwh) else 0.0
 
-        # Varmtvandets underskud maales over 55 grader, men det der skal
+        # Varmtvandets underskud måles over 55 grader, men det der skal
         # lades, er energi *ind i* lageret - og de to er ikke det samme tal.
-        # Vil man have 6 kWh staaende over 55 i et lager paa 45, skal man
-        # baade betale loeftet fra 45 til 55 og de 6 kWh ovenpaa. Her stod
+        # Vil man have 6 kWh stående over 55 i et lager på 45, skal man
+        # både betale løftet fra 45 til 55 og de 6 kWh ovenpå. Her stod
         # forskellen, og opladningen blev derfor systematisk for lille
-        # praecis naar varmt vand var det der drev den.
+        # præcis når varmt vand var det der drev den.
         missing = max(0.0, dhw - hot)
         if missing <= 0:
             dhw_short = 0.0
@@ -796,8 +796,8 @@ class Planner:
             dhw_short = max(missing, dhw_input_for(dhw))
         else:
             dhw_short = missing
-        # Den varme del taeller med i den lune: bruges den til bad, er den
-        # ikke ogsaa til raadighed for gulvet.
+        # Den varme del tæller med i den lune: bruges den til bad, er den
+        # ikke også til rådighed for gulvet.
         space_have = max(0.0, warm - min(dhw, hot))
         space_short = max(0.0, displaced - space_have)
 
@@ -831,27 +831,27 @@ class Planner:
         )
 
     def _frist(self, priced: int, deadline_minutes: float | None) -> int:
-        """Hvornaar skal opladningen vaere faerdig?
+        """Hvornår skal opladningen være færdig?
 
-        To ting kan saette fristen, og den strammeste vinder.
+        To ting kan sætte fristen, og den strammeste vinder.
 
-        Prisen saetter den ene: der hvor det *bliver* dyrt. Uret saetter den
-        anden, og den kender prisen ikke. Lageret skal vaere fyldt kl. 17,
-        fordi der bades om aftenen og resten af doegnet koeres paa
-        restvarmen - og om vinteren er tankene alligevel toemt naar natten,
-        og dermed den billige stroem, kommer. Den frist kan ikke udledes af
-        en prisraekke, og den skal derfor staa som en indstilling.
+        Prisen sætter den ene: der hvor det *bliver* dyrt. Uret sætter den
+        anden, og den kender prisen ikke. Lageret skal være fyldt kl. 17,
+        fordi der bades om aftenen og resten af døgnet køres på
+        restvarmen - og om vinteren er tankene alligevel tømt når natten,
+        og dermed den billige strøm, kommer. Den frist kan ikke udledes af
+        en prisrække, og den skal derfor stå som en indstilling.
 
-        Her stod ``best_when`` - den *dyreste* halvtime - i baade
-        tidsregnestykket og ventegrenen, og det var for loest. Med et dyrt
-        vindue fra 17 til 22, dyrest kl. 20:30, ventede planen gerne paa en
-        billigere halvtime kl. 18: den ligger jo foer den dyreste. Saa stod
+        Her stod ``best_when`` - den *dyreste* halvtime - i både
+        tidsregnestykket og ventegrenen, og det var for løst. Med et dyrt
+        vindue fra 17 til 22, dyrest kl. 20:30, ventede planen gerne på en
+        billigere halvtime kl. 18: den ligger jo før den dyreste. Så stod
         lageret tomt fra sytten, midt i badetiden, og UVR'en startede
         varmepumpen selv.
         """
-        # ``None`` foerst og for sig: ``_finite`` svarer rigtigt paa den, men
-        # den er en almindelig funktion, saa hverken en typetjekker eller en
-        # laeser faar noget at vide om hvad der staar tilbage bagefter.
+        # ``None`` først og for sig: ``_finite`` svarer rigtigt på den, men
+        # den er en almindelig funktion, så hverken en typetjekker eller en
+        # læser får noget at vide om hvad der står tilbage bagefter.
         if deadline_minutes is None or not _finite(deadline_minutes):
             return priced
         return int(deadline_minutes) if 0 < deadline_minutes < priced else priced
@@ -865,25 +865,25 @@ class Planner:
     ) -> float | None:
         """Hvor meget varme der faktisk bliver hentet fra lageret i det dyre.
 
-        Regnes over straekkets egne halvtimer, ikke af ét minut ganget op.
+        Regnes over strækkets egne halvtimer, ikke af ét minut ganget op.
 
         Her stod ``demand_kw * span / 60``, hvor ``demand_kw`` er
-        flowmaalerens aflaesning i det sekund cyklussen koerte. Den blev ganget
-        op over et vindue paa flere timer, og resultatet svingede derefter: i
+        flowmålerens aflæsning i det sekund cyklussen kørte. Den blev ganget
+        op over et vindue på flere timer, og resultatet svingede derefter: i
         loggen natten til den 10. september stod «der bruges X kWh mens det er
-        dyrt» skiftevis paa 2,0 og 8,9 kWh, mens den indlaerte vejrkurve laa
-        roligt paa 1,34 kW.
+        dyrt» skiftevis på 2,0 og 8,9 kWh, mens den indlærte vejrkurve lå
+        roligt på 1,34 kW.
 
-        **Og her slaar det maalte *ikke* det modellerede.** Den regel gaelder
-        i ``houseload.kw_at`` og er rigtig dér, for spoergsmaalet er hvad
-        huset traekker *nu*. Men en flowmaaleraflaesning er en maaling af
+        **Og her slår det målte *ikke* det modellerede.** Den regel gælder
+        i ``houseload.kw_at`` og er rigtig dér, for spørgsmålet er hvad
+        huset trækker *nu*. Men en flowmåleraflæsning er en måling af
         nuet, og nuet er ikke en udsigt. Til et vindue der ligger timer ude,
-        er kurven ved den forudsagte temperatur det bedste svar, og maaleren
+        er kurven ved den forudsagte temperatur det bedste svar, og måleren
         er kun bagstopperen.
 
         Svarer opslaget ikke for en enkelt halvtime, udelades den af
-        middelvaerdien. Den maa ikke goere hele svaret ukendt: ``None``
-        betyder «kan ikke besvares», og saa bliver ``want`` til hele
+        middelværdien. Den må ikke gøre hele svaret ukendt: ``None``
+        betyder «kan ikke besvares», og så bliver ``want`` til hele
         lagerpladsen.
         """
         if demand_kw_at is not None and span > 0:
@@ -949,27 +949,27 @@ class Planner:
         cop_now: Any,
         cop_later: Any,
     ) -> tuple[int, int]:
-        """Det foerste straek hvor varmepumpen taber til pillefyret.
+        """Det første stræk hvor varmepumpen taber til pillefyret.
 
-        Returnerer (minutter frem til det begynder, straekkets laengde).
+        Returnerer (minutter frem til det begynder, strækkets længde).
 
         Forskellen fra ``_dear_window`` er hvem der bestemmer hvad «dyrt» er.
-        Der er det *dyrere end lige nu*, og det goer straekket til en egenskab
-        ved **hvornaar man spoerger** i stedet for ved priserne. Spoerger man
-        kl. 04 fra nattens bund, er svaret ét straek fra kl. 05 til midnat —
+        Der er det *dyrere end lige nu*, og det gør strækket til en egenskab
+        ved **hvornår man spørger** i stedet for ved priserne. Spørger man
+        kl. 04 fra nattens bund, er svaret ét stræk fra kl. 05 til midnat —
         tyve timer — fordi intet undervejs er billigere end natten. Alt hvad
-        man haenger paa det straek, arver den egenskab: maengden, fristen, og
-        enhver spaerre der skal huske «det her straek har vi ladet op til».
+        man hænger på det stræk, arver den egenskab: mængden, fristen, og
+        enhver spærre der skal huske «det her stræk har vi ladet op til».
 
-        Her er graensen anlaeggets egen og staar stille: over pillefyrets pris
-        taber varmepumpen, og saa er det pillefyret der laver varmen. Det er
-        ogsaa praecis den varme lageret kan fortraenge — hver kWh det baerer
-        derinde, sparer en kWh pillevarme. En eksport til 3,38 loefter varmen
+        Her er grænsen anlæggets egen og står stille: over pillefyrets pris
+        taber varmepumpen, og så er det pillefyret der laver varmen. Det er
+        også præcis den varme lageret kan fortrænge — hver kWh det bærer
+        derinde, sparer en kWh pillevarme. En eksport til 3,38 løfter varmen
         til 0,94 og er dermed dyr; Predbats ladevindue til 0,96 er det ikke.
 
-        Uden hysteresen ville et straek kunne begynde og slutte paa nogle
-        oerer, saa den traekkes fra - samme snit som kildevalget bruger.
-        Hultolerancen er den samme som i ``_dear_window``: huset traekker
+        Uden hysteresen ville et stræk kunne begynde og slutte på nogle
+        ører, så den trækkes fra - samme snit som kildevalget bruger.
+        Hultolerancen er den samme som i ``_dear_window``: huset trækker
         videre af lageret i en enkelt billig halvtime.
         """
         threshold = self.pellet_price - self.hysteresis
@@ -980,7 +980,7 @@ class Planner:
             if price is None:
                 break
             # Den *uloftede* pris. ``cheapest_heat`` klemmer ved pillefyret,
-            # og saa ville sammenligningen vaere sand for hver eneste time.
+            # og så ville sammenligningen være sand for hver eneste time.
             heat = self.heat_price(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
@@ -1004,18 +1004,18 @@ class Planner:
         cop_now: Any,
         cop_later: Any,
     ) -> tuple[int, int]:
-        """Straekket der lades op imod. Absolut naar der findes et.
+        """Strækket der lades op imod. Absolut når der findes et.
 
         Findes der timer hvor pumpen taber til pillefyret, er *de* timer
-        straekket. Findes der ingen, falder vi tilbage paa den relative:
+        strækket. Findes der ingen, falder vi tilbage på den relative:
         hvad der er dyrere end nu.
 
         Tilbagefaldet er ufarligt netop dér. Pilleloftets uafgjorte - som er
-        grunden til at den dyreste halvtime vandrer - opstaar kun naar en
-        halvtime rammer loftet, og paa et doegn uden absolut straek goer ingen
-        af dem det. Saa er den dyreste halvtime entydig, og en spaerre der
-        haenger paa den, staar stille. Hver tilstand har sin egen stabile
-        noegle, af hver sin grund.
+        grunden til at den dyreste halvtime vandrer - opstår kun når en
+        halvtime rammer loftet, og på et døgn uden absolut stræk gør ingen
+        af dem det. Så er den dyreste halvtime entydig, og en spærre der
+        hænger på den, står stille. Hver tilstand har sin egen stabile
+        nøgle, af hver sin grund.
         """
         starts, span = self._dear_period(plan, cop_now, cop_later)
         if span > 0:
@@ -1046,8 +1046,8 @@ class Planner:
 
         rows: list[Projection] = []
         for minutes in range(0, self.horizon_minutes + 1, SLOT_MINUTES):
-            # Maaleren gaelder kun nu-timen; marginal() ser selv bort fra den
-            # for alt andet, men vi sender den kun hvor den hoerer hjemme.
+            # Måleren gælder kun nu-timen; marginal() ser selv bort fra den
+            # for alt andet, men vi sender den kun hvor den hører hjemme.
             price = plan.marginal(minutes, grid=grid if minutes == 0 else None)
             if price is None:
                 break

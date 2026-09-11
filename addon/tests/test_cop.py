@@ -102,8 +102,8 @@ class LookupTest(unittest.TestCase):
         self.assertAlmostEqual(got.cop, 3.5)
 
     def test_weak_neighbour_drags_confidence_down(self):
-        # En staerk nabo maa ikke redde en tynd. Halv vaegt paa en enkelt
-        # maaling giver en fjerdedel af dens stoej, altsaa n_eff 4 - stadig
+        # En stærk nabo må ikke redde en tynd. Halv vægt på en enkelt
+        # måling giver en fjerdedel af dens støj, altså n_eff 4 - stadig
         # langt fra fuld tillid, men ikke de 2 den gamle w/n-form gav.
         t = table(f40={0: (4.0, 100), 10: (5.0, 1)})
         got = t.lookup(40, 5)
@@ -112,7 +112,7 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(got.source, "blend")
 
     def test_a_sliver_of_a_thin_cell_no_longer_halves_the_trust(self):
-        # 99 % af en celle med 100 maalinger, 1 % af en med een. Den gamle
+        # 99 % af en celle med 100 målinger, 1 % af en med een. Den gamle
         # w/n-form gav 50 - halveret af en hundrededel.
         t = table(f40={0: (4.0, 100), 100: (5.0, 1)})
         got = t.lookup(40, 1)
@@ -120,8 +120,8 @@ class LookupTest(unittest.TestCase):
         self.assertGreater(got.learned_count, 90.0)
 
     def test_confidence_never_exceeds_the_best_measured_endpoint(self):
-        # To uafhaengige skoen kan variansmaessigt baere mere end hver for
-        # sig, men de er skoen over hvert sit driftspunkt.
+        # To uafhængige skøn kan variansmæssigt bære mere end hver for
+        # sig, men de er skøn over hvert sit driftspunkt.
         t = table(f40={0: (4.0, 100), 10: (4.0, 100)})
         got = t.lookup(40, 5)
 
@@ -242,7 +242,7 @@ class RangeTest(unittest.TestCase):
         self.assertEqual(ceilings, sorted(ceilings, reverse=True))
 
     def test_ceiling_never_exceeds_carnot(self):
-        # Loftet skal ligge *under* den termodynamiske graense, ellers filtrerer
+        # Loftet skal ligge *under* den termodynamiske grænse, ellers filtrerer
         # det ikke andet end det absolutte tal.
         for flow in range(20, 66, 5):
             for outdoor in range(-15, 21, 5):
@@ -250,17 +250,17 @@ class RangeTest(unittest.TestCase):
                 self.assertLessEqual(plausible_cop_range(flow, outdoor)[1], carnot)
 
     def test_floor_is_flat_so_defrost_is_not_discarded(self):
-        # Det gamle gulv steg til 2,0 ved lille loeft. En modulerende pumpe
-        # under afrimning *har* lav COP, og den maaling hoerer med.
+        # Det gamle gulv steg til 2,0 ved lille løft. En modulerende pumpe
+        # under afrimning *har* lav COP, og den måling hører med.
         t = CopTable()
         t.learn(30, 15, 1.4)
 
         self.assertEqual(t.cell_count, 1)
 
     def test_the_bands_used_to_reject_half_the_plant(self):
-        # Kernen i fejlen: loftet paa 4,0 for delta-T 40-55 K laa paa medianen
-        # af netop det baand hvor anlaegget bruger halvdelen af sin tid.
-        # F56/U8 med 740 maalinger paa COP 4,03 er den tungeste af dem.
+        # Kernen i fejlen: loftet på 4,0 for delta-T 40-55 K lå på medianen
+        # af netop det bånd hvor anlægget bruger halvdelen af sin tid.
+        # F56/U8 med 740 målinger på COP 4,03 er den tungeste af dem.
         t = CopTable()
         msg = t.learn(56, 8, 4.03)
 
@@ -268,9 +268,9 @@ class RangeTest(unittest.TestCase):
 
     def test_sensor_nonsense_is_still_rejected(self):
         t = CopTable()
-        # Over Carnot ved samme loeft - fysisk umuligt, uanset maskine.
+        # Over Carnot ved samme løft - fysisk umuligt, uanset maskine.
         self.assertIn("COP", t.learn(56, 8, 12.0))
-        # Og under 1 leverer maskinen mindre varme end den bruger stroem.
+        # Og under 1 leverer maskinen mindre varme end den bruger strøm.
         self.assertIn("COP", t.learn(56, 8, 0.4))
 
         self.assertEqual(t.cell_count, 0)
@@ -300,12 +300,12 @@ if __name__ == "__main__":
 
 
 class ReinforceTest(unittest.TestCase):
-    """En tynd raekke skal laane af naboerne, ikke af fabrikskurven."""
+    """En tynd række skal låne af naboerne, ikke af fabrikskurven."""
 
     def test_a_thin_exact_row_borrows_from_a_well_measured_neighbour(self):
-        # F24 har to maalinger ved U18; F26 har 37. Foer blev de 37 ignoreret
-        # fordi fremloebet ramte F24 praecis, og resten blev hentet i
-        # fabrikskurven, som ikke ved noget om dette anlaeg.
+        # F24 har to målinger ved U18; F26 har 37. Før blev de 37 ignoreret
+        # fordi fremløbet ramte F24 præcis, og resten blev hentet i
+        # fabrikskurven, som ikke ved noget om dette anlæg.
         t = table(f24={18: (4.73, 2)}, f26={18: (4.58, 37)})
 
         got = t.lookup(24, 18)
@@ -317,7 +317,7 @@ class ReinforceTest(unittest.TestCase):
 
     def test_the_exact_row_still_weighs_most_per_measurement(self):
         # Naboen vejer med sin evidens delt med afstanden. Lige mange
-        # maalinger, saa skal den eksakte raekke traekke mest.
+        # målinger, så skal den eksakte række trække mest.
         t = table(f40={0: (3.0, 4)}, f45={0: (5.0, 4)})
 
         got = t.lookup(40, 0)
@@ -341,8 +341,8 @@ class ReinforceTest(unittest.TestCase):
         self.assertEqual(got.source, "exact")
 
     def test_a_thin_interpolation_borrows_too(self):
-        # Mellem to tynde raekker skal opslaget ikke ende i fabrikskurven,
-        # naar en raekke lidt laengere vaek har rigelig evidens.
+        # Mellem to tynde rækker skal opslaget ikke ende i fabrikskurven,
+        # når en række lidt længere væk har rigelig evidens.
         t = table(f40={10: (4.7, 1)}, f41={10: (4.8, 1)}, f42={10: (5.2, 400)})
 
         got = t.lookup(40.8, 10)

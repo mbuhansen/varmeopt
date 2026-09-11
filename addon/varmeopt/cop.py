@@ -24,8 +24,8 @@ FULL_TRUST_COUNT = 5.0
 # mange målinger nabocellen har. Vi tror ikke på tal vi aldrig har målt.
 EXTRAPOLATION_COUNT_CAP = 2.0
 
-# Inden for saa mange grader fremloeb regnes en naborraekke som evidens om
-# det samme driftspunkt - svagere, jo laengere vaek den ligger.
+# Inden for så mange grader fremløb regnes en naborrække som evidens om
+# det samme driftspunkt - svagere, jo længere væk den ligger.
 REINFORCE_K = 5
 
 # Hvor stor en del af Carnot en måling højst må være for at tros. Anlæggets
@@ -328,9 +328,9 @@ class CopTable:
         count = _blend_count(low[1], w_low, high[1], w_high)
         how = f"interp F{f_low}-{f_high}"
         if count < FULL_TRUST_COUNT:
-            # Samme grund som paa den eksakte raekke: to tynde naboer skal
-            # ikke sende opslaget i fabrikskurven, naar en raekke lidt
-            # laengere vaek har rigelig evidens ved samme udetemperatur.
+            # Samme grund som på den eksakte række: to tynde naboer skal
+            # ikke sende opslaget i fabrikskurven, når en række lidt
+            # længere væk har rigelig evidens ved samme udetemperatur.
             return self._reinforce(
                 flow, outdoor, cop, count, how, skip=frozenset({f_low, f_high})
             )

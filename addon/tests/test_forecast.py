@@ -31,7 +31,7 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(f.horizon_minutes, 120.0)
 
     def test_points_in_the_past_are_dropped(self):
-        # En udsigt der begynder i gaar siger intet om i aften.
+        # En udsigt der begynder i går siger intet om i aften.
         f = Forecast.from_response(response((-5, 20.0), (1, 13.0)), ENTITY, NOW)
 
         self.assertEqual(len(f), 1)
@@ -82,7 +82,7 @@ class LookupTest(unittest.TestCase):
         self.assertAlmostEqual(self.f.temperature_at(30), 14.0)
 
     def test_clamps_beyond_the_horizon(self):
-        # At forlaenge en temperaturkurve ud i det blaa ville finde paa tal
+        # At forlænge en temperaturkurve ud i det blå ville finde på tal
         # som ingen har lovet os.
         self.assertAlmostEqual(self.f.temperature_at(600), 5.0)
 
@@ -91,7 +91,7 @@ class LookupTest(unittest.TestCase):
 
 
 class ChainTest(unittest.TestCase):
-    """Hele kaeden: udsigt -> varmekurve -> setpunkt -> COP."""
+    """Hele kæden: udsigt -> varmekurve -> setpunkt -> COP."""
 
     def test_a_colder_evening_gives_a_lower_cop(self):
         from varmeopt.cop import Cell, CopTable
@@ -118,9 +118,9 @@ class ChainTest(unittest.TestCase):
 class RestEnvelopeTest(unittest.TestCase):
     """REST-API'et pakker svaret ind én gang mere end attrappen gjorde.
 
-    Det var den indpakning der gjorde udsigten ulaeselig paa det koerende
-    anlaeg: hver halve time en advarsel, og en planlaegger der regnede hele
-    horisonten paa den temperatur der var *nu*.
+    Det var den indpakning der gjorde udsigten ulæselig på det kørende
+    anlæg: hver halve time en advarsel, og en planlægger der regnede hele
+    horisonten på den temperatur der var *nu*.
     """
 
     def envelope(self, inner):
@@ -134,7 +134,7 @@ class RestEnvelopeTest(unittest.TestCase):
         self.assertEqual([m for m, _ in f.points], [0.0, 60.0])
 
     def test_it_still_works_without_the_envelope(self):
-        # Attrapper og aeldre udgaver svarer uden.
+        # Attrapper og ældre udgaver svarer uden.
         f = Forecast.from_response(response((0, 15.0)), ENTITY, NOW)
 
         self.assertEqual(len(f), 1)

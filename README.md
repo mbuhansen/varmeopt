@@ -324,6 +324,10 @@ der kan pushe til master, kan køre kode i containeren.
 
 ## Udvikling
 
+Sproget i koden er dansk med æ, ø og å — i kommentarer, docstrings, tekst,
+attributnavne og commit-beskeder. Se [CLAUDE.md](CLAUDE.md) for reglen og de
+få ord hvor `oe`/`aa` er ægte.
+
 Ingen afhængigheder ud over `aiohttp`. Testene bruger kun standardbiblioteket:
 
 ```bash

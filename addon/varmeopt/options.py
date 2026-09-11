@@ -50,12 +50,12 @@ _DEFAULTS: dict[str, object] = {
     # efter tankene.
     "entity_ch_return": "sensor.node_1_dl_bus_2",
     "entity_ch_flow_rate": "sensor.node_1_dl_bus_3",
-    # Flowmaalerens bund. Under den kan den vise nul selv om der loeber
-    # vand, saa en aflaesning derunder siger "hoejst saa meget" og ikke
-    # "saa meget" - og behovet er dermed ukendt, ikke nul.
+    # Flowmålerens bund. Under den kan den vise nul selv om der løber
+    # vand, så en aflæsning derunder siger "højst så meget" og ikke
+    # "så meget" - og behovet er dermed ukendt, ikke nul.
     "ch_flow_meter_floor": 100.0,
-    # Rummet hvor tankene staar. Staatabet foelger forskellen til det her,
-    # ikke til en antaget kaeldertemperatur.
+    # Rummet hvor tankene står. Ståtabet følger forskellen til det her,
+    # ikke til en antaget kældertemperatur.
     "entity_room_temp": "sensor.sadelrum_temperature",
     # De øvrige kilder ind i lageret. Solvarmen er gratis varme, og den skal
     # kunne skelnes fra den købte.
@@ -66,56 +66,56 @@ _DEFAULTS: dict[str, object] = {
     "entity_solar_power": "sensor.solvarme_produktion",
     "entity_element_power": "sensor.my_pv_ac_thor_9s_effekt",
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
-    # Predbats plan, laest direkte fra HA. Vi bruger raw.rows, den
-    # strukturerede udgave - ikke HTML-tabellen, som ville vaere skroebelig.
-    # Home Assistants egen vejrudsigt. Med den faar hver time i planen sin
+    # Predbats plan, læst direkte fra HA. Vi bruger raw.rows, den
+    # strukturerede udgave - ikke HTML-tabellen, som ville være skrøbelig.
+    # Home Assistants egen vejrudsigt. Med den får hver time i planen sin
     # egen COP i stedet for at arve den vi har nu.
     "entity_weather": "weather.hjem",
     "forecast_refresh_minutes": 30,
     "entity_predbat_plan": "predbat.plan_html",
-    # Predbats nuvaerende tilstand. Planens raekker bruger samme ordforraad
-    # pr. halvtime, saa den her er den eneste maade at se hvad anlaeggets
-    # egen Predbat faktisk skriver - uden at gaette paa dokumentationen.
+    # Predbats nuværende tilstand. Planens rækker bruger samme ordforråd
+    # pr. halvtime, så den her er den eneste måde at se hvad anlæggets
+    # egen Predbat faktisk skriver - uden at gætte på dokumentationen.
     "entity_predbat_status": "predbat.status",
-    # Graensen Predbat lige nu har skrevet til inverteren: den ladetilstand
-    # der lades op til, eller - under hold charge - den der maa aflades ned
-    # til. Uden den ser et hold ud som en total laasning, og de point ned til
-    # gulvet ville blive koebt fra nettet selv om de staar i batteriet.
+    # Grænsen Predbat lige nu har skrevet til inverteren: den ladetilstand
+    # der lades op til, eller - under hold charge - den der må aflades ned
+    # til. Uden den ser et hold ud som en total låsning, og de point ned til
+    # gulvet ville blive købt fra nettet selv om de står i batteriet.
     "entity_predbat_charge_limit": "predbat.best_charge_limit",
-    # Hvornaar batteriet er tomt. Det er anlaeggets eget nulpunkt og ikke
-    # Predbats reserve: reserven paa 12-15 % er energi der er gemt til
+    # Hvornår batteriet er tomt. Det er anlæggets eget nulpunkt og ikke
+    # Predbats reserve: reserven på 12-15 % er energi der er gemt til
     # uplanlagt forbrug, og en varmepumpe der starter, er uplanlagt forbrug.
-    # Predbat vil bare ikke *saelge* den.
+    # Predbat vil bare ikke *sælge* den.
     "battery_empty_percent": 5.0,
-    # Er planen aeldre end det her, er priserne fra et andet tidspunkt.
-    # Saa hellere ingen plan end en gammel: uden plan er der ingen pris,
-    # og uden pris naegter vagten at styre.
+    # Er planen ældre end det her, er priserne fra et andet tidspunkt.
+    # Så hellere ingen plan end en gammel: uden plan er der ingen pris,
+    # og uden pris nægter vagten at styre.
     "plan_max_age_minutes": 60,
-    # Anlaeggets fire elektriske maalinger, og deres fortegn:
-    #   batteriet   positiv naar det aflader
-    #   nettet      negativ naar der saelges, positiv naar der koebes
-    #   solcellerne jaevnstroem ind fra panelerne, aldrig under nul
-    #   inverteren  vekselstroem ud - sol plus batteri - negativ ved ladning
-    # De to sidste afgoer ingen pris. De er der for at balancen kan
-    # efterproeves, og for at begrundelsen kan sige at solen daekker huset.
+    # Anlæggets fire elektriske målinger, og deres fortegn:
+    #   batteriet   positiv når det aflader
+    #   nettet      negativ når der sælges, positiv når der købes
+    #   solcellerne jævnstrøm ind fra panelerne, aldrig under nul
+    #   inverteren  vekselstrøm ud - sol plus batteri - negativ ved ladning
+    # De to sidste afgør ingen pris. De er der for at balancen kan
+    # efterprøves, og for at begrundelsen kan sige at solen dækker huset.
     "entity_battery_power": "sensor.hostname_scb_5313dd_battery_power",
     "entity_grid_power": "sensor.hostname_scb_5313dd_grid_power",
     "entity_pv_power": "sensor.hostname_scb_5313dd_sum_power_of_all_pv_dc_inputs",
     "entity_inverter_ac": "sensor.hostname_scb_5313dd_ac_power",
-    # Tabene ind i og ud af batteriet, laest af Predbats egne indstillinger.
-    # De staar dermed ét sted: aendrer man dem i Predbat, foelger
-    # genanskaffelsesprisen med. Svarer de ikke, gaelder prices.py's egne tal.
+    # Tabene ind i og ud af batteriet, læst af Predbats egne indstillinger.
+    # De står dermed ét sted: ændrer man dem i Predbat, følger
+    # genanskaffelsesprisen med. Svarer de ikke, gælder prices.py's egne tal.
     "entity_inverter_loss": "input_number.predbat_inverter_loss",
     "entity_battery_loss": "input_number.predbat_battery_loss",
     "entity_battery_loss_discharge": "input_number.predbat_battery_loss_discharge",
-    # Doegntaeller for solvarmen, og Solcasts prognose for solcellerne. De to
+    # Døgntæller for solvarmen, og Solcasts prognose for solcellerne. De to
     # kalibrerer hinanden: solfangerne og cellerne ser samme sol.
     "entity_solar_today": "sensor.solvarme_produktion_idag",
     "entity_solcast_remaining": "sensor.solcast_pv_forecast_forecast_remaining_today",
     "entity_solcast_tomorrow": "sensor.solcast_pv_forecast_forecast_tomorrow",
-    # Anlaeggets geometri. Solfangerne staar stejlere end cellerne, og
-    # forholdet mellem dem svinger derfor med en faktor 2,5 hen over aaret -
-    # det regnes, det laeres ikke.
+    # Anlæggets geometri. Solfangerne står stejlere end cellerne, og
+    # forholdet mellem dem svinger derfor med en faktor 2,5 hen over året -
+    # det regnes, det læres ikke.
     "latitude": 55.4,
     "solar_thermal_tilt": 45,
     "solar_thermal_azimuth": 0,
@@ -125,55 +125,55 @@ _DEFAULTS: dict[str, object] = {
     "pv_b_kwp": 4.0,
     "pv_b_tilt": 15,
     "pv_b_azimuth": 90,
-    # Startvaerdi for skalafaktoren, kalibreret paa 24. august 2026: PV 60,9
-    # kWh mod 29 kWh solvarme. Modellen retter den selv naar den har set et
-    # helt doegn.
-    # Nul betyder "regn startvaerdien ud af kalibreringsdagen med den
-    # geometri der gaelder nu". Et fast tal her holder kun saa laenge
-    # geometrien er uaendret - se solar.seed_scale.
+    # Startværdi for skalafaktoren, kalibreret på 24. august 2026: PV 60,9
+    # kWh mod 29 kWh solvarme. Modellen retter den selv når den har set et
+    # helt døgn.
+    # Nul betyder "regn startværdien ud af kalibreringsdagen med den
+    # geometri der gælder nu". Et fast tal her holder kun så længe
+    # geometrien er uændret - se solar.seed_scale.
     "solar_scale": 0,
-    # UVR'en har en minimums gangtid paa varmepumpen. Er der mindre plads end
-    # ét saadant traek fylder, er svaret "lad vaere" - ikke "lad lidt".
+    # UVR'en har en minimums gangtid på varmepumpen. Er der mindre plads end
+    # ét sådant træk fylder, er svaret "lad være" - ikke "lad lidt".
     # Kortcykling slider og koster virkningsgrad ved hver opstart.
     "hp_min_runtime_minutes": 15,
     "hp_charge_kw": 16.0,
-    # At koere varmepumpen koster noget ud over stroemmen. Tallet kommer
+    # At køre varmepumpen koster noget ud over strømmen. Tallet kommer
     # fra den ukoblede v4-node i Node-RED, hvor det var en konstant - her
-    # er det en indstilling, saa det kan efterproeves mod virkeligheden.
+    # er det en indstilling, så det kan efterprøves mod virkeligheden.
     "hp_wear_kr_per_kwh": 0.15,
-    # Hvor langt frem det giver mening at gemme varme. Et doegn daekker altid
-    # naeste aften, uanset hvornaar paa dagen der spoerges - se
-    # DEFAULT_HORIZON_MINUTES for hvorfor de 12 timer ikke raakte.
+    # Hvor langt frem det giver mening at gemme varme. Et døgn dækker altid
+    # næste aften, uanset hvornår på dagen der spørges - se
+    # DEFAULT_HORIZON_MINUTES for hvorfor de 12 timer ikke rakte.
     "planner_horizon_hours": 24,
-    # Fremloebstemperaturen en blokopladning koerer ved. Den er hoejere end
-    # rumvarmens setpunkt, og det er med vilje: varmen skal bagefter ogsaa
+    # Fremløbstemperaturen en blokopladning kører ved. Den er højere end
+    # rumvarmens setpunkt, og det er med vilje: varmen skal bagefter også
     # kunne lave et bad.
     #
     # Ikke det samme som ``dhw_setpoint``, selv om de ligner hinanden. Den er
     # det setpunkt *beholderen kalder med*, og den bruges af curve.py til at
-    # kende et varmtvandskald fra en rumvarmemaaling. Her staar hvad
-    # opladningen sigter efter - to spoergsmaal, to indstillinger. De stod
-    # som ét i et doegn, og saa blev COP'en slaaet op tre grader for lavt.
+    # kende et varmtvandskald fra en rumvarmemåling. Her står hvad
+    # opladningen sigter efter - to spørgsmål, to indstillinger. De stod
+    # som ét i et døgn, og så blev COP'en slået op tre grader for lavt.
     "hp_charge_temp": 56,
-    # Klokkeslaettet lageret skal vaere fyldt til. Det er en frist paa uret
-    # og ikke et prisargument: der bades om aftenen, og huset koerer paa
-    # restvarmen natten igennem. Prisraekken kender hverken badetiden eller
-    # at UVR'en starter varmepumpen selv naar tankene er kolde - den ser kun
-    # at aftenen er dyrere end nu, og den slutning kan vaere for svag til at
-    # handle paa i tide.
+    # Klokkeslættet lageret skal være fyldt til. Det er en frist på uret
+    # og ikke et prisargument: der bades om aftenen, og huset kører på
+    # restvarmen natten igennem. Prisrækken kender hverken badetiden eller
+    # at UVR'en starter varmepumpen selv når tankene er kolde - den ser kun
+    # at aftenen er dyrere end nu, og den slutning kan være for svag til at
+    # handle på i tide.
     #
     # Om vinteren passer den sig selv: er natten den billige tid, er
-    # tankene alligevel toemt naar den kommer, og saa lades der dér.
+    # tankene alligevel tømt når den kommer, og så lades der dér.
     #
-    # Et tal uden for doegnet slaar fristen fra - saa er det prisen alene
-    # der bestemmer hvornaar opladningen skal vaere faerdig.
+    # Et tal uden for døgnet slår fristen fra - så er det prisen alene
+    # der bestemmer hvornår opladningen skal være færdig.
     "store_full_by_hour": 17,
     # Varmtvandsbeholderen er sit eget lager ved siden af buffertankene.
     "entity_vvb_top": "sensor.node_1_input_7",
     "entity_vvb_bottom": "sensor.node_1_input_8",
-    # Taender varmepumpen for brugsvandet? En kendsgerning, i modsaetning
-    # til at gaette det ud af at setpunktet ligger paa 56. Sammen med
-    # spaets egen kan de to ogsaa skelnes fra hinanden.
+    # Tænder varmepumpen for brugsvandet? En kendsgerning, i modsætning
+    # til at gætte det ud af at setpunktet ligger på 56. Sammen med
+    # spaets egen kan de to også skelnes fra hinanden.
     "entity_dhw_active": "binary_sensor.node_1_output_7",
     # Spabadet kalder med samme setpunkt som brugsvandet, så dets tilstand
     # forklarer hvorfor varmekurven pludselig springer til 56 °C.
@@ -183,35 +183,35 @@ _DEFAULTS: dict[str, object] = {
     # Beholderens rumfang kendes ikke. Nul betyder "regn ikke energi på den" —
     # to temperaturer er mere ærligt end en kWh-værdi bygget på et gæt.
     "vvb_liters": 0,
-    # Hvad beholderen og spaen traekker ud af buffertankene mens de varmer.
+    # Hvad beholderen og spaen trækker ud af buffertankene mens de varmer.
     #
     # De to tapper de samme tanke som huset, og en energibalance kan ikke se
-    # forskel paa et bad og en radiator. Uden et bud paa deres traek maa de
-    # minutter kasseres helt - og spaen koerer fem timer hver dag, saa det er
-    # en stor del af doegnet at vaere blind i. Tallene er anlaeggets ejers
-    # skoen, og et vindue der bruger dem, maerkes som modelleret og laerer
+    # forskel på et bad og en radiator. Uden et bud på deres træk må de
+    # minutter kasseres helt - og spaen kører fem timer hver dag, så det er
+    # en stor del af døgnet at være blind i. Tallene er anlæggets ejers
+    # skøn, og et vindue der bruger dem, mærkes som modelleret og lærer
     # ikke ind i forbrugskurven.
     #
     # Beholderen svinger med hvor kold den er: koldest tager den mest.
     "spa_kw": 3.5,
     "vvb_kw_cold": 8.0,
     "vvb_kw_hot": 3.0,
-    # Under den her temperatur kan lageret ikke lade beholderen, og saa maa
-    # varmepumpen goere det - ogsaa hvis stroemmen er dyr netop da.
+    # Under den her temperatur kan lageret ikke lade beholderen, og så må
+    # varmepumpen gøre det - også hvis strømmen er dyr netop da.
     #
-    # Ikke det samme som ``tank_cascade_temp``, selv om de to tilfaeldigvis
-    # staar paa samme tal i dag: kaskaden styrer *ladningens* raekkefoelge
+    # Ikke det samme som ``tank_cascade_temp``, selv om de to tilfældigvis
+    # står på samme tal i dag: kaskaden styrer *ladningens* rækkefølge
     # mellem de to tanke, det her er hvad lageret kan *levere*. To
-    # spoergsmaal, to indstillinger.
+    # spørgsmål, to indstillinger.
     "dhw_usable_temp": 55.0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     # Udetemperaturen. Den er ikke til pynt: uden den kan hverken varmekurven
-    # eller COP-tabellen slaa op, og cyklussen springer over. Den kom foer fra
-    # Node-REDs flow-context som bagstopper; den vej findes ikke mere, saa den
-    # her *skal* vaere sat.
+    # eller COP-tabellen slå op, og cyklussen springer over. Den kom før fra
+    # Node-REDs flow-context som bagstopper; den vej findes ikke mere, så den
+    # her *skal* være sat.
     #
-    # Nibes egen BT1, midlet. Middelvaerdien er med vilje: den raa foeler
-    # svinger med solen paa vaeggen, og tabellen er indekseret paa hele grader.
+    # Nibes egen BT1, midlet. Middelværdien er med vilje: den rå føler
+    # svinger med solen på væggen, og tabellen er indekseret på hele grader.
     "entity_outdoor_temp": "sensor.nibe_bt1_average",
     # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven med
     # dette setpunkt. De målinger hører ikke til i kurven.
@@ -232,43 +232,43 @@ _DEFAULTS: dict[str, object] = {
     # på godt 31 °C fremløb. Loftet er hvad varmepumpen realistisk når.
     "tank_reference_temp": 30,
     "tank_max_temp": 60,
-    # Solvarmen og ACthors elpatroner kan begge naa 90 grader, langt over
-    # varmepumpens raekkevidde. Det er anlaeggets fysiske top, ikke
+    # Solvarmen og ACthors elpatroner kan begge nå 90 grader, langt over
+    # varmepumpens rækkevidde. Det er anlæggets fysiske top, ikke
     # varmepumpens.
     "tank_peak_temp": 90,
-    # Afspaerringsventilen til tank 2 aabner naar tank 1 er over det her paa
-    # topfoeleren. Indtil da er tankene *ment* at staa skaevt: solvarmen lader
-    # fra bunden af tank 1, og ved kun at varme de foerste 500 L naar lageret
-    # hurtigere en brugbar temperatur. Nul slaar kaskaden fra.
+    # Afspærringsventilen til tank 2 åbner når tank 1 er over det her på
+    # topføleren. Indtil da er tankene *ment* at stå skævt: solvarmen lader
+    # fra bunden af tank 1, og ved kun at varme de første 500 L når lageret
+    # hurtigere en brugbar temperatur. Nul slår kaskaden fra.
     "tank_cascade_temp": 55,
-    # Hent nyeste kode fra master ved opstart. Slaaet fra som udgangspunkt:
-    # det koerer kode fra internettet uden et menneske imellem.
-    # Pillefyret. Braendvaerdi og virkningsgrad som Node-RED regner med.
+    # Hent nyeste kode fra master ved opstart. Slået fra som udgangspunkt:
+    # det kører kode fra internettet uden et menneske imellem.
+    # Pillefyret. Brændværdi og virkningsgrad som Node-RED regner med.
     "pellet_price_per_kg": 2.88,
     "pellet_kwh_per_kg": 4.8,
     "pellet_efficiency": 0.85,
-    # Hysterese paa kildevalget, saa den ikke vipper frem og tilbage paa
-    # nogle oerer. Samme vaerdi som Node-RED bruger.
+    # Hysterese på kildevalget, så den ikke vipper frem og tilbage på
+    # nogle ører. Samme værdi som Node-RED bruger.
     "source_hysteresis": 0.05,
-    # Styring. Slaaet fra: add-on'en udstiller sin beslutning og et flag,
-    # og Node-RED foelger den kun naar flaget siger ja. Saa er der ét sted
+    # Styring. Slået fra: add-on'en udstiller sin beslutning og et flag,
+    # og Node-RED følger den kun når flaget siger ja. Så er der ét sted
     # der styrer, og det sted kan altid sige nej til os.
     "control_enabled": False,
-    # Mindste tid en kilde skal staa, foer den maa skifte igen. Gaelder
-    # ogsaa selve beslutnings-entiteten, ikke kun styringen.
+    # Mindste tid en kilde skal stå, før den må skifte igen. Gælder
+    # også selve beslutnings-entiteten, ikke kun styringen.
     "control_min_dwell_minutes": 15,
-    # Hvor laenge en ny kilde skal holde, foer den overhovedet taeller.
-    # Hviletiden alene goer et ét-minuts udsving *vaerre*: er den udloebet,
+    # Hvor længe en ny kilde skal holde, før den overhovedet tæller.
+    # Hviletiden alene gør et ét-minuts udsving *værre*: er den udløbet,
     # binder vagten sig til fejlen og holder den et kvarter.
     "control_confirm_minutes": 3,
-    # Efter opstart: lad tabellerne komme paa plads foer der styres.
+    # Efter opstart: lad tabellerne komme på plads før der styres.
     "control_warmup_minutes": 5,
     "auto_update": False,
 }
 
 
 def _as_bool(value: object) -> bool:
-    """HA giver en rigtig bool; en miljoevariabel giver strengen "false"."""
+    """HA giver en rigtig bool; en miljøvariabel giver strengen "false"."""
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in ("1", "true", "yes", "on", "ja")
@@ -333,10 +333,10 @@ class Options:
     def pellet_kwh_price(self) -> float:
         """Pillevarme i kr pr. kWh leveret varme.
 
-        Ved en umulig konfiguration falder vi tilbage paa standardvaerdierne
-        og siger det hoejt. Der stod 0,0, og gratis pillevarme vinder hver
-        eneste sammenligning: anlaegget ville staa og fyre med traepiller
-        doegnet rundt, tavst, fordi nogen havde skrevet et nul i et felt.
+        Ved en umulig konfiguration falder vi tilbage på standardværdierne
+        og siger det højt. Der stod 0,0, og gratis pillevarme vinder hver
+        eneste sammenligning: anlægget ville stå og fyre med træpiller
+        døgnet rundt, tavst, fordi nogen havde skrevet et nul i et felt.
         """
         if self.pellet_kwh_per_kg <= 0 or self.pellet_efficiency <= 0:
             log.error(
@@ -458,7 +458,7 @@ class Options:
             tank_max_temp=float(values["tank_max_temp"]),
             tank_peak_temp=float(values["tank_peak_temp"]),
             tank_cascade_temp=float(values["tank_cascade_temp"]),
-            # Geometri og skalafaktor er alle tal, saa de kan tages under ét.
+            # Geometri og skalafaktor er alle tal, så de kan tages under ét.
             # Solvarmens *entiteter* hedder entity_solar_* og fanges af
             # entity-linjen nedenfor, ikke af denne.
             **{

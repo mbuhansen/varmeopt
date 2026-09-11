@@ -28,22 +28,22 @@ PELLET = 0.706
 class PlanReachesTheDecisionTest(unittest.TestCase):
     """Beslutningen skal bruge den samme pris som sensoren viser.
 
-    Klassen hed foer ``MeterReachesTheDecisionTest`` og stillede den samme
-    halvtime op med ``Grid(grid_power=9000)``: maaleren saa import, og
+    Klassen hed før ``MeterReachesTheDecisionTest`` og stillede den samme
+    halvtime op med ``Grid(grid_power=9000)``: måleren så import, og
     importgrenen svarede 3,50 hvor batterigrenen ville have sagt 0,80.
 
     Den gren findes ikke mere - se ``marginal`` for hvorfor - men
-    *invarianten* er uaendret og er stadig den vigtigste i filen: den pris
-    beslutningen regner paa, skal vaere den pris sensoren viser. Her tvinges
-    de fra hinanden af planen i stedet, som er det eneste der maa goere det:
-    halvtimen er "holdchrg", saa afladningen er slaaet fra og stroemmen
-    koebes - 3,50 - selv om batteriets egen energi ville koste 0,80.
+    *invarianten* er uændret og er stadig den vigtigste i filen: den pris
+    beslutningen regner på, skal være den pris sensoren viser. Her tvinges
+    de fra hinanden af planen i stedet, som er det eneste der må gøre det:
+    halvtimen er "holdchrg", så afladningen er slået fra og strømmen
+    købes - 3,50 - selv om batteriets egen energi ville koste 0,80.
     """
 
     def setUp(self):
         # Nu er batteriet bundet og nettet koster 3,50; om en halv time er
         # der import til 0,67, og det er den pris batteriets energi ville
-        # skulle laegges tilbage til - 0,67 / 0,832 = 0,80 leveret. De to tal
+        # skulle lægges tilbage til - 0,67 / 0,832 = 0,80 leveret. De to tal
         # skal ikke kunne forveksles.
         self.plan = Plan.from_predbat(
             {
@@ -83,11 +83,11 @@ class PlanReachesTheDecisionTest(unittest.TestCase):
         self.assertEqual(decision.source, "pillefyr")
 
     def test_the_meter_cannot_move_any_of_it(self):
-        """Afloeseren for ``test_without_the_meter_it_would_have_chosen_...``.
+        """Afløseren for ``test_without_the_meter_it_would_have_chosen_...``.
 
-        Den gamle test dokumenterede at maaleren *aendrede* svaret. Nu er
-        kravet det modsatte, og det er skarpere: hvad maaleren end siger,
-        skal prisen, beslutningen og fremskrivningen vaere de samme.
+        Den gamle test dokumenterede at måleren *ændrede* svaret. Nu er
+        kravet det modsatte, og det er skarpere: hvad måleren end siger,
+        skal prisen, beslutningen og fremskrivningen være de samme.
         """
         for power in (-9000, -300, 0, 300, 9000):
             with self.subTest(grid_power=power):
@@ -132,14 +132,14 @@ class ReleaseOnShutdownTest(unittest.TestCase):
         self.assertEqual(published, [SENSOR_CHARGE, SENSOR_DECISION])
         self.assertIs(self.ha.attributes[SENSOR_DECISION]["styrer"], False)
         self.assertIsNone(self.ha.attributes[SENSOR_DECISION]["styr_til"])
-        # Opladningsflaget er det farligste at efterlade taendt: en frossen
-        # kilde ville bare fortsaette, men det her ville blive ved med at
-        # fylde tankene. Derfor slippes det foerst.
+        # Opladningsflaget er det farligste at efterlade tændt: en frossen
+        # kilde ville bare fortsætte, men det her ville blive ved med at
+        # fylde tankene. Derfor slippes det først.
         self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
 
     def test_a_failing_decision_release_still_drops_the_charge_flag(self):
-        # Laa de to i samme forsoeg, ville en fejl paa det ene efterlade det
-        # andet frosset - praecis den tilstand det hele er til for at undgaa.
+        # Lå de to i samme forsøg, ville en fejl på det ene efterlade det
+        # andet frosset - præcis den tilstand det hele er til for at undgå.
         asyncio.run(self.app.cycle(self.ha))
         self.ha.published.clear()
         self.ha.fail_on = SENSOR_DECISION
@@ -158,14 +158,14 @@ class ReleaseOnShutdownTest(unittest.TestCase):
         self.assertIsNone(self.app.guard.committed)
 
     def test_a_failing_release_is_logged_not_raised(self):
-        # Kan vi ikke give slip, er der ikke mere at goere - men cyklussen
-        # maa ikke vaelte paa vej ud.
+        # Kan vi ikke give slip, er der ikke mere at gøre - men cyklussen
+        # må ikke vælte på vej ud.
         async def boom(*_args, **_kwargs):
             raise HaError("HA svarer ikke")
 
         self.ha.set_state = boom
 
-        asyncio.run(self.app.release_control(self.ha))  # maa ikke rejse
+        asyncio.run(self.app.release_control(self.ha))  # må ikke rejse
 
 
 class TimeoutTest(unittest.TestCase):
@@ -180,14 +180,14 @@ class TimeoutTest(unittest.TestCase):
         os.environ.pop("VARMEOPT_HA_URL", None)
 
     def test_a_timeout_becomes_a_haerror(self):
-        # TimeoutError er ikke en ClientError. Foer rettelsen slap den forbi
-        # og vaeltede cyklussen.
+        # TimeoutError er ikke en ClientError. Før rettelsen slap den forbi
+        # og væltede cyklussen.
         class HangingSession:
             def get(self, *_args, **_kwargs):
-                raise TimeoutError("for laenge")
+                raise TimeoutError("for længe")
 
             def post(self, *_args, **_kwargs):
-                raise TimeoutError("for laenge")
+                raise TimeoutError("for længe")
 
         ha = HomeAssistant(HangingSession())
 
@@ -215,7 +215,7 @@ class TimeoutTest(unittest.TestCase):
         )
 
         # _state fanger HaError og giver None. Uden setpunkt er der intet at
-        # slaa op paa - men cyklussen skal koere videre og stadig udgive en
+        # slå op på - men cyklussen skal køre videre og stadig udgive en
         # beslutning i stedet for at rejse.
         asyncio.run(app.cycle(ha))
 
@@ -250,7 +250,7 @@ class PublishOrderTest(unittest.TestCase):
         self.assertEqual(first, SENSOR_DECISION)
 
     def test_a_failing_tank_write_does_not_swallow_the_flag(self):
-        # Foer laa flaget sidst af seks skrivninger, saa én HaError i en af de
+        # Før lå flaget sidst af seks skrivninger, så én HaError i en af de
         # andre sprang det over.
         original = self.app._publish_tank
 
@@ -300,12 +300,12 @@ class GuardSurvivesRestartTest(unittest.TestCase):
 
         cmd = after.check(_decision("varmepumpe"), object(), None, now)
 
-        # Tre minutter er gaaet af de femten - ikke nul, som foer.
+        # Tre minutter er gået af de femten - ikke nul, som før.
         self.assertEqual(cmd.source, "pillefyr")
         self.assertIn("holder", cmd.reason)
 
     def test_warmup_still_applies_after_a_restart(self):
-        # Bindingen genoptages, men opvarmningen skal gaelde forfra.
+        # Bindingen genoptages, men opvarmningen skal gælde forfra.
         import time as _time
 
         now = _time.time()
@@ -383,8 +383,8 @@ class StalePlanTest(unittest.TestCase):
         self.assertFalse(self.app.status["command"].acting)
 
     def test_age_uses_last_updated_not_last_changed(self):
-        # Predbats plan ligger i attributterne. last_changed staar stille naar
-        # kun de aendrer sig, saa den ville sige at planen var timer gammel.
+        # Predbats plan ligger i attributterne. last_changed står stille når
+        # kun de ændrer sig, så den ville sige at planen var timer gammel.
         old = (self.now - self.timedelta(hours=6)).isoformat()
         fresh = (self.now - self.timedelta(minutes=2)).isoformat()
         state = State("x", "ok", {}, last_changed=old, last_updated=fresh)
@@ -400,7 +400,7 @@ if __name__ == "__main__":
 
 
 class ChargeFlagTest(unittest.TestCase):
-    """Opladningen som sin egen entitet, saa den ikke skal graves ud."""
+    """Opladningen som sin egen entitet, så den ikke skal graves ud."""
 
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-lad-"))
@@ -413,8 +413,8 @@ class ChargeFlagTest(unittest.TestCase):
                 OUT: State(OUT, "17.2", {}, "u"),
             }
         )
-        # Uden tanke er der ingen plads at lade op i, og saa vil
-        # planlaeggeren aldrig sige ja uanset prisen. Halvtomme tanke:
+        # Uden tanke er der ingen plads at lade op i, og så vil
+        # planlæggeren aldrig sige ja uanset prisen. Halvtomme tanke:
         # 1000 L mellem 30 og 60 grader med rigelig plads.
         o = self.app.options
         for entity, temp in (
@@ -455,8 +455,8 @@ class ChargeFlagTest(unittest.TestCase):
         self.assertEqual(self.flag(), "on")
 
     def test_it_carries_the_same_gate_as_the_decision(self):
-        # Tilstanden er hvad planlaeggeren vil; "styrer" siger om det maa
-        # foelges. De to skal aldrig kunne sige hver sit.
+        # Tilstanden er hvad planlæggeren vil; "styrer" siger om det må
+        # følges. De to skal aldrig kunne sige hver sit.
         self.plan(40, 40, 300, 300)
         asyncio.run(self.app.cycle(self.ha))
 

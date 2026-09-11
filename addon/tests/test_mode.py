@@ -12,7 +12,7 @@ class ModeTest(unittest.TestCase):
     def test_the_hot_water_output_is_a_fact(self):
         mode, dhw = _mode(dhw=True, spa=False, setpoint=42.0, curve=CURVE)
 
-        # Setpunktet siger 42, men udgangen staar taendt. Udgangen vinder.
+        # Setpunktet siger 42, men udgangen står tændt. Udgangen vinder.
         self.assertEqual(mode, "varmt vand")
         self.assertTrue(dhw)
 
@@ -34,9 +34,9 @@ class ModeTest(unittest.TestCase):
         self.assertFalse(dhw)
 
     def test_a_negative_flag_does_not_make_56_degrees_the_weather(self):
-        # Her stod det modsatte, og det var fejlen: udgangen kan staa paa nul
-        # mens spaen varmer, og saa blev 56 °C laert som om huset havde bedt
-        # om det. Ved 19 °C ude kom kurven til at staa paa 44 i stedet for 27.
+        # Her stod det modsatte, og det var fejlen: udgangen kan stå på nul
+        # mens spaen varmer, og så blev 56 °C lært som om huset havde bedt
+        # om det. Ved 19 °C ude kom kurven til at stå på 44 i stedet for 27.
         mode, dhw = _mode(dhw=False, spa=False, setpoint=56.0, curve=CURVE)
 
         self.assertIn("varmt vand", mode)
@@ -55,9 +55,9 @@ class ModeTest(unittest.TestCase):
         self.assertFalse(dhw)
 
     def test_a_setpoint_far_above_the_curve_is_hot_water_wherever_it_sits(self):
-        # 44 °C er husets rigtige fremloeb om vinteren, men ved 19 °C ude
+        # 44 °C er husets rigtige fremløb om vinteren, men ved 19 °C ude
         # beder huset om 27. Det er den slags varmtvand der ikke kan kendes
-        # paa vaerdien - kun paa stedet.
+        # på værdien - kun på stedet.
         curve = HeatCurve(dhw_setpoint=56.0)
         for _ in range(10):
             curve.learn(outdoor=19.0, setpoint=27.0)
@@ -75,10 +75,10 @@ class ModeTest(unittest.TestCase):
 
 class CurveTrustsTheFactTest(unittest.TestCase):
     def test_a_flag_may_add_suspicion_but_never_remove_it(self):
-        # Et *ja* fra anlaegget er en kendsgerning. Et *nej* er ikke den samme
-        # slags: udgangen kan staa paa nul mens spaen varmer. Her stod
+        # Et *ja* fra anlægget er en kendsgerning. Et *nej* er ikke den samme
+        # slags: udgangen kan stå på nul mens spaen varmer. Her stod
         # ``if self.is_dhw(setpoint) if dhw is None else dhw``, og det lod
-        # nejet slaa vaerditjekket fra.
+        # nejet slå værditjekket fra.
         curve = HeatCurve(dhw_setpoint=56.0)
 
         note = curve.learn(outdoor=-8.0, setpoint=56.0, dhw=False)

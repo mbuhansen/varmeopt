@@ -17,8 +17,8 @@ from varmeopt.houseload import (
 )
 from varmeopt.tank import WH_PER_LITER_K
 
-# 1000 L svarer til det her mange kWh pr. kelvin. Bruges til at oversaette
-# foelerstoej til energi, saa stoejbudgettet i modulets docstring kan proeves.
+# 1000 L svarer til det her mange kWh pr. kelvin. Bruges til at oversætte
+# følerstøj til energi, så støjbudgettet i modulets docstring kan prøves.
 KWH_PER_K = 1000 * WH_PER_LITER_K / 1000
 
 
@@ -54,7 +54,7 @@ def drive(
 
 class MeasurementTest(unittest.TestCase):
     def test_a_quiet_window_gives_the_draw_back(self):
-        # Ingen kilder, lageret taber 2,5 kW. Saa er det huset der tager dem.
+        # Ingen kilder, lageret taber 2,5 kW. Så er det huset der tager dem.
         load = HouseLoad()
 
         drive(load, draw_kw=2.5)
@@ -71,8 +71,8 @@ class MeasurementTest(unittest.TestCase):
         self.assertAlmostEqual(load.kw, 2.5, places=6)
 
     def test_sensor_noise_does_not_move_the_answer(self):
-        # +/- 0,05 K paa middeltemperaturen er mere end de ~0,04 K der er
-        # regnet med. Haeldningen over tredive aflaesninger skal baere det.
+        # +/- 0,05 K på middeltemperaturen er mere end de ~0,04 K der er
+        # regnet med. Hældningen over tredive aflæsninger skal bære det.
         load = HouseLoad()
 
         drive(load, draw_kw=2.5, noise=0.05 * KWH_PER_K)
@@ -85,7 +85,7 @@ class MeasurementTest(unittest.TestCase):
         notes = drive(load, minutes=8)
 
         self.assertIsNone(load.kw)
-        self.assertIn("maaler", notes[-1])
+        self.assertIn("måler", notes[-1])
 
     def test_the_standby_loss_belongs_to_the_tanks_not_the_house(self):
         load = HouseLoad()
@@ -100,18 +100,18 @@ class RejectionTest(unittest.TestCase):
 
     def test_a_bath_empties_the_same_tanks(self):
         # VVB og spa tapper bufferen, og en energibalance kan ikke se forskel
-        # paa et brusebad og en radiator.
+        # på et brusebad og en radiator.
         load = HouseLoad()
         drive(load, minutes=20)
 
         self.assertIn("bad eller spa", load.observe(1260.0, 50.0, {}, dhw=True))
 
-        # Vinduet begynder forfra: de naeste ti minutter er ikke nok til et
-        # nyt tal. Den gamle maaling staar tilbage indtil den bliver for
-        # gammel - det er ``kw_at`` der afgoer, ikke badet.
+        # Vinduet begynder forfra: de næste ti minutter er ikke nok til et
+        # nyt tal. Den gamle måling står tilbage indtil den bliver for
+        # gammel - det er ``kw_at`` der afgør, ikke badet.
         after = drive(load, minutes=10, start_at=1320.0, start_energy=50.0)
 
-        self.assertIn("maaler", after[-1])
+        self.assertIn("måler", after[-1])
 
     def test_the_spa_counts_too(self):
         load = HouseLoad()
@@ -128,19 +128,19 @@ class RejectionTest(unittest.TestCase):
         self.assertIn("COP", note)
 
     def test_a_sensor_falling_out_changes_the_basis(self):
-        # Et lag der falder ud, skifter energigrundlaget midt i maalingen:
-        # forskellen ville vaere foelerens og ikke husets.
+        # Et lag der falder ud, skifter energigrundlaget midt i målingen:
+        # forskellen ville være følerens og ikke husets.
         load = HouseLoad()
         drive(load, minutes=20, sensors=6)
 
-        self.assertIn("foelere", load.observe(1260.0, 50.0, {}, sensors=5))
+        self.assertIn("følere", load.observe(1260.0, 50.0, {}, sensors=5))
 
         after = drive(load, minutes=10, start_at=1320.0, start_energy=50.0, sensors=5)
 
-        self.assertIn("maaler", after[-1])
+        self.assertIn("måler", after[-1])
 
     def test_a_gap_in_the_readings_starts_over(self):
-        # Et hul betyder at vi ikke ved hvad der loeb ind imens.
+        # Et hul betyder at vi ikke ved hvad der løb ind imens.
         load = HouseLoad()
         drive(load, minutes=20)
 
@@ -148,11 +148,11 @@ class RejectionTest(unittest.TestCase):
 
         after = drive(load, minutes=10, start_at=10059.0, start_energy=50.0)
 
-        self.assertIn("maaler", after[-1])
+        self.assertIn("måler", after[-1])
 
     def test_energy_appearing_from_nowhere_is_not_a_measurement(self):
-        # Lageret vokser meget mere end kilderne kan forklare. Saa gik der
-        # noget ind vi ikke saa, og det er ikke husets forbrug.
+        # Lageret vokser meget mere end kilderne kan forklare. Så gik der
+        # noget ind vi ikke så, og det er ikke husets forbrug.
         load = HouseLoad()
 
         notes = drive(load, draw_kw=-3.0)
@@ -161,7 +161,7 @@ class RejectionTest(unittest.TestCase):
         self.assertTrue(any("forklarer" in n for n in notes), notes)
 
     def test_a_small_negative_is_just_zero(self):
-        # Lidt stoej den forkerte vej er ikke et hus der leverer varme.
+        # Lidt støj den forkerte vej er ikke et hus der leverer varme.
         load = HouseLoad()
 
         drive(load, draw_kw=-0.2)
@@ -173,7 +173,7 @@ class ModelledVesselTest(unittest.TestCase):
     """Spaen kører fem timer om dagen. Kasseres de vinduer, er målingen tavs."""
 
     def test_a_known_vessel_draw_keeps_the_measurement_running(self):
-        # 6,0 kW ud af tankene, hvoraf spaen tager 3,5. Saa er huset paa 2,5.
+        # 6,0 kW ud af tankene, hvoraf spaen tager 3,5. Så er huset på 2,5.
         load = HouseLoad()
 
         drive(load, draw_kw=6.0, dhw=True, vessel_kw=3.5, outdoor=5.0)
@@ -182,8 +182,8 @@ class ModelledVesselTest(unittest.TestCase):
         self.assertIn("bad/spa", load.note)
 
     def test_a_modelled_window_never_teaches_the_curve(self):
-        # Skoennet maa gerne baere det tal der vises nu. Det maa ikke bygge
-        # modellen - saa ville et gaet paa spaens traek blive til viden om
+        # Skønnet må gerne bære det tal der vises nu. Det må ikke bygge
+        # modellen - så ville et gæt på spaens træk blive til viden om
         # huset.
         load = HouseLoad()
 
@@ -191,11 +191,11 @@ class ModelledVesselTest(unittest.TestCase):
 
         self.assertEqual(load.curve.point_count, 0)
         self.assertEqual(len(load.history), 1)
-        self.assertTrue(load.history[0][3], "vinduet skal vaere maerket")
+        self.assertTrue(load.history[0][3], "vinduet skal være mærket")
 
     def test_a_modelled_window_is_not_scored_against_the_meter(self):
-        # Scoren skal sige hvor godt *maalingen* rammer, ikke hvor godt et
-        # skoen paa spaen rammer.
+        # Scoren skal sige hvor godt *målingen* rammer, ikke hvor godt et
+        # skøn på spaen rammer.
         load = HouseLoad()
 
         drive(load, draw_kw=6.0, dhw=True, vessel_kw=3.5, meter_kw=2.4)
@@ -271,7 +271,7 @@ class VesselProfileTest(unittest.TestCase):
                 hour = (minute // 60) % 24
                 on = hour in on_hours
                 profile.observe(at, on, kw if on else None)
-            # Sidste time skal ogsaa lukkes.
+            # Sidste time skal også lukkes.
             profile.observe(start + day * 86400 + 24 * 3600, False, None)
 
     def test_the_schedule_shows_up_in_the_profile(self):
@@ -292,7 +292,7 @@ class VesselProfileTest(unittest.TestCase):
         profile = VesselProfile()
         self.run_day(profile, days=3)
 
-        # Fem timer a 3,5 kW er 17,5 kWh. Spurgt fra midnat over hele doegnet
+        # Fem timer a 3,5 kW er 17,5 kWh. Spurgt fra midnat over hele døgnet
         # skal profilen give dem igen.
         self.assertAlmostEqual(
             profile.kwh_between(self.midnight(), 24.0), 17.5, delta=1.0
@@ -308,7 +308,7 @@ class VesselProfileTest(unittest.TestCase):
         self.assertIsNone(VesselProfile().kwh_between(self.midnight(), 6.0))
 
     def test_half_an_hour_is_not_an_hour(self):
-        # En genstart midt i timen maa ikke taelle som om vesslerne stod
+        # En genstart midt i timen må ikke tælle som om vesslerne stod
         # stille resten af den.
         from varmeopt.houseload import VesselProfile
 
@@ -341,8 +341,8 @@ class VesselProfileTest(unittest.TestCase):
         self.assertEqual(back.known_hours, 0)
 
     def test_it_learns_from_the_minutes_the_measurement_throws_away(self):
-        # Vinduet kasseres naar der bades, og netop derfor skal profilen
-        # laere af de minutter - de er de eneste der ellers aldrig blev husket.
+        # Vinduet kasseres når der bades, og netop derfor skal profilen
+        # lære af de minutter - de er de eneste der ellers aldrig blev husket.
         load = HouseLoad()
         start = self.midnight() + 13 * 3600
 
@@ -371,8 +371,8 @@ class CurveTest(unittest.TestCase):
         self.assertAlmostEqual(curve.predict(5.0), 3.0, places=6)
 
     def test_it_extends_the_line_below_the_measured_range(self):
-        # Husets tab er proportionalt med forskellen inde-ude, saa linjen maa
-        # forlaenges. Varmekurven klemmer fast; den her har fysik bag sig.
+        # Husets tab er proportionalt med forskellen inde-ude, så linjen må
+        # forlænges. Varmekurven klemmer fast; den her har fysik bag sig.
         curve = LoadCurve()
         curve.learn(0.0, 4.0)
         curve.learn(10.0, 2.0)
@@ -380,8 +380,8 @@ class CurveTest(unittest.TestCase):
         self.assertAlmostEqual(curve.predict(-5.0), 5.0, places=6)
 
     def test_it_never_extends_upwards(self):
-        # To punkter der peger den forkerte vej, er stoej i belaegningen og
-        # ikke et hus der bruger mere varme naar det bliver varmere.
+        # To punkter der peger den forkerte vej, er støj i belægningen og
+        # ikke et hus der bruger mere varme når det bliver varmere.
         curve = LoadCurve()
         curve.learn(0.0, 2.0)
         curve.learn(10.0, 3.0)
@@ -421,8 +421,8 @@ class FallbackTest(unittest.TestCase):
         self.assertAlmostEqual(load.kw_at(WINDOW_MINUTES * 60, 10.0), 2.5, places=6)
 
     def test_a_stale_measurement_gives_way_to_the_curve(self):
-        # Uden ``outdoor`` laerer maalingen ikke af sig selv, saa kurvens
-        # punkt staar urort og det er den der proeves her.
+        # Uden ``outdoor`` lærer målingen ikke af sig selv, så kurvens
+        # punkt står urort og det er den der prøves her.
         load = HouseLoad()
         load.curve.learn(10.0, 4.0)
         drive(load, draw_kw=2.5)
@@ -435,7 +435,7 @@ class FallbackTest(unittest.TestCase):
         self.assertIsNone(HouseLoad().kw_at(0.0, 10.0))
 
     def test_the_curve_learns_once_per_window_not_once_per_minute(self):
-        # Den rullende maaling regnes hvert minut, og de tredive tal beskriver
+        # Den rullende måling regnes hvert minut, og de tredive tal beskriver
         # den samme halve time. Lærte kurven af dem alle, ville én aften se ud
         # som tredive aftener.
         load = HouseLoad()
@@ -455,8 +455,8 @@ class FallbackTest(unittest.TestCase):
 
 class StorageTest(unittest.TestCase):
     def test_only_the_curve_and_the_score_survive_a_restart(self):
-        # Et igangvaerende vindue gemmes med vilje ikke: en genstart betyder
-        # et hul i aflaesningerne. Samme valg som staatabsmaalingen.
+        # Et igangværende vindue gemmes med vilje ikke: en genstart betyder
+        # et hul i aflæsningerne. Samme valg som ståtabsmålingen.
         load = HouseLoad()
         drive(load, draw_kw=2.5, outdoor=5.0, meter_kw=2.4)
 

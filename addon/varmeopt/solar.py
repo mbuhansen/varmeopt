@@ -59,9 +59,9 @@ _DIFFUSE_SWING = 0.165
 # Hvor meget jorden kaster tilbage. Sne ville give mere, men det er få dage.
 _GROUND_ALBEDO = 0.2
 
-# Skalafaktoren maales mod geometrien, saa den betyder kun noget saa laenge
-# geometrien er den samme. Version 2 tog diffus straaling med; et tal lært
-# under version 1 er malt med en anden malestok og kastes vaek.
+# Skalafaktoren måles mod geometrien, så den betyder kun noget så længe
+# geometrien er den samme. Version 2 tog diffus stråling med; et tal lært
+# under version 1 er malt med en anden malestok og kastes væk.
 MODEL_VERSION = 2
 
 
@@ -211,7 +211,7 @@ class DayTracker:
         thermal_today: float | None,
         store_full: bool = False,
     ) -> tuple[float, float, str, bool] | None:
-        """Returnerer (solvarme, prognose, dato, maettet) når et døgn er slut.
+        """Returnerer (solvarme, prognose, dato, mættet) når et døgn er slut.
 
         ``store_full`` skal aflæses *undervejs*, ikke ved døgnskiftet — ved
         midnat er tankene kølet af, og en dag hvor solen stod og bankede mod
@@ -332,8 +332,8 @@ class SolarModel:
         """Indarbejd et fuldt døgn. Returnerer en status der kan logges."""
         if store_was_full:
             return "ignoreret: lageret var fuldt - solen fik ikke lov"
-        # NaN sammenlignes falsk med alt, saa hverken <= 0.5 eller < 0 fanger
-        # den. Slap den igennem, forgiftede den skalafaktoren indtil naeste
+        # NaN sammenlignes falsk med alt, så hverken <= 0.5 eller < 0 fanger
+        # den. Slap den igennem, forgiftede den skalafaktoren indtil næste
         # genstart - hver eneste forudsigelse derefter blev NaN.
         if not _is_number(pv_forecast_kwh) or pv_forecast_kwh <= 0.5:
             return "ignoreret: for lidt sol til at sige noget"
@@ -348,7 +348,7 @@ class SolarModel:
         if self.scale is None:
             self.scale = observed
             self.days = 1.0
-            return f"foerste dag: skalafaktor {observed:.3f}"
+            return f"første dag: skalafaktor {observed:.3f}"
 
         self.days += 1
         self.scale = self.scale * (1 - _ALPHA) + observed * _ALPHA

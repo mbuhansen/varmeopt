@@ -14,7 +14,7 @@ from varmeopt.store import Store
 
 FLOW = "sensor.flow"
 COP = "sensor.cop"
-# Udetemperaturen har sin egen entitet. Den kom foer fra Node-REDs
+# Udetemperaturen har sin egen entitet. Den kom før fra Node-REDs
 # flow-context; den vej findes ikke mere.
 OUT = "sensor.ude"
 
@@ -42,8 +42,8 @@ class FakeHa:
         # Vejrudsigten hentes med et service-kald, ikke som en tilstand.
         self.forecast_response: dict = {}
         self.services: list[tuple[str, str]] = []
-        # Naar den er sat, fejler skrivningen til netop den entitet. Bruges
-        # til at proeve at én fejlet udgivelse ikke tager de andre med sig.
+        # Når den er sat, fejler skrivningen til netop den entitet. Bruges
+        # til at prøve at én fejlet udgivelse ikke tager de andre med sig.
         self.fail_on: str | None = None
 
     def measure(self, cop: object, last_changed: str | None) -> None:
@@ -54,15 +54,15 @@ class FakeHa:
 
     async def set_state(self, entity_id, state, attributes=None) -> None:
         if self.fail_on is not None and entity_id == self.fail_on:
-            raise HaError(f"skrivning til {entity_id} fejlede (proeve)")
+            raise HaError(f"skrivning til {entity_id} fejlede (prøve)")
         self.published.append((entity_id, state))
         self.attributes[entity_id] = attributes or {}
 
     async def call_service(self, domain, service, data):
         self.services.append((domain, service))
         # Som Home Assistants REST-API svarer: service-svaret ligger inde i
-        # en indpakning. Attrappen svarede foer uden den, og saa kunne den
-        # ikke se at udsigten var ulaeselig paa det koerende anlaeg.
+        # en indpakning. Attrappen svarede før uden den, og så kunne den
+        # ikke se at udsigten var ulæselig på det kørende anlæg.
         return {"changed_states": [], "service_response": self.forecast_response}
 
 
@@ -75,7 +75,7 @@ class CycleTest(unittest.TestCase):
         self.ha = FakeHa(
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
-                COP: State(COP, "4.4", {}, "maaling-1"),
+                COP: State(COP, "4.4", {}, "måling-1"),
                 OUT: State(OUT, "17.2", {}, "ude-1"),
             }
         )
@@ -98,7 +98,7 @@ class CycleTest(unittest.TestCase):
 
     def test_new_last_changed_is_learned_again(self):
         self.cycle()
-        self.ha.measure(4.6, "maaling-2")
+        self.ha.measure(4.6, "måling-2")
         self.cycle()
 
         self.assertEqual(self.samples, 12.0)
@@ -114,20 +114,20 @@ class CycleTest(unittest.TestCase):
     def test_stopped_pump_is_not_remembered_as_learned(self):
         # En ignoreret måling må ikke optage pladsen som "sidst lært", ellers
         # kunne den spærre for en rigtig måling bagefter.
-        self.ha.measure(0, "maaling-1")
+        self.ha.measure(0, "måling-1")
         self.cycle()
 
         self.assertEqual(self.samples, 10.0)
         self.assertIsNone(self.app._last_learned_stamp)
 
     def test_implausible_measurement_is_not_remembered_as_learned(self):
-        self.ha.measure(99, "maaling-1")
+        self.ha.measure(99, "måling-1")
         self.cycle()
 
         self.assertEqual(self.samples, 10.0)
         self.assertIsNone(self.app._last_learned_stamp)
 
-    # ------------------------------------------------------------- oevrigt
+    # ------------------------------------------------------------- øvrigt
 
     def test_lookup_is_published_to_home_assistant(self):
         self.cycle()
@@ -170,14 +170,14 @@ class CycleTest(unittest.TestCase):
             self.ha._states[eid] = State(eid, str(temp), {}, "tank-1")
 
     def test_the_charge_mark_lands_on_the_row_the_block_starts_in(self):
-        # Planens raekker er nummereret fra halvtimens begyndelse - raekke 0
-        # er den halvtime vi staar i - og web-siden skriver klokkeslaettet
-        # som halvtimens start. Blokken ligger paa det samme gitter, saa de
-        # to skal maales fra det samme nulpunkt.
+        # Planens rækker er nummereret fra halvtimens begyndelse - række 0
+        # er den halvtime vi står i - og web-siden skriver klokkeslættet
+        # som halvtimens start. Blokken ligger på det samme gitter, så de
+        # to skal måles fra det samme nulpunkt.
         #
-        # Foer blev blokken maalt fra *dette sekund*: kl. 04:56 blev en blok
-        # kl. 13:00 til 484 minutter, og 484 rammer raekken der hedder 12:30.
-        # Maerket stod én raekke for tidligt.
+        # Før blev blokken målt fra *dette sekund*: kl. 04:56 blev en blok
+        # kl. 13:00 til 484 minutter, og 484 rammer rækken der hedder 12:30.
+        # Mærket stod én række for tidligt.
         from varmeopt.charge import Block, slot_start
 
         now = 1_757_000_000.0 + 26 * 60  # et godt stykke inde i halvtimen
@@ -197,9 +197,9 @@ class CycleTest(unittest.TestCase):
         self.assertEqual(window, (510, 525))
 
     def test_a_slower_pump_lowers_the_minimum_draw(self):
-        # Typeskiltet siger 16 kW og mindstetraekket 4,0 kWh; maskinen
-        # leverer omkring 11, saa de 4,0 kWh var 22 minutter og ikke de 15
-        # reglen handler om. Blokken laegges i forvejen med den maalte rate.
+        # Typeskiltet siger 16 kW og mindstetrækket 4,0 kWh; maskinen
+        # leverer omkring 11, så de 4,0 kWh var 22 minutter og ikke de 15
+        # reglen handler om. Blokken lægges i forvejen med den målte rate.
         self.cycle()
         nameplate = self.app.planner.min_charge_kwh
 
@@ -216,8 +216,8 @@ class CycleTest(unittest.TestCase):
 
     def test_a_tank_that_stops_answering_holds_its_last_reading(self):
         # Natten til den 10. september svarede tank B ikke i ét minut, og
-        # lageret halverede sig fra 22,6 til 11,8 kWh. Baade opladningen og
-        # «lageret er fuldt» laeser den sum.
+        # lageret halverede sig fra 22,6 til 11,8 kWh. Både opladningen og
+        # «lageret er fuldt» læser den sum.
         self._fill_tanks()
         self.cycle()
         whole = self.app.status["tank"].stored_kwh
@@ -231,7 +231,7 @@ class CycleTest(unittest.TestCase):
     def test_a_held_reading_is_dropped_when_it_gets_old(self):
         self._fill_tanks()
         self.cycle()
-        # Skru aflaesningens alder tilbage, som om der var gaaet en time.
+        # Skru aflæsningens alder tilbage, som om der var gået en time.
         stamp, tank = self.app._tank_last["B"]
         self.app._tank_last["B"] = (stamp - 3600, tank)
 
@@ -249,9 +249,9 @@ class CycleTest(unittest.TestCase):
         self.assertNotIn("sensor.varmeopt_lager", dict(self.ha.published))
 
     def test_the_price_and_the_source_decision_are_published(self):
-        # Hele kaeden: Predbats plan -> marginalpris -> varmepris via COP ->
-        # valg mod pillefyret. Det er den beslutning Node-RED traeffer i dag,
-        # regnet paa den rettede COP.
+        # Hele kæden: Predbats plan -> marginalpris -> varmepris via COP ->
+        # valg mod pillefyret. Det er den beslutning Node-RED træffer i dag,
+        # regnet på den rettede COP.
         o = self.app.options
         self.ha._states[o.entity_predbat_plan] = State(
             o.entity_predbat_plan,
@@ -270,7 +270,7 @@ class CycleTest(unittest.TestCase):
 
         published = dict(self.ha.published)
         self.assertIn("sensor.varmeopt_elpris", published)
-        # Batteriet er bundet, saa varmepumpen koerer paa nettet: 1,80 kr.
+        # Batteriet er bundet, så varmepumpen kører på nettet: 1,80 kr.
         self.assertAlmostEqual(published["sensor.varmeopt_elpris"], 1.80, places=3)
 
         status = self.app.status
@@ -279,29 +279,29 @@ class CycleTest(unittest.TestCase):
         # 1,80 delt med den lærte COP mod pillefyrets 0,706.
         self.assertIsNotNone(status["heat_price"])
         self.assertIn(status["decision"].source, ("varmepumpe", "pillefyr"))
-        # Tilstanden er den kilde vagten staar ved, ikke planlaeggerens raa
-        # svar. Paa foerste cyklus er de ens; se ``HeldDecisionTest`` for
-        # hvad der sker naar de ikke er.
+        # Tilstanden er den kilde vagten står ved, ikke planlæggerens rå
+        # svar. På første cyklus er de ens; se ``HeldDecisionTest`` for
+        # hvad der sker når de ikke er.
         self.assertEqual(published["sensor.varmeopt_beslutning"], status["command"].source)
         self.assertEqual(
-            self.ha.attributes["sensor.varmeopt_beslutning"]["raa_kilde"],
+            self.ha.attributes["sensor.varmeopt_beslutning"]["rå_kilde"],
             status["decision"].source,
         )
 
     def test_a_missing_predbat_plan_is_not_fatal(self):
-        # Predbat kan vaere nede eller endnu ikke have lagt en plan. Cyklussen
-        # skal koere videre - COP-laeringen afhaenger ikke af priser.
+        # Predbat kan være nede eller endnu ikke have lagt en plan. Cyklussen
+        # skal køre videre - COP-læringen afhænger ikke af priser.
         self.cycle()
 
         self.assertNotIn("sensor.varmeopt_elpris", dict(self.ha.published))
         self.assertIsNone(self.app.status.get("price_now"))
-        # Men kildevalget staar stadig - det kraever ingen plan.
+        # Men kildevalget står stadig - det kræver ingen plan.
         self.assertEqual(self.app.status["decision"].source, "varmepumpe")
 
     def test_the_battery_price_is_computed_from_the_plan(self):
         o = self.app.options
-        # Batteriet aflader maalbart - ellers staar anlaegget i balance, og saa
-        # er det den billigste af net og batteri der gaelder, ikke batteriet.
+        # Batteriet aflader målbart - ellers står anlægget i balance, og så
+        # er det den billigste af net og batteri der gælder, ikke batteriet.
         self.ha._states[o.entity_battery_power] = State(o.entity_battery_power, "3000", {}, "b")
         self.ha._states[o.entity_predbat_plan] = State(
             o.entity_predbat_plan,
@@ -319,7 +319,7 @@ class CycleTest(unittest.TestCase):
         self.cycle()
 
         # Ingen entitet spurgt: den billigste import der er tilbage er 1,00,
-        # og der skal koebes 1/0,832 for at have den kilowatt-time igen.
+        # og der skal købes 1/0,832 for at have den kilowatt-time igen.
         self.assertAlmostEqual(
             self.app.status["price_now"].kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=3
         )
@@ -327,8 +327,8 @@ class CycleTest(unittest.TestCase):
         self.assertIn("genanskaffelse", self.app.status["price_now"].detail)
 
     def test_a_balanced_plant_runs_on_the_battery_at_the_grid_s_price(self):
-        # Ingen maalbar stroem nogen vej. Kilden er inverteren - det er
-        # anlaeggets regel - og prisen er loftet af hvad nettet tager for den
+        # Ingen målbar strøm nogen vej. Kilden er inverteren - det er
+        # anlæggets regel - og prisen er loftet af hvad nettet tager for den
         # samme kilowatt-time.
         o = self.app.options
         self.ha._states[o.entity_predbat_plan] = State(
@@ -347,7 +347,7 @@ class CycleTest(unittest.TestCase):
     # ------------------------------------------------- Predbats egen status
 
     def with_plan_and_status(self, state, status):
-        """En plan hvis foerste raekke er ``state``, og Predbats status."""
+        """En plan hvis første række er ``state``, og Predbats status."""
         o = self.app.options
         self.ha._states[o.entity_predbat_plan] = State(
             o.entity_predbat_plan,
@@ -360,10 +360,10 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_a_cycle_survives_predbat_having_a_status(self):
-        # Her gik 0.38.0 ned: kontrollen mod Predbats status laeste stadig
-        # ``slot.discharging`` og ``slot.charging``, som var vaek. Ingen test
-        # kom nogensinde forbi den linje, og saa faldt hver eneste cyklus paa
-        # anlaegget - uden at en eneste test blev roed.
+        # Her gik 0.38.0 ned: kontrollen mod Predbats status læste stadig
+        # ``slot.discharging`` og ``slot.charging``, som var væk. Ingen test
+        # kom nogensinde forbi den linje, og så faldt hver eneste cyklus på
+        # anlægget - uden at en eneste test blev rød.
         self.with_plan_and_status("holdchrg", "Hold charging")
 
         self.cycle()
@@ -371,8 +371,8 @@ class CycleTest(unittest.TestCase):
         self.assertIn("sensor.varmeopt_elpris", dict(self.ha.published))
 
     def test_disagreement_with_predbats_status_is_said_out_loud(self):
-        # Er de uenige om indevaerende halvtime, laeser vi planens
-        # tilstandsord forkert, og saa er hver pris i horisonten et gaet.
+        # Er de uenige om indeværende halvtime, læser vi planens
+        # tilstandsord forkert, og så er hver pris i horisonten et gæt.
         self.with_plan_and_status("demand", "Charging")
 
         with self.assertLogs("varmeopt", level="WARNING") as caught:
@@ -383,8 +383,8 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_predbats_words_map_to_the_same_three_outcomes(self):
-        # "Discharging" indeholder "charg". Raekkefoelgen i oversaettelsen er
-        # derfor ikke til pynt, og den er faldet forkert ud foer.
+        # "Discharging" indeholder "charg". Rækkefølgen i oversættelsen er
+        # derfor ikke til pynt, og den er faldet forkert ud før.
         for status, mode in (
             ("Demand", "discharge"),
             ("Discharging", "discharge"),
@@ -397,14 +397,14 @@ class CycleTest(unittest.TestCase):
                 self.assertEqual(self.app._status_mode(status.lower()), mode)
 
     def test_a_status_we_cannot_translate_says_nothing(self):
-        # En kontrol der gaetter, er vaerre end ingen kontrol.
+        # En kontrol der gætter, er værre end ingen kontrol.
         self.assertIsNone(self.app._status_mode("noget helt andet"))
         self.assertIsNone(self.app._status_mode("idle"))
 
     # ------------------------------------------ varmepumpens egne to tal
 
     def with_hp(self, power=None, heat=None, cop=None):
-        """Saet varmepumpens elforbrug, varmeydelse og COP-foeler."""
+        """Sæt varmepumpens elforbrug, varmeydelse og COP-føler."""
         o = self.app.options
         for entity, value in (
             (o.entity_hp_power, power),
@@ -420,9 +420,9 @@ class CycleTest(unittest.TestCase):
             self.ha.measure(cop, "cop-1")
 
     def test_the_measured_output_beats_the_derived_one(self):
-        # Foer blev ydelsen udledt som elforbrug gange COP - her 2 x 4,4 =
-        # 8,8 kW. Naar anlaegget selv maaler 6,0, er det 6,0 der gaelder:
-        # det maalte slaar det udledte.
+        # Før blev ydelsen udledt som elforbrug gange COP - her 2 x 4,4 =
+        # 8,8 kW. Når anlægget selv måler 6,0, er det 6,0 der gælder:
+        # det målte slår det udledte.
         self.with_hp(power=2.0, heat=6.0, cop=4.4)
 
         self.cycle()
@@ -441,9 +441,9 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_a_measured_output_frees_the_balance_from_the_cop_sensor(self):
-        # Uden COP kunne varmepumpens bidrag foer ikke regnes, og saa maatte
-        # lagerbalancen ikke maale husets forbrug. Maales ydelsen, er den
-        # spaerre vaek.
+        # Uden COP kunne varmepumpens bidrag før ikke regnes, og så måtte
+        # lagerbalancen ikke måle husets forbrug. Måles ydelsen, er den
+        # spærre væk.
         o = self.app.options
         self.with_hp(power=2.0, heat=6.0)
         self.ha._states.pop(o.entity_cop_measured, None)
@@ -456,8 +456,8 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_the_plants_own_numbers_check_the_cop_sensor(self):
-        # 6,0 kW varme paa 2,0 kW el er COP 3,0. Melder foeleren 4,4, maaler
-        # den noget andet end vi tror - og hele COP-tabellen er bygget paa den.
+        # 6,0 kW varme på 2,0 kW el er COP 3,0. Melder føleren 4,4, måler
+        # den noget andet end vi tror - og hele COP-tabellen er bygget på den.
         self.with_hp(power=2.0, heat=6.0, cop=4.4)
 
         with self.assertLogs("varmeopt", level="WARNING") as caught:
@@ -465,12 +465,12 @@ class CycleTest(unittest.TestCase):
 
         self.assertAlmostEqual(self.app.status["hp_cop_measured"], 3.0, places=3)
         self.assertTrue(
-            any("COP" in line and "foeleren" in line for line in caught.output),
+            any("COP" in line and "føleren" in line for line in caught.output),
             caught.output,
         )
 
     def test_agreement_is_not_worth_a_warning(self):
-        # 8,8 kW paa 2,0 kW el er praecis de 4,4 foeleren melder.
+        # 8,8 kW på 2,0 kW el er præcis de 4,4 føleren melder.
         self.with_hp(power=2.0, heat=8.8, cop=4.4)
 
         self.cycle()
@@ -479,8 +479,8 @@ class CycleTest(unittest.TestCase):
         self.assertFalse(self.app._warned_hp_cop)
 
     def test_the_calculated_house_load_gets_its_own_sensor(self):
-        # Attributter kommer ikke i Home Assistants langtidsstatistik, saa
-        # tallet skal have sin egen sensor for at kunne tegnes en maaned
+        # Attributter kommer ikke i Home Assistants langtidsstatistik, så
+        # tallet skal have sin egen sensor for at kunne tegnes en måned
         # tilbage.
         self.app.house_load.curve.learn(17.2, 3.3)
 
@@ -498,7 +498,7 @@ class CycleTest(unittest.TestCase):
         self.assertAlmostEqual(
             self.app._vessel_kw(False, True, 50.0), o.spa_kw, places=6
         )
-        # Bunden paa 40 grader er tom: fuld effekt. Paa 55 er den varm.
+        # Bunden på 40 grader er tom: fuld effekt. På 55 er den varm.
         self.assertAlmostEqual(
             self.app._vessel_kw(True, False, 40.0), o.vvb_kw_cold, places=6
         )
@@ -510,10 +510,10 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_the_guard_binding_is_actually_written_to_disk(self):
-        # ``to_raw`` blev aldrig kaldt, saa guard.json opstod aldrig,
+        # ``to_raw`` blev aldrig kaldt, så guard.json opstod aldrig,
         # ``restore`` var altid en no-op, og opholdstiden overlevede ikke en
-        # genstart. Testene proevede to_raw og restore mod hinanden og
-        # opdagede det ikke - samme faelde som nedbruddet i 0.38.0.
+        # genstart. Testene prøvede to_raw og restore mod hinanden og
+        # opdagede det ikke - samme fælde som nedbruddet i 0.38.0.
         from varmeopt.migrate import GUARD_FILE
 
         self.cycle()
@@ -530,10 +530,10 @@ class CycleTest(unittest.TestCase):
         self.assertTrue(self.app.store.exists(CHARGE_FILE))
 
     def test_a_missing_hot_water_flag_falls_back_to_the_setpoint(self):
-        # Falder udgangen ud, er det raa flag None. Uden en bagstopper bliver
-        # et bad paa op til 8 kW bogfoert som husets forbrug og laert varigt
+        # Falder udgangen ud, er det rå flag None. Uden en bagstopper bliver
+        # et bad på op til 8 kW bogført som husets forbrug og lært varigt
         # ind i kurven. Varmekurven genkender setpunktet; det skal
-        # husforbrugsmaalingen ogsaa.
+        # husforbrugsmålingen også.
         o = self.app.options
         self.ha._states.pop(o.entity_dhw_active, None)
         self.ha._states[o.entity_flow_temp] = State(
@@ -542,16 +542,16 @@ class CycleTest(unittest.TestCase):
 
         self.cycle()
 
-        # Udgangen svarer ikke, men setpunktet siger varmt vand - og saa er
-        # det den kendsgerning baade varmekurven og lagermaalingen bruger.
+        # Udgangen svarer ikke, men setpunktet siger varmt vand - og så er
+        # det den kendsgerning både varmekurven og lagermålingen bruger.
         self.assertIn("varmt vand", self.app.status["mode"])
 
-    # -------------------------------------------- husets forbrug uden maaler
+    # -------------------------------------------- husets forbrug uden måler
 
     def test_the_store_answers_when_the_flow_meter_cannot(self):
-        # Flowmaaleren svarer ikke i attrappen - praecis som naar den ligger
-        # under sin bund paa anlaegget. Saa skal lagerets tal traede i stedet
-        # hele vejen ud til sensoren, ikke bare staa i en attribut.
+        # Flowmåleren svarer ikke i attrappen - præcis som når den ligger
+        # under sin bund på anlægget. Så skal lagerets tal træde i stedet
+        # hele vejen ud til sensoren, ikke bare stå i en attribut.
         self.app.house_load.curve.learn(17.2, 3.3)
 
         self.cycle()
@@ -564,8 +564,8 @@ class CycleTest(unittest.TestCase):
         )
 
     def test_without_either_the_demand_sensor_stays_quiet(self):
-        # Ingen maaler og ingen kurve: saa er behovet ukendt, og en sensor der
-        # gaettede paa et tal ville vaere vaerre end en der tier.
+        # Ingen måler og ingen kurve: så er behovet ukendt, og en sensor der
+        # gættede på et tal ville være værre end en der tier.
         self.cycle()
 
         self.assertNotIn("sensor.varmeopt_behov", dict(self.ha.published))
@@ -590,7 +590,7 @@ class CycleTest(unittest.TestCase):
 
 
 class ForecastTest(unittest.TestCase):
-    """Vejrudsigten: hver time i planen faar sin egen COP."""
+    """Vejrudsigten: hver time i planen får sin egen COP."""
 
     def setUp(self):
         from datetime import datetime, timedelta, timezone
@@ -620,7 +620,7 @@ class ForecastTest(unittest.TestCase):
         asyncio.run(self.app.cycle(self.ha))
         asyncio.run(self.app.cycle(self.ha))
 
-        # Udsigten aendrer sig i timer, ikke i minutter.
+        # Udsigten ændrer sig i timer, ikke i minutter.
         self.assertEqual(self.ha.services, [("weather", "get_forecasts")])
         self.assertGreater(len(self.app.forecast), 0)
 
@@ -636,7 +636,7 @@ class ForecastTest(unittest.TestCase):
         self.ha.forecast_response = {}
         asyncio.run(self.app.cycle(self.ha))
 
-        # Planlaeggeren falder saa tilbage paa den COP vi har nu.
+        # Planlæggeren falder så tilbage på den COP vi har nu.
         self.assertIsNone(self.app._cop_at(360))
 
 
@@ -645,15 +645,15 @@ if __name__ == "__main__":
 
 
 class TenthOfSeptemberTest(unittest.TestCase):
-    """Hele haendelsen, spillet af igen.
+    """Hele hændelsen, spillet af igen.
 
-    Den 10. september laa Predbats plan stille: aftenens eksport var 3,38,
-    og batterigrenen vaerdisatte med rette energien til 3,04 - langt over
-    pillefyrets 0,71. Beslutningen skulle have staaet paa pillefyr fra 14:31
+    Den 10. september lå Predbats plan stille: aftenens eksport var 3,38,
+    og batterigrenen værdisatte med rette energien til 3,04 - langt over
+    pillefyrets 0,71. Beslutningen skulle have stået på pillefyr fra 14:31
     til 21:00. Den skiftede fjorten gange.
 
-    Aarsagen var to grene der maatte overtrumfe planen paa én stikproeve af
-    elmaaleren. Huset laa og vippede omkring nul, saa hvert minut hvor
+    Aarsagen var to grene der måtte overtrumfe planen på én stikprøve af
+    elmåleren. Huset lå og vippede omkring nul, så hvert minut hvor
     ``grid_power`` krydsede ±200 W, faldt prisen til importprisen og
     beslutningen vendte.
     """
@@ -674,7 +674,7 @@ class TenthOfSeptemberTest(unittest.TestCase):
         self.ha = FakeHa(
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
-                COP: State(COP, "4.4", {}, "maaling-1"),
+                COP: State(COP, "4.4", {}, "måling-1"),
                 OUT: State(OUT, "17.2", {}, "ude-1"),
                 o.entity_predbat_plan: State(
                     o.entity_predbat_plan, "ok", {"raw": {"rows": self.ROWS}}, "plan-1"
@@ -685,7 +685,7 @@ class TenthOfSeptemberTest(unittest.TestCase):
     def _meter(self, watts):
         o = self.app.options
         self.ha._states[o.entity_grid_power] = State(
-            o.entity_grid_power, str(watts), {}, f"maaler-{watts}"
+            o.entity_grid_power, str(watts), {}, f"måler-{watts}"
         )
 
     def test_the_meter_wobbling_across_zero_changes_nothing(self):
@@ -700,14 +700,14 @@ class TenthOfSeptemberTest(unittest.TestCase):
         # Én pris i alle fyrre cyklusser, ikke to der skiftes om at vinde.
         self.assertEqual(len(prices), 1, f"prisen vippede: {sorted(prices)}")
         # Og 3,42 er 0,90 x aftenens 3,80 - Predbats egen salgsmulighed,
-        # ikke den aktuelle halvtimes raa tarif paa 0,60.
+        # ikke den aktuelle halvtimes rå tarif på 0,60.
         self.assertAlmostEqual(prices.pop(), 3.42, places=6)
         self.assertEqual(set(states), {"pillefyr"})
 
     def test_and_without_the_wobble_it_is_the_same_answer(self):
-        # Kontrolproeven: uden maaling overhovedet skal svaret vaere det
-        # samme. Ellers vandt maaleren bare konsekvent i stedet for
-        # vekslende, og det ville vaere lige saa galt.
+        # Kontrolprøven: uden måling overhovedet skal svaret være det
+        # samme. Ellers vandt måleren bare konsekvent i stedet for
+        # vekslende, og det ville være lige så galt.
         asyncio.run(self.app.cycle(self.ha))
 
         self.assertAlmostEqual(self.app.status["price_now"].kr_per_kwh, 3.42, places=6)
@@ -715,12 +715,12 @@ class TenthOfSeptemberTest(unittest.TestCase):
 
 
 class HeldDecisionTest(unittest.TestCase):
-    """Entiteten maa ikke vippe, ogsaa naar styringen er slaaet fra.
+    """Entiteten må ikke vippe, også når styringen er slået fra.
 
     Det her er den test der ville have fanget fejlen fra den 10. september.
-    Resten af suiten koerte én cyklus fra en frisk ``Guard``, og der er den
-    holdte kilde altid lig den raa - saa alt var groent mens entiteten
-    skiftede fjorten gange paa seks timer.
+    Resten af suiten kørte én cyklus fra en frisk ``Guard``, og der er den
+    holdte kilde altid lig den rå - så alt var grønt mens entiteten
+    skiftede fjorten gange på seks timer.
     """
 
     DEAR = {"state": "holdchrg", "import_rate": 900, "export_rate": 50}
@@ -728,9 +728,9 @@ class HeldDecisionTest(unittest.TestCase):
 
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
-        # Bekraeftelsen slaas fra her, saa testen handler om hviletiden og om
-        # hvad der bliver *udgivet*. ``tests.test_guard.ConfirmTest`` daekker
-        # bekraeftelsen for sig.
+        # Bekræftelsen slås fra her, så testen handler om hviletiden og om
+        # hvad der bliver *udgivet*. ``tests.test_guard.ConfirmTest`` dækker
+        # bekræftelsen for sig.
         self.app = Varmeopt(
             options(control_warmup_minutes=0, control_confirm_minutes=0),
             Store(tmp),
@@ -739,7 +739,7 @@ class HeldDecisionTest(unittest.TestCase):
         self.ha = FakeHa(
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
-                COP: State(COP, "4.4", {}, "maaling-1"),
+                COP: State(COP, "4.4", {}, "måling-1"),
                 OUT: State(OUT, "17.2", {}, "ude-1"),
             }
         )
@@ -763,20 +763,20 @@ class HeldDecisionTest(unittest.TestCase):
         first = dict(self.ha.published)["sensor.varmeopt_beslutning"]
         self.assertEqual(first, "varmepumpe")
 
-        # Prisen springer, saa planlaeggeren vender. Hviletiden er ikke
-        # udloebet, saa entiteten skal blive staaende.
+        # Prisen springer, så planlæggeren vender. Hviletiden er ikke
+        # udløbet, så entiteten skal blive stående.
         self._plan(self.DEAR)
         self.cycle()
 
         attrs = self.ha.attributes["sensor.varmeopt_beslutning"]
         self.assertEqual(self.app.status["decision"].source, "pillefyr")
         self.assertEqual(dict(self.ha.published)["sensor.varmeopt_beslutning"], "varmepumpe")
-        self.assertEqual(attrs["raa_kilde"], "pillefyr")
+        self.assertEqual(attrs["rå_kilde"], "pillefyr")
         self.assertIn("holder", attrs["begrundelse"])
 
     def test_the_price_sensor_explains_it_too(self):
         # Begge sensorer udgiver de samme to varmepriser. Uden hold-noten
-        # ville modsigelsen mellem tilstand og tal staa uforklaret her.
+        # ville modsigelsen mellem tilstand og tal stå uforklaret her.
         self.cycle()
         self._plan(self.DEAR)
         self.cycle()
@@ -787,7 +787,7 @@ class HeldDecisionTest(unittest.TestCase):
         self.cycle()
         self._plan(self.DEAR)
         self.cycle()
-        # Skru uret tilbage paa bindingen i stedet for at vente et kvarter.
+        # Skru uret tilbage på bindingen i stedet for at vente et kvarter.
         self.app.guard.committed_at -= 16 * 60
         self.cycle()
 
@@ -801,7 +801,7 @@ class HeldDecisionTest(unittest.TestCase):
 
         asyncio.run(self.app.release_control(self.ha))
 
-        # Et stop maa ikke selv vaere et tilstandsskifte i HA's historik.
+        # Et stop må ikke selv være et tilstandsskifte i HA's historik.
         self.assertEqual(dict(self.ha.published)["sensor.varmeopt_beslutning"], "varmepumpe")
 
 
@@ -816,10 +816,10 @@ class ControlTest(unittest.TestCase):
         self.ha = FakeHa(
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
-                COP: State(COP, "4.4", {}, "maaling-1"),
+                COP: State(COP, "4.4", {}, "måling-1"),
                 OUT: State(OUT, "17.2", {}, "ude-1"),
                 # Uden en plan er der ingen pris, og uden en pris ingen
-                # varmepris - saa naegter vagten med rette at styre.
+                # varmepris - så nægter vagten med rette at styre.
                 o.entity_predbat_plan: State(
                     o.entity_predbat_plan,
                     "ok",
@@ -841,7 +841,7 @@ class ControlTest(unittest.TestCase):
         self.assertIn("slået fra", command.reason)
 
     def test_the_decision_is_still_published_when_not_controlling(self):
-        # Vagten siger ikke hvad der skal goeres - kun om nogen boer goere det.
+        # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre det.
         self.cycle()
 
         self.assertIn("sensor.varmeopt_beslutning", dict(self.ha.published))
@@ -865,8 +865,8 @@ class ControlTest(unittest.TestCase):
         self.assertEqual(command.source, self.app.status["decision"].source)
 
     def test_no_price_means_no_control_even_when_enabled(self):
-        # Uden Predbats plan er der ingen varmepris. At handle paa en
-        # antagelse er ikke styring, det er et gaet.
+        # Uden Predbats plan er der ingen varmepris. At handle på en
+        # antagelse er ikke styring, det er et gæt.
         self.app.guard.enabled = True
         self.app.guard.warmup_minutes = 0.0
         self.ha._states.pop(self.app.options.entity_predbat_plan)

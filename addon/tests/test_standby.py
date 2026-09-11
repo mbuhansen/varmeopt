@@ -8,10 +8,10 @@ ROOM = 20.0
 
 
 def cooling(test, hours, start=55.0, watts=200.0, room=ROOM, step=0.5):
-    """Koer et vindue hvor lageret taber praecis ``watts``.
+    """Kør et vindue hvor lageret taber præcis ``watts``.
 
-    Temperaturen regnes af tiden og ikke ved at traekke fra i hvert skridt,
-    saa den sidste aflaesning ligger praecis paa ``hours``.
+    Temperaturen regnes af tiden og ikke ved at trække fra i hvert skridt,
+    så den sidste aflæsning ligger præcis på ``hours``.
     """
     steps = int(round(hours / step))
     temp = start
@@ -64,15 +64,15 @@ class MeasurementTest(unittest.TestCase):
         window = test.windows[0]
         self.assertAlmostEqual(window.loss_kw, 0.200, places=3)
         self.assertAlmostEqual(window.hours, 8.0, places=6)
-        # Middel-delta ligger lidt under de 35 ved start, fordi tanken koeler.
+        # Middel-delta ligger lidt under de 35 ved start, fordi tanken køler.
         self.assertLess(window.delta_k, 35.0)
         self.assertGreater(window.delta_k, 34.0)
         # 200 W over ~34,3 K.
         self.assertAlmostEqual(test.ua_w_per_k, 200 / window.delta_k, places=6)
 
     def test_the_coefficient_scales_the_loss_to_another_temperature(self):
-        # Det er hele pointen i at maale W/K og ikke bare kW: tabet ved 55
-        # grader siger ogsaa hvad det er ved 40.
+        # Det er hele pointen i at måle W/K og ikke bare kW: tabet ved 55
+        # grader siger også hvad det er ved 40.
         test = StandbyTest()
         test.arm(0.0)
         cooling(test, 8.0, start=55.0, watts=200.0)
@@ -92,7 +92,7 @@ class MeasurementTest(unittest.TestCase):
             test.disarm(hours * HOUR)
 
         self.assertEqual(len(test.windows), 2)
-        # Den lange nat vejer fire gange saa meget som den korte.
+        # Den lange nat vejer fire gange så meget som den korte.
         long_ua, short_ua = (w.ua_w_per_k for w in test.windows)
         expected = (long_ua * 8 + short_ua * 2) / 10
         self.assertAlmostEqual(test.ua_w_per_k, expected, places=6)
@@ -100,7 +100,7 @@ class MeasurementTest(unittest.TestCase):
 
 class ContaminationTest(unittest.TestCase):
     def test_a_running_source_restarts_the_window(self):
-        # Et tab paa 200 W kan ikke skilles fra en tilfoersel paa 8 kW.
+        # Et tab på 200 W kan ikke skilles fra en tilførsel på 8 kW.
         test = StandbyTest()
         test.arm(0.0)
         cooling(test, 4.0)
@@ -118,7 +118,7 @@ class ContaminationTest(unittest.TestCase):
         self.assertEqual(test.started_at, 0.0)
 
     def test_a_tank_that_gets_warmer_is_not_a_loss(self):
-        # Saa gik der noget ind vi ikke saa.
+        # Så gik der noget ind vi ikke så.
         test = StandbyTest()
         test.arm(0.0)
         for i in range(20):
@@ -160,7 +160,7 @@ class PersistenceTest(unittest.TestCase):
         self.assertAlmostEqual(again.ua_w_per_k, test.ua_w_per_k, places=3)
 
     def test_a_window_in_progress_does_not(self):
-        # En genstart betyder minutter uden aflaesninger. Saa er det aerligere
+        # En genstart betyder minutter uden aflæsninger. Så er det ærligere
         # at begynde forfra end at regne hen over hullet.
         test = StandbyTest()
         test.arm(0.0)

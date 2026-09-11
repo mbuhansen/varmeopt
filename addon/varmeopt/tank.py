@@ -185,7 +185,7 @@ class Buffer:
     def complete(self) -> bool:
         """Svarer alle tankene overhovedet?
 
-        ``covered`` er sandt saa snart **én** tank svarer, og det er rigtigt
+        ``covered`` er sandt så snart **én** tank svarer, og det er rigtigt
         til at afgøre om der er noget at vise. Til at afgøre om lagertallet må
         *handles* på, er det forkert: en tavs tank halverer summen uden at
         sige det. Både opladningen og «lageret er fuldt» hænger på den sum, og
@@ -195,7 +195,7 @@ class Buffer:
 
     @property
     def silent(self) -> tuple[str, ...]:
-        """Navnene paa de tanke der ikke svarer med ét eneste lag."""
+        """Navnene på de tanke der ikke svarer med ét eneste lag."""
         return tuple(t.name for t in self.tanks if not t.covered)
 
     @property
@@ -273,7 +273,7 @@ class Buffer:
             room_above = per * max(0.0, self.ceiling - temp)
             for layer in tank.layers:
                 if layer >= temp:
-                    # Laget er allerede over graensen; det er talt med i
+                    # Laget er allerede over grænsen; det er talt med i
                     # ``usable_kwh`` og skal ikke betales igen.
                     continue
                 lift = per * (temp - layer)
@@ -290,19 +290,19 @@ class Buffer:
         return sum(t.headroom_kwh(self.ceiling) for t in self.measured)
 
     def room_to(self, temp: float) -> float:
-        """Hvor meget der kan laegges i, foer lageret naar den temperatur.
+        """Hvor meget der kan lægges i, før lageret når den temperatur.
 
         ``headroom_kwh`` regner op til ``ceiling`` - hvad varmepumpen
-        realistisk kan naa. Men en blokopladning koerer 56 grader fremloeb, og
-        saa naar tankene ikke 60: de sidste grader hoerer til solvarmen og
+        realistisk kan nå. Men en blokopladning kører 56 grader fremløb, og
+        så når tankene ikke 60: de sidste grader hører til solvarmen og
         ACthor. Regnes pladsen til loftet, lover den plads der ikke kan fyldes
         af den pumpe der skal fylde den.
 
-        ``ceiling`` staar med vilje uroert. Den bruges ogsaa af
-        ``energy_to_reach``, hvor et loft paa 56 ville klemme baandet over
-        brugsvandets 55 grader ned til én kelvin og faa varmtvandsbehovet til
+        ``ceiling`` står med vilje urørt. Den bruges også af
+        ``energy_to_reach``, hvor et loft på 56 ville klemme båndet over
+        brugsvandets 55 grader ned til én kelvin og få varmtvandsbehovet til
         at eksplodere - og af ``charge_percent`` og ``above_heatpump_ceiling``.
-        Det her er et andet spoergsmaal og faar sin egen indgang.
+        Det her er et andet spørgsmål og får sin egen indgang.
         """
         return sum(t.headroom_kwh(temp) for t in self.measured)
 

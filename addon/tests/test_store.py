@@ -50,13 +50,13 @@ class StoreTest(unittest.TestCase):
 
     def test_backup_copies_current_content(self):
         self.store.save("t.json", {"a": 1})
-        dst = self.store.backup("t.json", "foer")
+        dst = self.store.backup("t.json", "før")
 
         self.assertIsNotNone(dst)
         self.assertEqual(json.loads(dst.read_text("utf-8")), {"a": 1})
 
     def test_backup_of_missing_file_is_none(self):
-        self.assertIsNone(self.store.backup("nope.json", "foer"))
+        self.assertIsNone(self.store.backup("nope.json", "før"))
 
 
 class OptionsTest(unittest.TestCase):

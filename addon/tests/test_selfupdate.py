@@ -61,7 +61,7 @@ class CompileGateTest(CodeDirTest):
 
     def test_rejects_code_with_a_syntax_error(self):
         # Porten der forhindrer at en halv commit bliver den kode der starter.
-        (self.tmp / "daarligt.py").write_text("def f(\n", encoding="utf-8")
+        (self.tmp / "dårligt.py").write_text("def f(\n", encoding="utf-8")
 
         self.assertFalse(selfupdate._compiles(self.tmp))
 
@@ -73,8 +73,8 @@ class BootMarkerTest(CodeDirTest):
         os.utime(path, (stamp, stamp))
 
     def test_a_marker_we_just_set_is_not_a_failure(self):
-        # Kernen i fejlen: maerket saettes lige foer genstarten, saa den nye
-        # proces finder sit eget maerke et sekund senere. Uden henstand ville
+        # Kernen i fejlen: mærket sættes lige før genstarten, så den nye
+        # proces finder sit eget mærke et sekund senere. Uden henstand ville
         # den rulle den kode tilbage som den lige selv hentede.
         selfupdate.mark_boot()
 

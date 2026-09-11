@@ -27,11 +27,11 @@ def row(state="", import_rate=200, export_rate=80, soc=50):
 def plan(*rows, cheapest=None):
     """Planen.
 
-    ``cheapest`` laegger en billig halvtime bagest, saa batteriets
+    ``cheapest`` lægger en billig halvtime bagest, så batteriets
     genanskaffelsespris bliver et kendt tal: den billigste import der er
     tilbage, ganget op med tabet hele vejen rundt. Uden den ligger alle
-    raekker paa 2,00, og saa er der ingenting at hente ved at gemme energi -
-    loftet «aldrig dyrere end at koebe den nu» svarer for dem alle.
+    rækker på 2,00, og så er der ingenting at hente ved at gemme energi -
+    loftet «aldrig dyrere end at købe den nu» svarer for dem alle.
     """
     rows = list(rows)
     if cheapest is not None:
@@ -64,7 +64,7 @@ class ParseTest(unittest.TestCase):
 
 class SlotStateTest(unittest.TestCase):
     def test_the_five_states_the_plant_actually_sends(self):
-        # Anlaeggets egne fem, som ejeren har bekraeftet dem.
+        # Anlæggets egne fem, som ejeren har bekræftet dem.
         self.assertEqual(Slot(0, "Demand", None, None, None).mode, DISCHARGE)
         self.assertEqual(Slot(0, "Chrg", None, None, None).mode, LOCKED)
         self.assertEqual(Slot(0, "HoldChrg", None, None, None).mode, LOCKED)
@@ -76,7 +76,7 @@ class SlotStateTest(unittest.TestCase):
         self.assertTrue(Slot(0, "", None, None, None).understood)
 
     def test_a_word_we_do_not_know_locks_the_battery(self):
-        # Foer faldt den igennem til "batteriet er frit" - den billigste og
+        # Før faldt den igennem til "batteriet er frit" - den billigste og
         # farligste af de tre muligheder.
         slot = Slot(0, "SuperEcoTurbo", None, None, None)
 
@@ -84,8 +84,8 @@ class SlotStateTest(unittest.TestCase):
         self.assertFalse(slot.understood)
 
     def test_hold_charge_does_not_refill_the_battery(self):
-        # Den laaser afladningen, men den haever ikke ladetilstanden. Kun en
-        # rigtig ladning tæller som en paafyldning.
+        # Den låser afladningen, men den hæver ikke ladetilstanden. Kun en
+        # rigtig ladning tæller som en påfyldning.
         self.assertTrue(Slot(0, "chrg", None, None, None).refills)
         self.assertFalse(Slot(0, "holdchrg", None, None, None).refills)
         self.assertFalse(Slot(0, "frzchrg", None, None, None).refills)
@@ -101,7 +101,7 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("eksport", price.reason)
 
     def test_a_locked_battery_means_the_pump_runs_on_the_grid(self):
-        # "hold charge": Predbat saetter afladningen til 0, og resten af
+        # "hold charge": Predbat sætter afladningen til 0, og resten af
         # husets forbrug - varmepumpen med - kommer fra nettet.
         p = plan(row(state="holdchrg", import_rate=180))
 
@@ -112,9 +112,9 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("afladning", price.detail)
 
     def test_hold_charge_above_the_floor_is_still_the_battery(self):
-        # Predbat skriver et gulv til inverteren - "her maa der aflades ned
-        # til". Staar holdet ti point under ladetilstanden, er de ti point
-        # rigtig energi, og den naeste kilowatt-time kommer derfra.
+        # Predbat skriver et gulv til inverteren - "her må der aflades ned
+        # til". Står holdet ti point under ladetilstanden, er de ti point
+        # rigtig energi, og den næste kilowatt-time kommer derfra.
         p = plan(row(state="holdchrg", soc=40, import_rate=180))
 
         price = p.marginal(0, grid=Grid(discharge_floor=30.0))
@@ -123,8 +123,8 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("hold charge ned til 30 %", price.detail)
 
     def test_hold_charge_at_the_floor_is_the_grid(self):
-        # Samme hold, men ladetilstanden ligger paa gulvet. Saa er der ikke
-        # mere at aflade, og huset koeber.
+        # Samme hold, men ladetilstanden ligger på gulvet. Så er der ikke
+        # mere at aflade, og huset køber.
         p = plan(row(state="holdchrg", soc=30, import_rate=180))
 
         price = p.marginal(0, grid=Grid(discharge_floor=30.0))
@@ -169,40 +169,40 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         # Ikke hvad energien kostede engang. Den billigste import der er
-        # tilbage er 1,00, og der skal koebes 1/0,832 for at have den igen.
+        # tilbage er 1,00, og der skal købes 1/0,832 for at have den igen.
         self.assertAlmostEqual(price.kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=9)
         self.assertIn("genanskaffelse", price.detail)
 
     def test_energy_is_valued_against_a_coming_export(self):
-        # Eksport om en time til 1,60 er mere vaerd end de 1,20 det koster
+        # Eksport om en time til 1,60 er mere værd end de 1,20 det koster
         # at skaffe energien igen.
         #
-        # Det er en vaerdisaettelse, ikke en beslutning: om energien faktisk
-        # bliver gemt, afgoeres af hvad den ellers skulle bruges til.
+        # Det er en værdisættelse, ikke en beslutning: om energien faktisk
+        # bliver gemt, afgøres af hvad den ellers skulle bruges til.
         p = plan(row(), row(), row(state="exp", export_rate=160), cheapest=1.00)
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.60 * 0.90, places=9)
-        self.assertIn("vaerdisat mod eksport", price.detail)
+        self.assertIn("værdisat mod eksport", price.detail)
 
     def test_a_cheap_charge_soon_frees_the_battery(self):
         p = plan(row(), row(state="chrg", import_rate=40))
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        # Den kendte paafyldning, ikke bare den billigste i horisonten:
-        # bruger vi en kWh nu og fylder den paa om en halv time, koster den
-        # hvad *den* paafyldning koster - og der skal koebes 1/0,832 for at
-        # faa 1 igen.
+        # Den kendte påfyldning, ikke bare den billigste i horisonten:
+        # bruger vi en kWh nu og fylder den på om en halv time, koster den
+        # hvad *den* påfyldning koster - og der skal købes 1/0,832 for at
+        # få 1 igen.
         self.assertAlmostEqual(
             price.kr_per_kwh, 0.40 / BATTERY_ROUND_TRIP, places=9
         )
         self.assertIn("lades om", price.detail)
 
     def test_a_planned_discharge_is_not_read_as_a_charge(self):
-        # "dischrg" indeholder "chrg". Uden afladningstesten foerst blev hver
-        # eneste planlagte afladning laest som en opladning - halvtimen blev
+        # "dischrg" indeholder "chrg". Uden afladningstesten først blev hver
+        # eneste planlagte afladning læst som en opladning - halvtimen blev
         # prissat som om batteriet var bundet.
         p = plan(row(state="dischrg", import_rate=300))
 
@@ -212,7 +212,7 @@ class MarginalTest(unittest.TestCase):
 
     def test_an_almost_empty_battery_is_priced_as_grid(self):
         # Uanset hvad de sidste par procent kostede engang, kan de ikke
-        # levere den naeste kWh til en varmepumpe paa 16 kW.
+        # levere den næste kWh til en varmepumpe på 16 kW.
         p = plan(row(soc=4, import_rate=300))
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
@@ -221,10 +221,10 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("batteriet er tomt", price.detail)
 
     def test_the_reserve_is_not_a_floor_under_the_heat_pump(self):
-        # Predbats reserve paa 14 % er 5 kWh gemt til uplanlagt forbrug - og
-        # en varmepumpe der starter, *er* uplanlagt forbrug. Anlaegget kan
-        # aflade til 5 %. Reserven siger kun at Predbat ikke vil *saelge*
-        # den energi, ikke at den ikke maa bruges.
+        # Predbats reserve på 14 % er 5 kWh gemt til uplanlagt forbrug - og
+        # en varmepumpe der starter, *er* uplanlagt forbrug. Anlægget kan
+        # aflade til 5 %. Reserven siger kun at Predbat ikke vil *sælge*
+        # den energi, ikke at den ikke må bruges.
         p = plan(
             row(soc=14, import_rate=170),
             row(soc=14, import_rate=160),
@@ -236,7 +236,7 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(price.source, BATTERY)
 
     def test_an_empty_battery_is_the_grid(self):
-        # Under anlaeggets eget nulpunkt kan inverteren ikke levere.
+        # Under anlæggets eget nulpunkt kan inverteren ikke levere.
         p = plan(row(soc=4, import_rate=170))
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
@@ -246,10 +246,10 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("batteriet er tomt", price.detail)
 
     def test_a_battery_on_the_reserve_still_answers(self):
-        # Batteriet ligger paa Predbats reserve, og der lades halvanden time
-        # senere. Energien over anlaeggets nulpunkt er der stadig, saa den
-        # naeste kilowatt-time er batteriets - og den koster hvad det koster
-        # at fylde den paa igen.
+        # Batteriet ligger på Predbats reserve, og der lades halvanden time
+        # senere. Energien over anlæggets nulpunkt er der stadig, så den
+        # næste kilowatt-time er batteriets - og den koster hvad det koster
+        # at fylde den på igen.
         p = plan(
             row(soc=16, import_rate=109),
             row(soc=16, import_rate=109),
@@ -269,8 +269,8 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("lades om", price.detail)
 
     def test_a_plain_export_sells_the_battery(self):
-        # "exp" toemmer batteriet ud paa nettet. Tager varmepumpen en
-        # kilowatt-time, er det batteriets - prisen er den mistede indtaegt.
+        # "exp" tømmer batteriet ud på nettet. Tager varmepumpen en
+        # kilowatt-time, er det batteriets - prisen er den mistede indtægt.
         p = plan(row(state="exp", export_rate=140))
 
         price = p.marginal(0)
@@ -279,7 +279,7 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
 
     def test_a_frozen_export_sells_the_sun(self):
-        # "frzexp" holder ladetilstanden og saelger solen. Saa er det solens
+        # "frzexp" holder ladetilstanden og sælger solen. Så er det solens
         # kilowatt-time der bliver brugt, ikke batteriets.
         p = plan(row(state="frzexp", export_rate=140))
 
@@ -289,8 +289,8 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
 
     def test_an_empty_battery_under_a_covering_sun_is_the_sun(self):
-        # Batteriet er ude af spillet, men panelerne baerer huset og der
-        # koebes ikke. Saa er det solen der leverer den naeste kilowatt-time.
+        # Batteriet er ude af spillet, men panelerne bærer huset og der
+        # købes ikke. Så er det solen der leverer den næste kilowatt-time.
         p = plan(row(soc=4, import_rate=170))
 
         price = p.marginal(0, grid=Grid(pv_power=4000))
@@ -298,7 +298,7 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(price.source, SUN)
 
     def test_a_flat_plan_high_up_is_not_a_bottom(self):
-        # Staar ladetilstanden stille paa 70 %, er det solen der daekker
+        # Står ladetilstanden stille på 70 %, er det solen der dækker
         # huset. Det er ikke et tomt batteri, og energien koster hvad den
         # koster at skaffe igen.
         p = plan(row(soc=70), row(soc=70), row(soc=70), cheapest=1.00)
@@ -310,9 +310,9 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_a_frozen_export_on_the_floor_still_marks_the_reserve(self):
-        # Predbat saelger ikke under reserven, saa en frossen eksport dernede
+        # Predbat sælger ikke under reserven, så en frossen eksport dernede
         # ligger der netop fordi det *er* bunden. Kravet er kun at bunden
-        # ogsaa ses ét sted hvor batteriet maatte aflade.
+        # også ses ét sted hvor batteriet måtte aflade.
         p = plan(
             row(soc=30),
             row(state="frzexp", soc=12),
@@ -324,9 +324,9 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(p.reserve, 12)
 
     def test_a_hold_alone_does_not_name_a_reserve(self):
-        # Staar ladetilstanden stille fordi Predbat holder batteriet, er det
+        # Står ladetilstanden stille fordi Predbat holder batteriet, er det
         # ikke fordi der ikke er noget i det. Uden en afladning dernede er
-        # der ingen bund at laese.
+        # der ingen bund at læse.
         p = plan(
             row(soc=30),
             row(state="holdchrg", soc=12),
@@ -347,9 +347,9 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_a_battery_that_runs_dry_costs_what_it_takes_to_buy_back(self):
-        # Batteriet daekker huset nu, men planen viser det i bund laenge foer
-        # det lades igen. Saa er den kWh vi bruger nu, praecis den kWh vi
-        # koeber til 1,73 naar batteriet staar tomt - ikke de 1,00 den
+        # Batteriet dækker huset nu, men planen viser det i bund længe før
+        # det lades igen. Så er den kWh vi bruger nu, præcis den kWh vi
+        # køber til 1,73 når batteriet står tomt - ikke de 1,00 den
         # kostede engang. Gennemsnittet er sunk cost.
         p = plan(
             row(soc=37, import_rate=190),
@@ -364,13 +364,13 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.73, places=9)
-        self.assertIn("koebes tilbage om 60 min", price.detail)
+        self.assertIn("købes tilbage om 60 min", price.detail)
 
     def test_energy_the_plan_sells_before_it_runs_dry_costs_the_export(self):
-        # Batteriet naar bunden inden det lades - men det er en planlagt
-        # eksport der toemmer det. Saa er den kWh vi bruger nu, ikke en der
-        # skal koebes tilbage til importprisen i bunden; det er en der ikke
-        # bliver solgt, og prisen er den mistede indtaegt.
+        # Batteriet når bunden inden det lades - men det er en planlagt
+        # eksport der tømmer det. Så er den kWh vi bruger nu, ikke en der
+        # skal købes tilbage til importprisen i bunden; det er en der ikke
+        # bliver solgt, og prisen er den mistede indtægt.
         p = plan(
             row(soc=37, import_rate=190),
             row(soc=30, import_rate=180),
@@ -382,15 +382,15 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        # Prisen er den mistede indtaegt. Hvilken af de to eksportgrene der
+        # Prisen er den mistede indtægt. Hvilken af de to eksportgrene der
         # svarer, er underordnet - tallet er det samme, og det er tallet der
-        # afgoer valget.
+        # afgør valget.
         self.assertAlmostEqual(price.kr_per_kwh, 1.15 * 0.90, places=9)
         self.assertIn("eksport", price.reason)
 
     def test_without_a_sale_first_it_is_still_bought_back(self):
-        # Samme plan uden eksporten: saa er bunden en bund, og den kWh vi
-        # bruger nu, koeber vi fra nettet naar den mangler.
+        # Samme plan uden eksporten: så er bunden en bund, og den kWh vi
+        # bruger nu, køber vi fra nettet når den mangler.
         p = plan(
             row(soc=37, import_rate=190),
             row(soc=30, import_rate=180),
@@ -403,17 +403,17 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.85, places=9)
-        self.assertIn("koebes tilbage", price.detail)
+        self.assertIn("købes tilbage", price.detail)
 
     def test_a_sale_on_the_other_side_of_the_bottom_is_not_an_alternative(self):
-        # Natten til den 9. september laa batteriet paa 32 % kl. 03:20, og
-        # planen koerte det ned til reserven paa 9 % fire timer senere. Solen
+        # Natten til den 9. september lå batteriet på 32 % kl. 03:20, og
+        # planen kørte det ned til reserven på 9 % fire timer senere. Solen
         # fyldte det op igen, og om aftenen solgte Predbat til 1,31. Uden
-        # bunden som graense fandt vaerdisaettelsen *det* salg atten timer
-        # ude og prissatte hele natten til 1,18 - og saa saa en opladning
-        # kl. 03:20 billig ud paa energi der var brugt laenge inden. Den
-        # kilowatt-time nattens varmepumpe tager, koeber huset tilbage fra
-        # nettet naar planen rammer bunden.
+        # bunden som grænse fandt værdisættelsen *det* salg atten timer
+        # ude og prissatte hele natten til 1,18 - og så så en opladning
+        # kl. 03:20 billig ud på energi der var brugt længe inden. Den
+        # kilowatt-time nattens varmepumpe tager, køber huset tilbage fra
+        # nettet når planen rammer bunden.
         p = plan(
             row(soc=32, import_rate=159),
             row(soc=20, import_rate=158),
@@ -427,17 +427,17 @@ class MarginalTest(unittest.TestCase):
 
         self.assertEqual(p.reserve, 9)
         self.assertAlmostEqual(price.kr_per_kwh, 2.23, places=9)
-        self.assertIn("koebes tilbage om 60 min", price.detail)
-        # Kilden er stadig batteriets: Predbat staar paa demand, og
+        self.assertIn("købes tilbage om 60 min", price.detail)
+        # Kilden er stadig batteriets: Predbat står på demand, og
         # inverteren leverer. Det er *prisen* der kommer fra nettet, og den
-        # oplysning hoerer til i begrundelsen - ikke i kilden.
+        # oplysning hører til i begrundelsen - ikke i kilden.
         self.assertEqual(price.source, BATTERY)
-        self.assertEqual(price.reason, "koebes tilbage")
+        self.assertEqual(price.reason, "købes tilbage")
 
     def test_a_bottom_after_the_sale_does_not_block_it(self):
-        # Bunden spaerrer kun for det der ligger bagved den. Kommer salget
-        # foerst, er energien lovet vaek dertil, og prisen er den mistede
-        # indtaegt - ikke importprisen i en bund der ligger endnu senere.
+        # Bunden spærrer kun for det der ligger bagved den. Kommer salget
+        # først, er energien lovet væk dertil, og prisen er den mistede
+        # indtægt - ikke importprisen i en bund der ligger endnu senere.
         p = plan(
             row(soc=60),
             row(state="exp", soc=40, export_rate=210),
@@ -452,10 +452,10 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 2.10 * 0.90, places=9)
 
     def test_a_charge_before_the_bottom_leaves_the_replacement_alone(self):
-        # Fyldes batteriet inden det loeber toert, er energien ikke
-        # disponeret - saa skal den ikke koebes tilbage i bunden, og prisen
+        # Fyldes batteriet inden det løber tørt, er energien ikke
+        # disponeret - så skal den ikke købes tilbage i bunden, og prisen
         # er den almindelige genanskaffelse. Ladningen ligger 150 min ude og
-        # er dermed heller ikke "snart", saa det er den billigste import i
+        # er dermed heller ikke "snart", så det er den billigste import i
         # horisonten der svarer: 0,85.
         p = plan(
             row(soc=40), row(soc=38), row(soc=36), row(soc=34), row(soc=32),
@@ -469,13 +469,13 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_a_maxed_inverter_is_not_a_reason_to_price_at_the_grid(self):
-        # Her stod det modsatte: importerede maaleren mens batteriet
-        # afladede, stod inverteren paa sit loft, og prisen var nettets.
+        # Her stod det modsatte: importerede måleren mens batteriet
+        # afladede, stod inverteren på sit loft, og prisen var nettets.
         # Begrundelsen var "12 kW inverter mod 16 kW varmepumpe" - men de
         # 16 kW er ``hp_charge_kw``, tankenes ladeeffekt i *varme*.
-        # Elforbruget er varmen delt med COP; anlaegget maaler selv 6,23 kW
-        # varme for 1,79 kW el. Pumpen naar aldrig inverterens loft, og
-        # tilbage maalte taersklen kun husets vippen omkring nul.
+        # Elforbruget er varmen delt med COP; anlægget måler selv 6,23 kW
+        # varme for 1,79 kW el. Pumpen når aldrig inverterens loft, og
+        # tilbage målte tærsklen kun husets vippen omkring nul.
         p = plan(row(import_rate=300))
 
         price = p.marginal(0, grid=Grid(battery_power=3000, grid_power=4000))
@@ -484,7 +484,7 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_export_valuation_never_makes_energy_cheaper(self):
-        # I baandet snit < eksport < snit/0,90 vendte grenen sit formaal paa
+        # I båndet snit < eksport < snit/0,90 vendte grenen sit formål på
         # hovedet: snit 1,00 og eksport 1,05 gav 0,945.
         p = plan(row(), row(state="exp", export_rate=105))
 
@@ -494,7 +494,7 @@ class MarginalTest(unittest.TestCase):
 
     def test_a_battery_on_its_reserve_is_priced_at_its_replacement(self):
         # Under bunden bliver energien aldrig solgt - Predbat eksporterer
-        # ikke derunder - saa en kommende eksport er ikke et alternativ til
+        # ikke derunder - så en kommende eksport er ikke et alternativ til
         # at bruge den. Bunden er planens egen reserve.
         p = plan(
             row(soc=15),
@@ -511,8 +511,8 @@ class MarginalTest(unittest.TestCase):
 
     def test_the_best_paid_export_decides_not_the_first(self):
         # Den marginale kilowatt-time bliver solgt i den bedste halvtime der
-        # er tilbage. En tidlig, daarligt betalt eksport siger ingenting om
-        # hvad energien er vaerd.
+        # er tilbage. En tidlig, dårligt betalt eksport siger ingenting om
+        # hvad energien er værd.
         p = plan(
             row(soc=60),
             row(state="exp", export_rate=90, soc=55),
@@ -526,9 +526,9 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("om 60 min", price.detail)
 
     def test_an_export_far_out_still_counts(self):
-        # Der stod foer en graense paa tre timer. Planen kender salget tolv
+        # Der stod før en grænse på tre timer. Planen kender salget tolv
         # timer i forvejen, og om det ligger to eller elleve timer ude, er
-        # energien lige meget lovet vaek.
+        # energien lige meget lovet væk.
         p = plan(
             row(soc=60),
             *[row(soc=55) for _ in range(15)],
@@ -542,7 +542,7 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("om 480 min", price.detail)
 
     def test_a_charge_before_the_sale_takes_the_export_out_of_play(self):
-        # Fyldes batteriet foer salget, er det ikke *den her* kilowatt-time
+        # Fyldes batteriet før salget, er det ikke *den her* kilowatt-time
         # der bliver solgt bagefter.
         p = plan(
             row(soc=60),
@@ -577,7 +577,7 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertIn("vaerdisat mod eksport", price.detail)
+        self.assertIn("værdisat mod eksport", price.detail)
 
     def test_an_export_that_pays_less_than_the_battery_is_not_worth_saving_for(self):
         p = plan(row(), row(state="exp", export_rate=60), cheapest=1.00)
@@ -587,12 +587,12 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_physical_export_does_not_beat_the_plan(self):
-        # Her stod "physical_export beats the plan": sagde maaleren at der
-        # gik stroem ud, svarede eksportgrenen med den *aktuelle* halvtimes
-        # raa tarif. Den 10. september laa den paa 1,31 mens batterigrenen
-        # med rette vaerdisatte energien til 3,04 mod aftenens top - saa
+        # Her stod "physical_export beats the plan": sagde måleren at der
+        # gik strøm ud, svarede eksportgrenen med den *aktuelle* halvtimes
+        # rå tarif. Den 10. september lå den på 1,31 mens batterigrenen
+        # med rette værdisatte energien til 3,04 mod aftenens top - så
         # hvert minut med lidt overskud halverede prisen og vendte
-        # beslutningen. Planen siger om der saelges; maaleren gaetter.
+        # beslutningen. Planen siger om der sælges; måleren gætter.
         p = plan(row(export_rate=120))
 
         price = p.marginal(0, grid=Grid(grid_power=-4000))
@@ -611,9 +611,9 @@ class MarginalTest(unittest.TestCase):
     def test_the_direction_of_the_meter_changes_nothing(self):
         """Den ene test der holder fejlen fra den 10. september ude.
 
-        Samme halvtime, fem forskellige stroemretninger - og ``None``, for
-        ``cheapest_window`` prissaetter uden maaling overhovedet. Et eneste
-        tal maa ikke afhaenge af hvilken vej traaden gik i det oejeblik.
+        Samme halvtime, fem forskellige strømretninger - og ``None``, for
+        ``cheapest_window`` prissætter uden måling overhovedet. Et eneste
+        tal må ikke afhænge af hvilken vej tråden gik i det øjeblik.
         """
         p = plan(row(import_rate=210, export_rate=120), row(state="exp", export_rate=380))
         expected = p.marginal(0)
@@ -626,9 +626,9 @@ class MarginalTest(unittest.TestCase):
                 self.assertEqual(price.source, expected.source)
 
     def test_no_measurable_flow_still_means_the_battery(self):
-        # Maaleren ser hverken import, eksport eller en afladning vaerd at
-        # naevne. Foer gav det grenen "balanceret", som ikke var en kilde;
-        # anlaeggets regel er at inverteren daekker forbruget, saa kilden er
+        # Måleren ser hverken import, eksport eller en afladning værd at
+        # nævne. Før gav det grenen "balanceret", som ikke var en kilde;
+        # anlæggets regel er at inverteren dækker forbruget, så kilden er
         # batteriet. Prisen er stadig loftet af hvad nettet tager.
         p = plan(row(import_rate=60))
 
@@ -644,14 +644,14 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(pv_power=4000))
 
         self.assertEqual(price.source, BATTERY)
-        self.assertIn("solen daekker huset", price.detail)
+        self.assertIn("solen dækker huset", price.detail)
 
     def test_beyond_the_horizon_there_is_no_price(self):
         self.assertIsNone(plan(row()).marginal(600))
 
 
 class FutureTest(unittest.TestCase):
-    """Det nye: en pris for en halvtime vi endnu ikke er naaet til."""
+    """Det nye: en pris for en halvtime vi endnu ikke er nået til."""
 
     def test_a_future_slot_is_priced_from_the_plan_alone(self):
         p = plan(row(), row(state="exp", export_rate=150), row(state="chrg", import_rate=30))
@@ -660,9 +660,9 @@ class FutureTest(unittest.TestCase):
         self.assertEqual(p.marginal(60).source, NET)
 
     def test_a_measurement_never_reaches_a_future_slot(self):
-        # Maalingen beskriver kun den halvtime vi staar i, og den afgoer
-        # ingen pris laengere overhovedet. Baade nu og senere skal derfor
-        # svare praecis som uden maaling.
+        # Målingen beskriver kun den halvtime vi står i, og den afgør
+        # ingen pris længere overhovedet. Både nu og senere skal derfor
+        # svare præcis som uden måling.
         p = plan(row(state="holdchrg", import_rate=200), row(import_rate=50))
         grid = Grid(grid_power=4000, pv_power=3000)
 
@@ -711,11 +711,11 @@ class WindowTest(unittest.TestCase):
 class ReasonVocabularyTest(unittest.TestCase):
     """Begrundelsen er ét ord, og der er kun seks af dem.
 
-    En plan man skal laese en forklaring for at forstaa, bliver ikke laest.
-    Regnestykket bag staar i ``detail`` og gaar til fejlsoegningsfilen.
+    En plan man skal læse en forklaring for at forstå, bliver ikke læst.
+    Regnestykket bag står i ``detail`` og går til fejlsøgningsfilen.
 
-    To af de seks er ikke kilder men grunde: "eksport" og "koebes tilbage".
-    Begge staar paa en raekke hvor stroemmen kommer fra batteriet, og begge
+    To af de seks er ikke kilder men grunde: "eksport" og "købes tilbage".
+    Begge står på en række hvor strømmen kommer fra batteriet, og begge
     siger hvorfor den energi ikke er gratis at bruge.
     """
 
@@ -725,7 +725,7 @@ class ReasonVocabularyTest(unittest.TestCase):
         "batteri",
         "sol",
         "eksport",
-        "koebes tilbage",
+        "købes tilbage",
     }
 
     def test_every_reason_is_one_of_the_words(self):
@@ -758,12 +758,12 @@ class ReasonVocabularyTest(unittest.TestCase):
                     self.assertIn(price.reason, self.WORDS)
                 seen.add(price.reason)
 
-        # Og de bruges faktisk - ellers proever den ovenstaaende ingenting.
+        # Og de bruges faktisk - ellers prøver den ovenstående ingenting.
         self.assertGreaterEqual(len(seen), 4)
 
     def test_an_unknown_predbat_state_says_so(self):
         # Den ene undtagelse fra de fem ord. En tilstand vi ikke kender, kan
-        # vaere prissat forkert, og det skal staa der.
+        # være prissat forkert, og det skal stå der.
         price = plan(row(state="Turboladning", import_rate=180)).marginal(0)
 
         self.assertIn("ukendt", price.reason)
@@ -783,11 +783,11 @@ if __name__ == "__main__":
 
 
 class VocabularyTest(unittest.TestCase):
-    """Ordforraadet er nu efterproevet mod anlaegget.
+    """Ordforrådet er nu efterprøvet mod anlægget.
 
-    Fire debug-udtraek fra 3.-4. september 2026 indeholder praecis fem ord:
-    Demand, Chrg, HoldChrg, Exp og FrzExp. Ejeren har bekraeftet hvad de
-    betyder. Resten herunder er stavemaader af de samme handlinger.
+    Fire debug-udtræk fra 3.-4. september 2026 indeholder præcis fem ord:
+    Demand, Chrg, HoldChrg, Exp og FrzExp. Ejeren har bekræftet hvad de
+    betyder. Resten herunder er stavemåder af de samme handlinger.
     """
 
     def test_the_states_predbat_is_known_to_write_are_understood(self):
@@ -798,9 +798,9 @@ class VocabularyTest(unittest.TestCase):
                 self.assertTrue(p.slots[0].understood, state)
 
     def test_words_the_plant_never_sends_are_not_guessed_at(self):
-        # "Idle" og "ecoo" findes i Predbat, men ikke paa det her anlaeg, og
-        # hvad de praecis goer ved inverteren ville vaere et gaet. Et gaet i
-        # tabellen ville se ud som viden. De laaser i stedet og siger det.
+        # "Idle" og "ecoo" findes i Predbat, men ikke på det her anlæg, og
+        # hvad de præcis gør ved inverteren ville være et gæt. Et gæt i
+        # tabellen ville se ud som viden. De låser i stedet og siger det.
         for state in ("Idle", "ecoo"):
             with self.subTest(state=state):
                 p = plan(row(state=state, import_rate=180))
@@ -810,8 +810,8 @@ class VocabularyTest(unittest.TestCase):
                 self.assertIn("ukendt", p.marginal(0).reason)
 
     def test_a_state_we_cannot_read_is_flagged_not_swallowed(self):
-        # Kan vi ikke tyde den, laases halvtimen til importprisen - og saa
-        # skal det staa baade i loggen og i begrundelsen.
+        # Kan vi ikke tyde den, låses halvtimen til importprisen - og så
+        # skal det stå både i loggen og i begrundelsen.
         p = plan(row(state="Turboladning"))
 
         self.assertFalse(p.slots[0].understood)
@@ -825,7 +825,7 @@ class VocabularyTest(unittest.TestCase):
 
 
 class ReplacementCostTest(unittest.TestCase):
-    """Batteriets energi koster hvad det koster at laegge den tilbage."""
+    """Batteriets energi koster hvad det koster at lægge den tilbage."""
 
     def test_it_is_the_cheapest_import_ahead_grossed_up_by_the_losses(self):
         # Ikke hvad energien kostede engang - hvad den koster at skaffe igen.
@@ -834,14 +834,14 @@ class ReplacementCostTest(unittest.TestCase):
         self.assertAlmostEqual(p.replacement_cost(0), 1.00 / BATTERY_ROUND_TRIP, places=9)
 
     def test_it_only_looks_forward(self):
-        # Den billige halvtime ligger bag os set fra den sidste raekke, og en
-        # pris vi ikke kan naa, kan ingen kilowatt-time laegges tilbage til.
+        # Den billige halvtime ligger bag os set fra den sidste række, og en
+        # pris vi ikke kan nå, kan ingen kilowatt-time lægges tilbage til.
         p = plan(row(import_rate=100), row(import_rate=300))
 
         self.assertAlmostEqual(p.replacement_cost(1), 3.00 / BATTERY_ROUND_TRIP, places=9)
 
     def test_the_export_floor_still_holds_the_bottom(self):
-        # Selv gratis energi er mindst det vaerd man kan saelge den for.
+        # Selv gratis energi er mindst det værd man kan sælge den for.
         p = plan(row(import_rate=0))
 
         self.assertAlmostEqual(p.replacement_cost(), EXPORT_FLOOR, places=9)
@@ -852,9 +852,9 @@ class ReplacementCostTest(unittest.TestCase):
         )
 
     def test_it_makes_charging_the_tanks_during_a_battery_charge_pay(self):
-        # Predbat lader batteriet til 1,00. Koerer varmepumpen paa nettet i
-        # den samme halvtime, koster stroemmen 1,00 - gaar den samme energi
-        # gennem batteriet foerst, koster den 1,00/0,832.
+        # Predbat lader batteriet til 1,00. Kører varmepumpen på nettet i
+        # den samme halvtime, koster strømmen 1,00 - går den samme energi
+        # gennem batteriet først, koster den 1,00/0,832.
         during = plan(row(state="chrg", import_rate=100))
         later = plan(row(import_rate=300), row(state="chrg", import_rate=100))
 

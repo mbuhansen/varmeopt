@@ -54,19 +54,19 @@ def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]
             if derived is not None and abs(seed - derived) > 0.02:
                 source += (
                     f" - men kalibreringsdagen giver {derived:.3f} med den "
-                    f"geometri der gaelder nu"
+                    f"geometri der gælder nu"
                 )
         else:
             model.scale = derived
             source = "regnet af kalibreringsdagen"
         note = (
-            f"solvarmemodel: startvaerdi k={model.scale:.3f} {source}, "
-            "endnu ingen egne doegn"
+            f"solvarmemodel: startværdi k={model.scale:.3f} {source}, "
+            "endnu ingen egne døgn"
             if model.scale is not None
-            else "solvarmemodel: intet at gaa ud fra endnu"
+            else "solvarmemodel: intet at gå ud fra endnu"
         )
     else:
-        note = f"solvarmemodel: k={model.scale:.3f} efter {model.days:.0f} doegn"
+        note = f"solvarmemodel: k={model.scale:.3f} efter {model.days:.0f} døgn"
 
     return model, tracker, note
 
@@ -88,7 +88,7 @@ def load_heat_curve(
         # lært som vejrkurve. Den kastes væk og udledes forfra af COP-tabellen,
         # som aldrig har haft fejlen.
         log.warning(
-            "varmekurven er fra en aeldre udgave med varmtvand lært ind - "
+            "varmekurven er fra en ældre udgave med varmtvand lært ind - "
             "udleder den forfra af COP-tabellen"
         )
         saved = None

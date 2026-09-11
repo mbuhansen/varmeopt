@@ -249,7 +249,7 @@ class HeatCurve:
         return cls(points, dhw_setpoint=dhw_setpoint)
 
 
-# Inden for saa mange grader regnes en nabocelle som evidens paa stedet.
+# Inden for så mange grader regnes en nabocelle som evidens på stedet.
 NEAR_ENOUGH_K = 2.0
 
 
@@ -279,8 +279,8 @@ def _enforce_monotone(points: dict[int, Point]) -> dict[int, Point]:
         weight = max(point.count, 1e-9)
         blocks.append([point.setpoint * weight, weight, 1])
         # Stiger den nye blok over den forrige, brydes monotonien, og de to
-        # slås sammen til deres faelles gennemsnit. Det kan bryde monotonien
-        # bagud igen, saa der pooles indtil kaeden er faldende.
+        # slås sammen til deres fælles gennemsnit. Det kan bryde monotonien
+        # bagud igen, så der pooles indtil kæden er faldende.
         while len(blocks) > 1 and blocks[-1][0] / blocks[-1][1] > blocks[-2][0] / blocks[-2][1]:
             merged = blocks.pop()
             blocks[-1][0] += merged[0]

@@ -50,48 +50,48 @@ from datetime import datetime
 from typing import Any
 
 # Vinduet der regnes over. En halv time er langt nok til at faldet er
-# halvtreds gange foelerstoejen, og kort nok til at et tal fra det stadig
+# halvtreds gange følerstøjen, og kort nok til at et tal fra det stadig
 # beskriver huset som det er nu.
 WINDOW_MINUTES = 30.0
 
 # Kortere end det er faldet for lille til at kunne skelnes, og et vindue med
-# faerre aflaesninger end det har vi ikke tillid til uanset laengden.
+# færre aflæsninger end det har vi ikke tillid til uanset længden.
 MIN_MINUTES = 15.0
 MIN_SAMPLES = 10
 
-# Gaar der laengere mellem to aflaesninger, er der et hul i integralet af
-# kilderne, og saa ved vi ikke hvad der loeb ind imens. Cyklussen er 60
-# sekunder, saa fem minutter er rigelig plads til en langsom runde.
+# Går der længere mellem to aflæsninger, er der et hul i integralet af
+# kilderne, og så ved vi ikke hvad der løb ind imens. Cyklussen er 60
+# sekunder, så fem minutter er rigelig plads til en langsom runde.
 MAX_GAP_SECONDS = 300.0
 
-# Hvor gammelt et maalt tal maa vaere, foer det ikke laengere beskriver nu.
+# Hvor gammelt et målt tal må være, før det ikke længere beskriver nu.
 MAX_AGE_MINUTES = 15.0
 
 # Stiger energien mere end kilderne kan forklare, gik der noget ind vi ikke
-# saa. Saa er det ikke en maaling af husets forbrug. Graensen er sat over
-# stoejen, saa et lille minus stadig bare bliver til nul.
+# så. Så er det ikke en måling af husets forbrug. Grænsen er sat over
+# støjen, så et lille minus stadig bare bliver til nul.
 UNEXPLAINED_KW = 0.5
 
-# Under saa mange observationer flytter en ny maaling punktet maerkbart;
-# derover er punktet velbestemt. Samme graense som varmekurven bruger.
+# Under så mange observationer flytter en ny måling punktet mærkbart;
+# derover er punktet velbestemt. Samme grænse som varmekurven bruger.
 _SETTLED_COUNT = 10
 
-# Inden for saa mange grader regnes en nabocelle som evidens paa stedet.
+# Inden for så mange grader regnes en nabocelle som evidens på stedet.
 NEAR_ENOUGH_K = 2.0
 
-# Hvor laenge maalinger gemmes til grafen, og hvor tit der gemmes et punkt.
-# Én pr. vindue over fjorten dage er 672 punkter - nok til at se et doegns
+# Hvor længe målinger gemmes til grafen, og hvor tit der gemmes et punkt.
+# Én pr. vindue over fjorten dage er 672 punkter - nok til at se et døgns
 # form og en uges vejr, og lille nok til en fil der skrives hvert femte
 # minut.
 HISTORY_DAYS = 14.0
 
-# Saa meget af en time skal vaere set, foer den taeller med i doegnprofilen.
-# En genstart midt i timen maa ikke taelle som om beholderen stod stille
+# Så meget af en time skal være set, før den tæller med i døgnprofilen.
+# En genstart midt i timen må ikke tælle som om beholderen stod stille
 # resten af den.
 MIN_HOUR_SECONDS = 1800.0
 
-# Under saa mange doegn bag en time flytter en ny dag den maerkbart; derover
-# er vanen kendt og skal ikke rykke sig paa én aften.
+# Under så mange døgn bag en time flytter en ny dag den mærkbart; derover
+# er vanen kendt og skal ikke rykke sig på én aften.
 _SETTLED_DAYS = 5.0
 
 
@@ -214,8 +214,8 @@ class LoadCurve:
             return max(0.0, a)
         slope = (a - b) / span
         # Forbruget falder med udetemperaturen. Peger de to punkter den anden
-        # vej, er det stoej i belaegningen og ikke et hus der bruger mere
-        # varme naar det bliver varmere.
+        # vej, er det støj i belægningen og ikke et hus der bruger mere
+        # varme når det bliver varmere.
         if slope > 0:
             return max(0.0, a)
         return max(0.0, a + slope * (outdoor - near))
@@ -319,7 +319,7 @@ class VesselProfile:
             self._commit()
         self._hour = hour
         if gap <= 0 or gap > MAX_GAP_SECONDS:
-            # Et hul betyder at vi ikke ved hvad der skete imens. Timen taeller
+            # Et hul betyder at vi ikke ved hvad der skete imens. Timen tæller
             # kun den tid vi faktisk har set.
             return
 
@@ -333,8 +333,8 @@ class VesselProfile:
         on_seconds, kwh = self._on_seconds, self._kwh
         self._seconds = self._on_seconds = self._kwh = 0.0
         if hour is None or seconds < MIN_HOUR_SECONDS:
-            # En halv time er ikke en time. En genstart midt i timen maa ikke
-            # taelle som om vesslerne stod stille resten af den.
+            # En halv time er ikke en time. En genstart midt i timen må ikke
+            # tælle som om vesslerne stod stille resten af den.
             return
 
         duty = on_seconds / seconds
@@ -348,8 +348,8 @@ class VesselProfile:
         alpha = 0.3 if count < _SETTLED_DAYS else 0.15
         self._hours[hour] = VesselHour(
             duty=old.duty * (1 - alpha) + duty * alpha,
-            # Effekten laeres kun af timer hvor de faktisk koerte. Ellers ville
-            # en stille nat traekke den mod nul, og saa ville en time med
+            # Effekten læres kun af timer hvor de faktisk kørte. Ellers ville
+            # en stille nat trække den mod nul, og så ville en time med
             # halv drift se ud som en med fuld drift ved halv effekt.
             kw=old.kw if kw is None else old.kw * (1 - alpha) + kw * alpha,
             count=count,
@@ -374,7 +374,7 @@ class VesselProfile:
         total = 0.0
         left = hours
         index = start
-        # Foerste time er kun delvis tilbage.
+        # Første time er kun delvis tilbage.
         share = min(left, 1.0 - offset)
         while left > 0:
             cell = self._hours.get(index % 24)
@@ -434,21 +434,21 @@ class HouseLoad:
     """Husets forbrug målt på lagerets energiændring."""
 
     curve: LoadCurve = field(default_factory=LoadCurve)
-    # Hvornaar beholderen og spaen tapper lageret. Ikke en del af husets
-    # forbrug - tvaertimod det der skal trakkes fra for at finde det - men
-    # det er her flagene, effekten og tiden moedes, og derfor bor profilen
-    # her frem for i hovedloekken.
+    # Hvornår beholderen og spaen tapper lageret. Ikke en del af husets
+    # forbrug - tværtimod det der skal trakkes fra for at finde det - men
+    # det er her flagene, effekten og tiden mødes, og derfor bor profilen
+    # her frem for i hovedløkken.
     vessels: VesselProfile = field(default_factory=VesselProfile)
     kw: float | None = None
     measured_at: float | None = None
     note: str = "venter på første vindue"
-    # Hvor langt maalingen ligger fra flowmaaleren, naar de begge svarer.
-    # Maalet skal kunne sige selv hvor godt det rammer, foer nogen stoler paa
-    # det - og det er ogsaa saadan man opdager at maaleren driver.
+    # Hvor langt målingen ligger fra flowmåleren, når de begge svarer.
+    # Målet skal kunne sige selv hvor godt det rammer, før nogen stoler på
+    # det - og det er også sådan man opdager at måleren driver.
     error_sum: float = 0.0
     error_n: float = 0.0
     # (tidspunkt, kW, udetemperatur, modelleret) pr. vindue. Til grafen - den
-    # rullende maaling selv lever kun i hukommelsen.
+    # rullende måling selv lever kun i hukommelsen.
     history: list[tuple[float, float, float | None, bool]] = field(default_factory=list)
     _samples: list[_Sample] = field(default_factory=list)
     _modelled: bool = False
@@ -472,42 +472,42 @@ class HouseLoad:
         vessel_kw: float | None = None,
     ) -> str:
         """Ét skridt. Returnerer en status der kan vises og logges."""
-        # Doegnprofilen foerst, og altid. Den skal netop laere af de minutter
+        # Døgnprofilen først, og altid. Den skal netop lære af de minutter
         # hvor der bliver badet - det er dem der bliver kasseret nedenfor, og
         # de er dermed de eneste der ellers aldrig blev husket.
         self.vessels.observe(now, bool(dhw or spa), vessel_kw)
 
         if (dhw or spa) and not _finite(vessel_kw):
             # Bad og spa tapper de samme tanke som huset, og en lagerbalance
-            # kan ikke se forskel. Uden et bud paa hvor meget de tager,
+            # kan ikke se forskel. Uden et bud på hvor meget de tager,
             # begynder vinduet forfra.
             return self._drop("bad eller spa tapper tankene")
         if not inputs_known:
-            return self._drop("varmepumpen koerer uden en COP at regne paa")
+            return self._drop("varmepumpen kører uden en COP at regne på")
         if not _finite(heat_kwh):
-            return self._drop("mangler tankmaaling")
+            return self._drop("mangler tankmåling")
         if sensors is not None and self._sensors is not None and sensors != self._sensors:
             # Et lag der falder ud eller kommer til, skifter energigrundlaget
-            # midt i en maaling: forskellen ville vaere foelerens og ikke
+            # midt i en måling: forskellen ville være følerens og ikke
             # husets.
             #
-            # Det nye antal skal med over i samme aandedrag. Uden det blev
-            # det gamle staaende, og hver eneste aflaesning derefter blev
-            # kasseret mod et tal anlaegget ikke laengere havde - maalingen
-            # kom aldrig i gang igen efter en doed foeler.
+            # Det nye antal skal med over i samme åndedrag. Uden det blev
+            # det gamle stående, og hver eneste aflæsning derefter blev
+            # kasseret mod et tal anlægget ikke længere havde - målingen
+            # kom aldrig i gang igen efter en død føler.
             self._sensors = sensors
-            return self._drop("antallet af foelere skiftede")
+            return self._drop("antallet af følere skiftede")
         self._sensors = sensors
 
         inflow = 0.0
         if self._samples:
             gap = now - self._samples[-1].at
             if gap <= 0 or gap > MAX_GAP_SECONDS:
-                return self._drop("hul i aflaesningerne")
+                return self._drop("hul i aflæsningerne")
             input_kw = sum(v for v in (sources or {}).values() if _finite(v))
-            # Det bad eller den spa der koerer, taeller som et traek ved siden
-            # af husets - altsaa som en negativ tilfoersel. Tallet er et
-            # skoen, og derfor bliver vinduet maerket.
+            # Det bad eller den spa der kører, tæller som et træk ved siden
+            # af husets - altså som en negativ tilførsel. Tallet er et
+            # skøn, og derfor bliver vinduet mærket.
             if dhw or spa:
                 input_kw -= vessel_kw or 0.0
                 self._modelled = True
@@ -536,15 +536,15 @@ class HouseLoad:
         hours = (last.at - first.at) / 3600
         if len(self._samples) < MIN_SAMPLES or hours * 60 < MIN_MINUTES:
             self.note = (
-                f"maaler — {hours * 60:.0f} min af {MIN_MINUTES:.0f}, "
-                f"{len(self._samples)} aflaesninger"
+                f"måler — {hours * 60:.0f} min af {MIN_MINUTES:.0f}, "
+                f"{len(self._samples)} aflæsninger"
             )
             return self.note
 
         origin = first.at
         change = _slope([((s.at - origin) / 3600, s.energy_kwh) for s in self._samples])
         if change is None:
-            self.note = "venter — kunne ikke regne en haeldning"
+            self.note = "venter — kunne ikke regne en hældning"
             return self.note
 
         # Kilderne ind, minus det lageret voksede med. Bliver tankene koldere,
@@ -572,7 +572,7 @@ class HouseLoad:
         if not _finite(standby_kw):
             notes.append("ståtab ikke trukket fra")
         tail = f" ({', '.join(notes)})" if notes else ""
-        self.note = f"maalt {drawn:.2f} kW over {hours * 60:.0f} min{tail}"
+        self.note = f"målt {drawn:.2f} kW over {hours * 60:.0f} min{tail}"
         return self.note
 
     def _maybe_learn(self, now: float, outdoor: float | None) -> None:
@@ -589,14 +589,14 @@ class HouseLoad:
                 return
         self._last_learned_at = now
 
-        # Grafen skal vise alt der er maalt, ogsaa de modellerede vinduer -
-        # de er maerket, saa de kan tegnes for sig.
+        # Grafen skal vise alt der er målt, også de modellerede vinduer -
+        # de er mærket, så de kan tegnes for sig.
         self.history.append((now, self.kw, outdoor, self._modelled))
         cutoff = now - HISTORY_DAYS * 86400
         self.history = [h for h in self.history if h[0] >= cutoff]
 
-        # Kurven derimod kender kun rene vinduer. Et skoen paa spaens traek
-        # maa gerne baere det tal der vises nu; det maa ikke bygge modellen.
+        # Kurven derimod kender kun rene vinduer. Et skøn på spaens træk
+        # må gerne bære det tal der vises nu; det må ikke bygge modellen.
         if _finite(outdoor) and not self._modelled:
             self.curve.learn(outdoor, self.kw)
 
@@ -624,9 +624,9 @@ class HouseLoad:
     # ------------------------------------------------------------------ lager
 
     def to_raw(self) -> dict[str, Any]:
-        # Det igangvaerende vindue gemmes med vilje ikke: en genstart betyder
-        # et hul i aflaesningerne, og saa er det aerligere at begynde forfra
-        # end at regne hen over hullet. Samme valg som staatabsmaalingen.
+        # Det igangværende vindue gemmes med vilje ikke: en genstart betyder
+        # et hul i aflæsningerne, og så er det ærligere at begynde forfra
+        # end at regne hen over hullet. Samme valg som ståtabsmålingen.
         return {
             "curve": self.curve.to_raw(),
             "vessels": self.vessels.to_raw(),

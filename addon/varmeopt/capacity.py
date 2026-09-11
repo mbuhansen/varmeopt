@@ -32,12 +32,12 @@ from dataclasses import dataclass
 from typing import Any
 
 # Under denne andel af typeskiltets ydelse er pumpen ikke i gang med at lade
-# lageret op - saa er det rumvarme ved dellast, og den siger intet om hvor
+# lageret op - så er det rumvarme ved dellast, og den siger intet om hvor
 # hurtigt tankene kan fyldes.
 CHARGE_SHARE = 0.4
 
-# Under saa mange maalinger flytter en ny aflaesning raten maerkbart; derover
-# er den kendt. Samme form som resten af det der laeres i projektet.
+# Under så mange målinger flytter en ny aflæsning raten mærkbart; derover
+# er den kendt. Samme form som resten af det der læres i projektet.
 _SETTLED_COUNT = 30
 
 
@@ -53,8 +53,8 @@ def _finite(value: Any) -> bool:
 class ChargeRate:
     """Varmepumpens målte ydelse, når den lader lageret op."""
 
-    # Typeskiltets tal. Bruges som bund for hvad der taeller som en opladning,
-    # og som svar indtil der er maalt noget.
+    # Typeskiltets tal. Bruges som bund for hvad der tæller som en opladning,
+    # og som svar indtil der er målt noget.
     nameplate_kw: float = 16.0
     kw: float | None = None
     count: float = 0.0
