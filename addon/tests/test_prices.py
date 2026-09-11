@@ -468,16 +468,20 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 0.85 / BATTERY_ROUND_TRIP, places=9)
         self.assertIn("genanskaffelse", price.detail)
 
-    def test_the_grid_wins_when_the_inverter_is_already_maxed(self):
-        # Baade "batteriet aflader" og "vi importerer" kan vaere sande paa
-        # en gang: saa staar inverteren paa sit loft, og ekstra forbrug kan
-        # kun komme fra nettet. 12 kW inverter mod 16 kW varmepumpe.
+    def test_a_maxed_inverter_is_not_a_reason_to_price_at_the_grid(self):
+        # Her stod det modsatte: importerede maaleren mens batteriet
+        # afladede, stod inverteren paa sit loft, og prisen var nettets.
+        # Begrundelsen var "12 kW inverter mod 16 kW varmepumpe" - men de
+        # 16 kW er ``hp_charge_kw``, tankenes ladeeffekt i *varme*.
+        # Elforbruget er varmen delt med COP; anlaegget maaler selv 6,23 kW
+        # varme for 1,79 kW el. Pumpen naar aldrig inverterens loft, og
+        # tilbage maalte taersklen kun husets vippen omkring nul.
         p = plan(row(import_rate=300))
 
         price = p.marginal(0, grid=Grid(battery_power=3000, grid_power=4000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 3.00, places=9)
-        self.assertIn("import", price.detail)
+        self.assertEqual(price.kr_per_kwh, p.marginal(0).kr_per_kwh)
+        self.assertIn("genanskaffelse", price.detail)
 
     def test_export_valuation_never_makes_energy_cheaper(self):
         # I baandet snit < eksport < snit/0,90 vendte grenen sit formaal paa
@@ -582,22 +586,44 @@ class MarginalTest(unittest.TestCase):
 
         self.assertIn("genanskaffelse", price.detail)
 
-    def test_physical_export_beats_the_plan(self):
-        # Planen siger ingenting, men maaleren siger at der gaar stroem ud.
+    def test_physical_export_does_not_beat_the_plan(self):
+        # Her stod "physical_export beats the plan": sagde maaleren at der
+        # gik stroem ud, svarede eksportgrenen med den *aktuelle* halvtimes
+        # raa tarif. Den 10. september laa den paa 1,31 mens batterigrenen
+        # med rette vaerdisatte energien til 3,04 mod aftenens top - saa
+        # hvert minut med lidt overskud halverede prisen og vendte
+        # beslutningen. Planen siger om der saelges; maaleren gaetter.
         p = plan(row(export_rate=120))
 
         price = p.marginal(0, grid=Grid(grid_power=-4000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 1.20, places=9)
-        self.assertIn("eksport", price.reason)
+        self.assertEqual(price.kr_per_kwh, p.marginal(0).kr_per_kwh)
+        self.assertNotIn("eksport", price.reason)
 
-    def test_physical_import_is_priced_at_the_grid(self):
+    def test_physical_import_is_not_priced_at_the_grid(self):
         p = plan(row(import_rate=210))
 
         price = p.marginal(0, grid=Grid(grid_power=3000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 2.10, places=9)
-        self.assertIn("import", price.detail)
+        self.assertEqual(price.kr_per_kwh, p.marginal(0).kr_per_kwh)
+        self.assertNotIn("import", price.detail)
+
+    def test_the_direction_of_the_meter_changes_nothing(self):
+        """Den ene test der holder fejlen fra den 10. september ude.
+
+        Samme halvtime, fem forskellige stroemretninger - og ``None``, for
+        ``cheapest_window`` prissaetter uden maaling overhovedet. Et eneste
+        tal maa ikke afhaenge af hvilken vej traaden gik i det oejeblik.
+        """
+        p = plan(row(import_rate=210, export_rate=120), row(state="exp", export_rate=380))
+        expected = p.marginal(0)
+
+        for power in (-9000, -4000, -300, 0, 300, 4000, 9000):
+            with self.subTest(grid_power=power):
+                price = p.marginal(0, grid=Grid(grid_power=power))
+                self.assertAlmostEqual(price.kr_per_kwh, expected.kr_per_kwh, places=9)
+                self.assertEqual(price.reason, expected.reason)
+                self.assertEqual(price.source, expected.source)
 
     def test_no_measurable_flow_still_means_the_battery(self):
         # Maaleren ser hverken import, eksport eller en afladning vaerd at
@@ -633,15 +659,17 @@ class FutureTest(unittest.TestCase):
         self.assertIn("eksport", p.marginal(30).reason)
         self.assertEqual(p.marginal(60).source, NET)
 
-    def test_the_physical_reading_only_applies_to_the_slot_we_are_in(self):
-        # Grid gaelder nu. En halvtime frem maa planen staa alene.
-        p = plan(row(import_rate=200), row(import_rate=50))
+    def test_a_measurement_never_reaches_a_future_slot(self):
+        # Maalingen beskriver kun den halvtime vi staar i, og den afgoer
+        # ingen pris laengere overhovedet. Baade nu og senere skal derfor
+        # svare praecis som uden maaling.
+        p = plan(row(state="holdchrg", import_rate=200), row(import_rate=50))
+        grid = Grid(grid_power=4000, pv_power=3000)
 
-        now = p.marginal(0, grid=Grid(grid_power=4000))
-        later = p.marginal(30, grid=Grid(grid_power=4000))
-
-        self.assertAlmostEqual(now.kr_per_kwh, 2.00, places=9)
-        self.assertNotEqual(later.reason, "net")
+        self.assertAlmostEqual(p.marginal(0, grid=grid).kr_per_kwh, 2.00, places=9)
+        self.assertEqual(
+            p.marginal(30, grid=grid).kr_per_kwh, p.marginal(30).kr_per_kwh
+        )
 
 
 class WindowTest(unittest.TestCase):

@@ -269,24 +269,28 @@ class Price:
 
 @dataclass(frozen=True)
 class Grid:
-    """Den fysiske strømretning lige nu. Kendes kun for indeværende halvtime.
+    """Det anlægget måler lige nu. Kendes kun for indeværende halvtime.
 
-    Fortegnene er anlæggets, og de står her fordi de ellers kun ville leve
-    inde i tærskeltallene nedenfor:
+    **Ingen af målingerne afgør en pris.** Det er værd at sige lige ud, for
+    to af dem gjorde, og det var fejlen bag de fjorten kildeskift den
+    10. september: retningen på én stikprøve fik lov at slå en stabil,
+    planbaseret pris ihjel hvert minut. Priserne kommer fra planen; målingerne
+    er til balancen i debug-filen og til at begrundelsen kan sige at solen
+    dækker huset når den gør.
+
+    Fortegnene er anlæggets:
 
     * ``grid_power`` — **negativ når der sælges til nettet, positiv når der
-      købes.**
-    * ``battery_power`` — positiv når batteriet aflader.
+      købes.** Rent balancetal.
+    * ``battery_power`` — positiv når batteriet aflader. Bruges kun af
+      ``solar_covering``.
     * ``inverter_ac`` — vekselstrøm ud af inverteren, altså sol plus batteri.
-      **Negativ når batteriet lades.**
+      **Negativ når batteriet lades.** Rent balancetal.
     * ``pv_power`` — jævnstrøm ind fra panelerne, aldrig under nul.
     * ``discharge_floor`` — ikke en måling, men den grænse Predbat lige nu
       har skrevet til inverteren: ladetilstanden der må aflades ned til.
-      Under hold charge er det den, ikke reserven, der binder.
-
-    De to sidste afgør ingen pris. De er der for at balancen kan efterprøves
-    i debug-filen, og for at begrundelsen kan sige at solen dækker huset når
-    den gør.
+      Under hold charge er det den, ikke reserven, der binder. Den kommer fra
+      planen, ikke fra en måler, og den afgør derfor gerne en pris.
     """
 
     battery_power: float = 0.0
@@ -302,10 +306,6 @@ class Grid:
     @property
     def importing(self) -> bool:
         return self.grid_power > 200
-
-    @property
-    def exporting(self) -> bool:
-        return self.grid_power < -200
 
     @property
     def solar_covering(self) -> bool:
@@ -607,19 +607,25 @@ class Plan:
         if slot.index > 0:
             grid = None
 
-        physical_export = grid is not None and grid.exporting
-        physical_import = grid is not None and grid.importing
         # Gulvet Predbat har skrevet til inverteren. Som maalingerne gaelder
         # det kun den halvtime vi staar i.
         floor = grid.discharge_floor if grid is not None else None
 
-        # 1. Eksporterer vi — planlagt eller fysisk — er prisen den indtægt vi
-        #    giver afkald på. Kilden er derimod ikke «eksport», for eksport er
+        # 1. Saelger planen i den halvtime, er prisen den indtaegt vi giver
+        #    afkald paa. Kilden er derimod ikke «eksport», for eksport er
         #    ikke et sted stroem kommer fra: en almindelig eksport toemmer
         #    batteriet ud paa nettet, saa den kilowatt-time varmepumpen tager,
         #    er batteriets. En frossen eksport holder ladetilstanden og saelger
         #    solen, og saa er det solens.
-        if physical_export or slot.exporting:
+        #
+        #    Her stod foer ``physical_export or slot.exporting``, saa maaleren
+        #    kunne udloese grenen paa egen haand. Det var forkert: maaleren
+        #    kender kun det aktuelle oejeblik, og grenen svarer med den
+        #    *aktuelle* halvtimes raa tarif. Den 10. september laa den paa 1,31
+        #    mens batterigrenen med rette vaerdisatte energien til 3,04 mod
+        #    aftenens top - saa hvert minut hvor huset tilfaeldigvis sendte
+        #    stroem ud, faldt prisen til under det halve og beslutningen vippede.
+        if slot.exporting:
             if slot.export_price is not None:
                 sold = SUN if slot.frozen else BATTERY
                 return Price(
@@ -659,20 +665,24 @@ class Plan:
                     detail = f"ukendt Predbat-tilstand «{slot.state}» - laast"
                 return Price(slot.import_price, why, source, detail=detail)
 
-        # 3. Koeber vi allerede fra nettet, kommer den naeste kWh derfra.
+        # Her laa en gren mere: "ser maaleren import, staar inverteren paa
+        # sit loft, og saa kan ekstra forbrug kun komme fra nettet". Den er
+        # fjernet, og begrundelsen skal staa her, saa ingen indfoerer den igen
+        # paa samme praemis.
         #
-        #    Det her stod foer efter batterigrenen, og det var forkert naar
-        #    begge var sande. Baade "batteriet aflader" og "vi importerer"
-        #    kan gaelde samtidig, og saa betyder det at inverteren staar paa
-        #    sit loft: batteriet giver alt hvad det kan, og *ekstra* forbrug
-        #    kan kun komme fra nettet.
-        if physical_import and slot.import_price is not None:
-            return Price(
-                slot.import_price,
-                NET,
-                NET,
-                detail="maaleren ser import - inverteren staar paa sit loft",
-            )
+        # Praemissen var en enhedsfejl. Den blev skrevet som "12 kW inverter
+        # mod 16 kW varmepumpe", men de 16 kW er ``hp_charge_kw`` - tankenes
+        # ladeeffekt i *varme*. Pumpens elforbrug er varmen delt med COP:
+        # anlaeggets egen maaling er 6,23 kW varme for 1,79 kW el, saa selv
+        # ved fuld ydelse trækker den under 5 kW. En 12 kW inverter naar
+        # aldrig sit loft af den, og der er ingen halvtime hvor batteriet
+        # aflader alt hvad det kan *og* varmepumpen er grunden til at der
+        # koebes.
+        #
+        # Tilbage maalte ``grid_power > 200`` bare husets almindelige vippen
+        # omkring nul, og den vippen slog en stabil, planbaseret pris ihjel
+        # med en 60-sekunders stikproeve. Maalingerne afgoer herefter ingen
+        # pris; det goer planen.
 
         # 3b. Er batteriet i bund, kommer den naeste kWh fra nettet - og det
         #     er ligegyldigt hvad der er planlagt senere.

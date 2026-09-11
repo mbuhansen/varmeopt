@@ -25,19 +25,32 @@ from varmeopt.ha import State
 PELLET = 0.706
 
 
-class MeterReachesTheDecisionTest(unittest.TestCase):
-    """Beslutningen skal bruge den samme pris som sensoren viser."""
+class PlanReachesTheDecisionTest(unittest.TestCase):
+    """Beslutningen skal bruge den samme pris som sensoren viser.
+
+    Klassen hed foer ``MeterReachesTheDecisionTest`` og stillede den samme
+    halvtime op med ``Grid(grid_power=9000)``: maaleren saa import, og
+    importgrenen svarede 3,50 hvor batterigrenen ville have sagt 0,80.
+
+    Den gren findes ikke mere - se ``marginal`` for hvorfor - men
+    *invarianten* er uaendret og er stadig den vigtigste i filen: den pris
+    beslutningen regner paa, skal vaere den pris sensoren viser. Her tvinges
+    de fra hinanden af planen i stedet, som er det eneste der maa goere det:
+    halvtimen er "holdchrg", saa afladningen er slaaet fra og stroemmen
+    koebes - 3,50 - selv om batteriets egen energi ville koste 0,80.
+    """
 
     def setUp(self):
-        # Nu koster nettet 3,50; om en halv time er der import til 0,67, og
-        # det er den pris batteriets energi skal laegges tilbage til - 0,67 /
-        # 0,832 = 0,80 leveret.
+        # Nu er batteriet bundet og nettet koster 3,50; om en halv time er
+        # der import til 0,67, og det er den pris batteriets energi ville
+        # skulle laegges tilbage til - 0,67 / 0,832 = 0,80 leveret. De to tal
+        # skal ikke kunne forveksles.
         self.plan = Plan.from_predbat(
             {
                 "raw": {
                     "rows": [
                         {
-                            "state": "",
+                            "state": "holdchrg",
                             "import_rate": 350,
                             "export_rate": 60,
                             "soc_percent": 50,
@@ -55,12 +68,8 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
         self.planner = Planner(pellet_price=PELLET, charge_kw=16.0)
 
     def test_the_decision_prices_now_the_same_way_the_sensor_does(self):
-        # Foer rettelsen: sensoren sagde 3,50 "net: import", beslutningen
-        # regnede paa batteriets 0,80 — i samme cyklus.
-        grid = Grid(grid_power=9000)
-
-        sensor_price = self.plan.marginal(0, grid=grid).kr_per_kwh
-        decision = self.planner.decide(self.plan, cop_now=3.0, grid=grid)
+        sensor_price = self.plan.marginal(0).kr_per_kwh
+        decision = self.planner.decide(self.plan, cop_now=3.0)
 
         self.assertAlmostEqual(sensor_price, 3.50, places=9)
         # Plus slitagen: varmepumpevarme koster 0,15 kr/kWh mere end
@@ -69,22 +78,30 @@ class MeterReachesTheDecisionTest(unittest.TestCase):
 
     def test_and_therefore_picks_the_boiler_when_the_grid_is_dear(self):
         # 3,50/3 = 1,17 kr/kWh varme mod pillefyrets 0,71.
-        decision = self.planner.decide(
-            self.plan, cop_now=3.0, grid=Grid(grid_power=9000)
-        )
+        decision = self.planner.decide(self.plan, cop_now=3.0)
 
         self.assertEqual(decision.source, "pillefyr")
 
-    def test_without_the_meter_it_would_have_chosen_the_heat_pump(self):
-        # Dokumenterer selve fejlen, saa den ikke kan snige sig ind igen.
-        decision = self.planner.decide(self.plan, cop_now=3.0, grid=None)
+    def test_the_meter_cannot_move_any_of_it(self):
+        """Afloeseren for ``test_without_the_meter_it_would_have_chosen_...``.
 
-        self.assertEqual(decision.source, "varmepumpe")
+        Den gamle test dokumenterede at maaleren *aendrede* svaret. Nu er
+        kravet det modsatte, og det er skarpere: hvad maaleren end siger,
+        skal prisen, beslutningen og fremskrivningen vaere de samme.
+        """
+        for power in (-9000, -300, 0, 300, 9000):
+            with self.subTest(grid_power=power):
+                grid = Grid(grid_power=power)
+                self.assertAlmostEqual(
+                    self.plan.marginal(0, grid=grid).kr_per_kwh, 3.50, places=9
+                )
+                self.assertEqual(
+                    self.planner.decide(self.plan, cop_now=3.0, grid=grid).source,
+                    "pillefyr",
+                )
 
-    def test_the_projection_prices_the_now_row_with_the_meter_too(self):
-        rows = self.planner.project(
-            self.plan, cop_now=3.0, grid=Grid(grid_power=9000)
-        )
+    def test_the_projection_prices_the_now_row_the_same_way(self):
+        rows = self.planner.project(self.plan, cop_now=3.0)
 
         self.assertAlmostEqual(rows[0].electricity, 3.50, places=9)
         self.assertEqual(rows[0].reason, "net")
@@ -273,7 +290,12 @@ class GuardSurvivesRestartTest(unittest.TestCase):
         import time as _time
 
         now = _time.time()
-        after = self.Guard(enabled=True, min_dwell_minutes=15.0, warmup_minutes=0.0)
+        after = self.Guard(
+            enabled=True,
+            min_dwell_minutes=15.0,
+            warmup_minutes=0.0,
+            confirm_minutes=0.0,
+        )
         after.restore({"committed": "pillefyr", "committed_at": now - 3 * 60})
 
         cmd = after.check(_decision("varmepumpe"), object(), None, now)

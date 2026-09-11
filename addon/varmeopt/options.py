@@ -254,8 +254,13 @@ _DEFAULTS: dict[str, object] = {
     # og Node-RED foelger den kun naar flaget siger ja. Saa er der ét sted
     # der styrer, og det sted kan altid sige nej til os.
     "control_enabled": False,
-    # Mindste tid en kilde skal staa, foer den maa skifte igen.
+    # Mindste tid en kilde skal staa, foer den maa skifte igen. Gaelder
+    # ogsaa selve beslutnings-entiteten, ikke kun styringen.
     "control_min_dwell_minutes": 15,
+    # Hvor laenge en ny kilde skal holde, foer den overhovedet taeller.
+    # Hviletiden alene goer et ét-minuts udsving *vaerre*: er den udloebet,
+    # binder vagten sig til fejlen og holder den et kvarter.
+    "control_confirm_minutes": 3,
     # Efter opstart: lad tabellerne komme paa plads foer der styres.
     "control_warmup_minutes": 5,
     "auto_update": False,
@@ -381,6 +386,7 @@ class Options:
     auto_update: bool
     control_enabled: bool
     control_min_dwell_minutes: float
+    control_confirm_minutes: float
     control_warmup_minutes: float
     tank_liters: int
     tank_reference_temp: float
@@ -464,6 +470,7 @@ class Options:
                 )
                 or key in (
                     "control_min_dwell_minutes",
+                    "control_confirm_minutes",
                     "control_warmup_minutes",
                     "forecast_refresh_minutes",
                     "plan_max_age_minutes",

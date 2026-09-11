@@ -47,6 +47,42 @@ class DisabledTest(unittest.TestCase):
 
         self.assertEqual(cmd.source, "pillefyr")
 
+    def test_the_binding_is_kept_even_though_nobody_is_steering(self):
+        # Det her er hele grunden til at bindingen regnes foer ``enabled``
+        # ses paa: entiteten er det Node-RED haenger sin
+        # ``server-state-changed`` paa, og den skal vaere rolig uanset hvem
+        # der styrer. Foer stod den paa planlaeggerens raa svar hvert minut.
+        g = Guard(confirm_minutes=0.0)
+        g.start(0.0)
+        g.check(decision("varmepumpe"), LOOKUP, plan(), now=100 * MIN)
+
+        cmd = g.check(decision("pillefyr"), LOOKUP, plan(), now=105 * MIN)
+
+        self.assertFalse(cmd.acting)
+        self.assertEqual(cmd.source, "varmepumpe")
+        self.assertIn("holder", cmd.reason)
+
+
+class BindingGatesTest(unittest.TestCase):
+    """Bindingen maa ikke saettes paa et daarligt oplyst svar."""
+
+    def test_no_cop_does_not_bind(self):
+        # ``source_now`` svarer "varmepumpe" som standard naar COP mangler.
+        # Bandt vi os til det, kunne en foraeldet Predbat-plan laase
+        # anlaegget paa et prisloest gaet et kvarter.
+        g = guard()
+
+        g.check(decision(), None, plan(), now=10 * MIN)
+
+        self.assertIsNone(g.committed)
+
+    def test_warming_up_does_not_bind(self):
+        g = guard()
+
+        g.check(decision(), LOOKUP, plan(), now=2 * MIN)
+
+        self.assertIsNone(g.committed)
+
 
 class WarmupTest(unittest.TestCase):
     def test_nothing_is_commanded_while_warming_up(self):
@@ -95,9 +131,58 @@ class SafetyTest(unittest.TestCase):
         self.assertIn("uden plan", cmd.reason)
 
 
-class DwellTest(unittest.TestCase):
+class ConfirmTest(unittest.TestCase):
+    """Et ét-minuts udsving må ikke kunne binde vagten.
+
+    Uden bekræftelsen gør hviletiden støjen *værre*: er den for længst
+    udløbet, binder vagten sig til fejlen i samme øjeblik og holder den et
+    helt kvarter. Et minuts støj blev til femten.
+    """
+
     def setUp(self):
-        self.g = guard()
+        self.g = guard(confirm_minutes=3.0)
+        self.g.check(decision("varmepumpe"), LOOKUP, plan(), now=6 * MIN)
+
+    def test_a_single_cycle_of_noise_is_refused(self):
+        cmd = self.g.check(decision("pillefyr"), LOOKUP, plan(), now=60 * MIN)
+
+        self.assertEqual(cmd.source, "varmepumpe")
+        self.assertIn("afventer bekræftelse", cmd.reason)
+
+    def test_and_it_does_not_restart_the_dwell(self):
+        # Kernen i det hele: efter udsvinget skal den bundne kilde stå
+        # uberørt, så et ægte skifte bagefter ikke er blevet forsinket.
+        self.g.check(decision("pillefyr"), LOOKUP, plan(), now=60 * MIN)
+        committed_at = self.g.committed_at
+
+        self.g.check(decision("varmepumpe"), LOOKUP, plan(), now=61 * MIN)
+
+        self.assertEqual(self.g.committed_at, committed_at)
+        self.assertIsNone(self.g.pending)
+
+    def test_a_source_that_keeps_asking_gets_through(self):
+        for minute in (60, 61, 62, 63):
+            cmd = self.g.check(decision("pillefyr"), LOOKUP, plan(), now=minute * MIN)
+
+        self.assertEqual(cmd.source, "pillefyr")
+        self.assertIn("skifter", cmd.reason)
+
+    def test_the_wait_survives_a_restart(self):
+        self.g.check(decision("pillefyr"), LOOKUP, plan(), now=60 * MIN)
+
+        after = guard(confirm_minutes=3.0)
+        after.restore(self.g.to_raw())
+        cmd = after.check(decision("pillefyr"), LOOKUP, plan(), now=64 * MIN)
+
+        self.assertEqual(cmd.source, "pillefyr")
+        self.assertIn("skifter", cmd.reason)
+
+
+class DwellTest(unittest.TestCase):
+    # Bekræftelsen er slået fra her, så hver test handler om én ting.
+    # ``ConfirmTest`` ovenfor dækker den anden halvdel.
+    def setUp(self):
+        self.g = guard(confirm_minutes=0.0)
         self.g.check(decision("varmepumpe"), LOOKUP, plan(), now=6 * MIN)
 
     def test_the_same_source_passes_straight_through(self):

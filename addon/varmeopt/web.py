@@ -468,7 +468,7 @@ class WebUI:
             "<th>Eksport</th><th>SOC</th><th>Predbat</th><th>Varme</th>"
             "<th>Kilde</th><th>Hvorfor</th></tr></thead>"
         )
-        summary = _decision_banner(decision)
+        summary = _decision_banner(decision, status.get("command"))
         hours = rows[-1].minutes / 60
 
         body = (
@@ -958,11 +958,25 @@ def _highlight_basis(why: str) -> str:
     return f'<span style="color:{_NET_INK};font-weight:600">{head}</span>{text[3:]}'
 
 
-def _decision_banner(decision: Any) -> str:
+def _held_source(decision: Any, command: Any) -> tuple[str, str]:
+    """Den kilde der staar paa entiteten, og teksten der forklarer den.
+
+    Skaermen skal vise det samme som ``sensor.varmeopt_beslutning``. Stod
+    der planlaeggerens raa svar her, ville UI'et og entiteten sige hver sit
+    i hvert minut hvor vagten holder.
+    """
+    raw = decision.source
+    if command is None or command.source is None or command.source == raw:
+        return raw, decision.reason
+    return command.source, f"{decision.reason} — {command.reason}"
+
+
+def _decision_banner(decision: Any, command: Any = None) -> str:
     """Hvad den vil gøre, med det samme og med store bogstaver."""
     if decision is None:
         return ""
-    colour = _SOURCE_INK.get(decision.source, "#8a8a82")
+    source, reason = _held_source(decision, command)
+    colour = _SOURCE_INK.get(source, "#8a8a82")
     extra = ""
     if decision.charge and decision.charge_kwh is not None:
         extra = (
@@ -974,8 +988,8 @@ def _decision_banner(decision: Any) -> str:
         extra = '<div class="sub" style="margin:6px 0 0">Lader ikke op</div>'
     return (
         f'<div class="card"><div class="big" style="color:{colour}">'
-        f"{_esc(decision.source.upper())}</div>"
-        f'<div class="sub" style="margin:0">{_esc(decision.reason)}</div>{extra}</div>'
+        f"{_esc(source.upper())}</div>"
+        f'<div class="sub" style="margin:0">{_esc(reason)}</div>{extra}</div>'
     )
 
 
@@ -1012,11 +1026,12 @@ def _price_section(status: dict[str, Any]) -> str:
 
     badge = ""
     if decision is not None:
-        colour = "#1f7a4d" if decision.source == "varmepumpe" else "#b4530a"
+        source, reason = _held_source(decision, status.get("command"))
+        colour = "#1f7a4d" if source == "varmepumpe" else "#b4530a"
         badge = (
             f'<div class="card"><div class="big" style="color:{colour}">'
-            f"{_esc(decision.source.upper())}</div>"
-            f'<div class="sub" style="margin:0">{_esc(decision.reason)}</div></div>'
+            f"{_esc(source.upper())}</div>"
+            f'<div class="sub" style="margin:0">{_esc(reason)}</div></div>'
         )
         rows.append(("Lad op", _esc(decision.charging_note)))
         if decision.saving_kr is not None:

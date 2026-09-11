@@ -285,7 +285,8 @@ siges i loggen ved opstart.
 | `entity_weather` | `weather.hjem` | Home Assistants egen vejrudsigt. Uden den arver hver time i planen den COP vi har nu |
 | `forecast_refresh_minutes` | 30 | Udsigten ændrer sig i timer, ikke i minutter |
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |
-| `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen |
+| `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen. Gælder også `sensor.varmeopt_beslutning`, ikke kun styringen |
+| `control_confirm_minutes` | 3 | Hvor længe en ny kilde skal holde før den tæller. Uden den gør hviletiden et ét-minuts udsving til et kvarters fejl |
 | `control_warmup_minutes` | 5 | Efter opstart: lad tabellerne komme på plads før der styres |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
 

@@ -119,6 +119,7 @@ class Varmeopt:
             enabled=options.control_enabled,
             min_dwell_minutes=options.control_min_dwell_minutes,
             warmup_minutes=options.control_warmup_minutes,
+            confirm_minutes=options.control_confirm_minutes,
         )
         self.planner = Planner(
             pellet_price=options.pellet_kwh_price,
@@ -444,9 +445,17 @@ class Varmeopt:
             # Flaget foerst. Det er den ene skrivning der er
             # sikkerhedskritisk, og foer laa den sidst - efter fem andre
             # der hver kunne afbryde cyklussen foer den blev naaet.
+            #
+            # Loggen skriver den *udgivne* kilde, for det er den entiteten
+            # staar paa. Den raa kommer i parentes naar vagten holder noget
+            # andet, saa linjen viser baade hvad planlaeggeren mente og hvad
+            # der faktisk stod.
+            published = command.source or decision.source
+            raw = "" if published == decision.source else f" (raa {decision.source})"
             log.info(
-                "beslutning: %s | %s | styring: %s",
-                decision.source,
+                "beslutning: %s%s | %s | styring: %s",
+                published,
+                raw,
                 decision.reason,
                 command.note,
             )
@@ -516,7 +525,9 @@ class Varmeopt:
                 f"{heat:.2f}" if heat is not None else "-",
                 prices["pellet_price"],
             )
-            await self._safely("elpris", self._publish_price(ha, prices))
+            await self._safely(
+                "elpris", self._publish_price(ha, prices, decision, command)
+            )
 
         self._maybe_save()
 
@@ -1022,7 +1033,13 @@ class Varmeopt:
             )
             self._last_status_warning = text
 
-    async def _publish_price(self, ha: HomeAssistant, prices: dict[str, Any]) -> None:
+    async def _publish_price(
+        self,
+        ha: HomeAssistant,
+        prices: dict[str, Any],
+        decision: Any = None,
+        command: Any = None,
+    ) -> None:
         price = prices["price_now"]
         plan: Plan = prices["plan"]
 
@@ -1032,6 +1049,12 @@ class Varmeopt:
             "state_class": "measurement",
             "icon": "mdi:cash-clock",
             "begrundelse": price.reason,
+            # Samme hold-note som paa beslutningen. Den her sensor udgiver
+            # de samme to varmepriser, saa modsigelsen mellem tilstand og
+            # tal ville ellers staa uforklaret to steder i stedet for ét.
+            "kilde_grund": self._held_reason(decision, command)
+            if decision is not None
+            else None,
             "vp_varmepris": _round(prices.get("heat_price"), 3),
             "pille_varmepris": round(prices["pellet_price"], 3),
             "horisont_timer": round(plan.horizon_minutes / 60, 1),
@@ -1091,11 +1114,20 @@ class Varmeopt:
                 "begrundelse": "add-on'en er stoppet",
             },
         )
+        # Den kilde entiteten stod paa, ikke planlaeggerens raa svar - ellers
+        # ville et stop selv vaere et tilstandsskifte i HA's historik.
+        # ``release()`` ovenfor har ryddet vagtens binding, men kommandoen fra
+        # sidste cyklus staar stadig i status og baerer kilden. Nøglen mangler
+        # helt hvis vi stopper foer foerste cyklus er faerdig.
         decision = self.status.get("decision")
+        command = self.status.get("command")
+        last = command.source if command is not None else None
+        if last is None and decision is not None:
+            last = decision.source
         await self._release_one(
             ha,
             SENSOR_DECISION,
-            decision.source if decision is not None else "ukendt",
+            last if last is not None else "ukendt",
             {
                 "friendly_name": "Varmeopt beslutning",
                 "icon": "mdi:scale-balance",
@@ -1157,16 +1189,39 @@ class Varmeopt:
             },
         )
 
+    @staticmethod
+    def _held_reason(decision: Any, command: Any) -> str:
+        """Begrundelsen, med vagtens hold sat bagpaa naar den holder.
+
+        Uden det her ville sensoren staa paa ``pillefyr`` med teksten
+        "VP 0.55 < pille 0.71" ved siden af, og det er vaerre end at vippe:
+        tallene i attributterne beskriver stadig det raa svar, saa der skal
+        staa hvorfor tilstanden er en anden.
+        """
+        reason = decision.reason
+        if command is None or command.source in (None, decision.source):
+            return reason
+        return f"{reason} — {command.reason}"
+
     async def _publish_decision(
         self, ha: HomeAssistant, decision: Any, command: Any
     ) -> None:
         await ha.set_state(
             SENSOR_DECISION,
-            decision.source,
+            # Den kilde vagten staar ved - ikke planlaeggerens raa svar.
+            #
+            # Det er entitetens *tilstand*, og den er det Node-RED haenger
+            # sin ``server-state-changed`` paa. Stod den paa det raa svar,
+            # ville en enkelt cyklus med stoej vaere et tilstandsskifte i
+            # HA's historik: den 10. september blev det til fjorten paa seks
+            # timer. Det raa svar staar i ``raa_kilde``, saa man stadig kan
+            # se hvad planlaeggeren ville have sagt.
+            command.source if command.source is not None else decision.source,
             {
                 "friendly_name": "Varmeopt beslutning",
                 "icon": "mdi:scale-balance",
-                "begrundelse": decision.reason,
+                "begrundelse": self._held_reason(decision, command),
+                "raa_kilde": decision.source,
                 # Node-RED skal kun foelge os naar "styrer" er sand.
                 # Ellers bruger den sin egen logik, og det er meningen.
                 "styrer": command.acting,
@@ -1584,7 +1639,12 @@ async def run() -> None:
                 app.house_load.curve.sample_count,
             )
         if app.guard.committed:
-            log.info("vagten genoptager binding: %s", app.guard.committed)
+            log.info(
+                "vagten genoptager binding: %s (hviletiden fortsaetter hvor "
+                "den slap - den gaelder beslutningen, ogsaa naar styringen "
+                "er slaaet fra)",
+                app.guard.committed,
+            )
 
         loop = asyncio.get_running_loop()
 
