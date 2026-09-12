@@ -560,25 +560,67 @@ class Planner:
                 displaced, stored_kwh, hot_kwh, dhw_kwh, dhw_input_for
             )
             need, driver = short.total, short.driver
-            if need <= 0:
+            # Under ét minimumstræk er det ikke en opladning - det er en
+            # start. Her stod `need <= 0`, og mængden blev derefter løftet op
+            # til `min_charge_kwh`: et behov på nogle tiendedele blev til et
+            # kvarter på kompressoren. Den 12. september blev det til to, kl.
+            # 00:56 og kl. 10:19, begge på strøm fra batteriet, og
+            # begrundelsen lovede 0,06 og 0,14 kr.
+            #
+            # Værre endnu flyttede gulvet blokken: 32,5 kWh kræver 157
+            # sammenhængende minutter, og de lå kl. 12, mens 3,1 kWh kun
+            # kræver 15 - og dem er den halvtime vi står i god nok til. Ét
+            # minuts udsving i behovet forvandlede altså en lang blok senere
+            # til et kvarter med det samme, og bagefter var strækket brændt.
+            #
+            # Anlæggets regel er en anden: varmeopt kigger kun på behovet når
+            # der kan laves en *stor* opladning der giver en besparelse inden
+            # en dyr periode. Mangler der mindre end det, starter UVR'en selv
+            # pumpen efter behov - ved rumvarmens setpunkt og den bedre COP
+            # der hører til, og kun med den varme huset beder om.
+            if need < self.min_charge_kwh:
+                told = (
+                    "intet at lade op til"
+                    if need <= 0
+                    else (
+                        f"der mangler {need:.1f} kWh, under ét "
+                        "minimumstræk: UVR'en tager det selv"
+                    )
+                )
                 return _with(
                     decision,
                     **stretch,
                     window_minutes=best_when,
-                    charge_state="lageret rækker - der er ikke noget at lade op til",
+                    charge_state=(
+                        "lageret rækker - der er ikke noget at lade op til"
+                        if need <= 0
+                        else (
+                            f"der mangler {need:.1f} kWh — mindre end ét "
+                            "minimumstræk"
+                        )
+                    ),
                     dhw_short_kwh=short.dhw_kwh,
                     space_short_kwh=short.space_kwh,
                     dhw_need_kwh=short.dhw_need,
                     dhw_have_kwh=short.dhw_have,
                     space_need_kwh=short.space_need,
                     space_have_kwh=short.space_have,
-                    reason=f"{why}; {short.told} — intet at lade op til",
+                    reason=f"{why}; {short.told} — {told}",
                 )
 
-        # Der lades det der skal bruges - ikke hele lagerpladsen. Mindre end
-        # mindstetrækket kan pumpen ikke levere, så der rundes op til det;
-        # gevinsten gælder stadig kun den varme der faktisk fortrænges.
-        want = room if need is None else min(room, max(need, self.min_charge_kwh))
+        # Der lades det der skal bruges - ikke hele lagerpladsen, og ikke et
+        # minimumstræk der er større end behovet.
+        #
+        # `min_charge_kwh` er grænsen for **om** der handles, ikke et gulv
+        # under **hvor meget**. Spærren ovenfor har allerede sagt fra ved et
+        # behov under den, og pladsen er sikret mod den samme grænse længere
+        # oppe - så `want` kan alligevel aldrig blive kortere end
+        # minimumstrækket. Det er den invariant der gør gulvet overflødigt.
+        #
+        # `need is None` beholder sin gamle opførsel: uden et behov kan
+        # spørgsmålet ikke besvares, og så er hele pladsen det eneste ærlige
+        # svar.
+        want = room if need is None else min(room, need)
 
         # Spørgsmål 3b: er *nu* overhovedet det rigtige tidspunkt?
         #

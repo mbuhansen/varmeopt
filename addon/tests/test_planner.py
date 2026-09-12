@@ -511,22 +511,26 @@ class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
 
     def test_the_saving_counts_only_the_dear_half_hour(self):
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, demand_kw=3.0
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0, demand_kw=12.0
         )
 
         self.assertTrue(d.charge)
-        # 3 kW i en halv time er 1,5 kWh fortrængt - ikke de 24 der er plads
+        # 12 kW i en halv time er 6 kWh fortrængt - ikke de 24 der er plads
         # til. Marginen er den samme; det er gangefaktoren der var forkert.
-        self.assertLess(d.saving_kr, d.charge_kwh * 0.35)
+        self.assertAlmostEqual(d.charge_kwh, 6.0, places=9)
+        self.assertAlmostEqual(d.saving_kr, 0.456 * 6, places=6)
 
     def test_two_dear_half_hours_displace_twice_as_much(self):
+        # 8 kW, så begge mængder holder sig under de 8 kWh der er tid til at
+        # lade inden det bliver dyrt - ellers måler testen loftet og ikke
+        # fortrængningen.
         one = self.planner.decide(
             plan(30, 300, 30), cop_now=3.0, cop_later=3.0,
-            headroom_kwh=24.0, demand_kw=3.0,
+            headroom_kwh=24.0, demand_kw=8.0,
         )
         two = self.planner.decide(
             plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
-            headroom_kwh=24.0, demand_kw=3.0,
+            headroom_kwh=24.0, demand_kw=8.0,
         )
 
         self.assertAlmostEqual(two.saving_kr, 2 * one.saving_kr, places=6)
@@ -544,17 +548,49 @@ class SavingIsWhatGetsDisplacedTest(unittest.TestCase):
         self.assertIn("intet at lade op til", d.reason)
 
     def test_only_what_the_store_is_short_of_is_charged(self):
-        # Samme to halvtimer, men lageret har kun 1 kWh: der mangler 2. Der
-        # lades mindstetrækket på 4, ikke de 8 der er plads til - og
-        # gevinsten gælder de 2, ikke de 4.
+        # 6 kW gennem to dyre halvtimer er 6 kWh, og lageret har 1: der
+        # mangler 5. Der lades de 5 - hverken de 8 der er tid til, eller
+        # mindstetrækket på 4 - og gevinsten gælder de samme 5.
+        d = self.planner.decide(
+            plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, stored_kwh=1.0, demand_kw=6.0,
+        )
+
+        self.assertTrue(d.charge)
+        self.assertAlmostEqual(d.charge_kwh, 5.0, places=9)
+        self.assertAlmostEqual(d.saving_kr, 0.456 * 5, places=6)
+
+    def test_a_shortfall_under_one_minimum_draw_is_left_to_the_uvr(self):
+        # Samme to halvtimer ved 3 kW: der bruges 3 kWh, lageret har 1, og så
+        # mangler der 2 - mindre end mindstetrækket på 4.
+        #
+        # Her stod der før en opladning på 4 kWh. Gulvet løftede behovet op
+        # til et minimumstræk, og det er ikke en opladning, det er en start:
+        # den 12. september blev det til et kvarter kl. 00:56 og et kl.
+        # 10:19, begge på strøm fra batteriet. Varmeopt planlægger store
+        # opladninger inden en dyr periode; resten starter UVR'en selv efter
+        # behov.
         d = self.planner.decide(
             plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
             headroom_kwh=24.0, stored_kwh=1.0, demand_kw=3.0,
         )
 
+        self.assertFalse(d.charge)
+        self.assertIsNone(d.planned_kwh)
+        self.assertIn("UVR'en tager det selv", d.reason)
+        self.assertIn("2.0 kWh", d.reason)
+
+    def test_a_shortfall_of_exactly_one_minimum_draw_is_charged(self):
+        # Grænsen skal gå ét sted, og den går her: mangler der præcis
+        # mindstetrækket, er det en opladning der kan køres ud i ét.
+        # 5 kW gennem to dyre halvtimer er 5 kWh, og lageret har 1.
+        d = self.planner.decide(
+            plan(30, 300, 300, 30), cop_now=3.0, cop_later=3.0,
+            headroom_kwh=24.0, stored_kwh=1.0, demand_kw=5.0,
+        )
+
         self.assertTrue(d.charge)
         self.assertAlmostEqual(d.charge_kwh, 4.0, places=9)
-        self.assertLess(d.saving_kr, 0.456 * 2 + 1e-9)
 
     def test_without_a_demand_it_says_so_by_not_pretending(self):
         # Uden et behov kan spørgsmålet ikke besvares. Så står det gamle

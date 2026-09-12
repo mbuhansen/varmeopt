@@ -23,7 +23,7 @@ import aiohttp
 
 from . import VERSION, selfupdate
 from .capacity import ChargeRate
-from .charge import ChargePlan, slot_start
+from .charge import NO_PLAN, ChargePlan, slot_start
 from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
@@ -452,12 +452,23 @@ class Varmeopt:
             # der faktisk stod.
             published = command.source or decision.source
             raw = "" if published == decision.source else f" (rå {decision.source})"
+            # Og blokkens egen note, når den har noget at sige. Beslutningen
+            # og blokken svarer på hver sit spørgsmål: planlæggeren skriver
+            # hvad den *vil*, blokken hvad der *sker*. Den 12. september stod
+            # der «lad 32,6 kWh nu» i hver eneste cyklus fra 10:35 til 12:00
+            # mens sensoren var slukket, fordi strækket allerede var ladet op
+            # imod - og loggen sagde ikke et ord om hvorfor. Noten fandtes
+            # kun på web-siden og i entitetens attribut, hvor ingen kan læse
+            # den bagud.
+            plan_note = self.charge_plan.note
+            plan_note = "" if plan_note == NO_PLAN else f" | opladning: {plan_note}"
             log.info(
-                "beslutning: %s%s | %s | styring: %s",
+                "beslutning: %s%s | %s | styring: %s%s",
                 published,
                 raw,
                 decision.reason,
                 command.note,
+                plan_note,
             )
             await self._safely("beslutning", self._publish_decision(ha, decision, command))
             await self._safely(

@@ -48,6 +48,11 @@ SLOT_SECONDS = 1800.0
 # ville være et rigtigt overskud og et højtryk.
 FULL_HOLD_SECONDS = 180.0
 
+# Noten når der ikke er noget at sige. Den står som en konstant, så loggen kan
+# tie i netop det tilfælde uden at gætte på ordlyden - og sige noget i alle
+# de andre, hvor noten er det eneste sted der står hvorfor flaget er slukket.
+NO_PLAN = "ingen opladning planlagt"
+
 
 def _finite(value: Any) -> bool:
     return (
@@ -137,7 +142,7 @@ class ChargePlan:
     # vi nu sigter mod, begynder inden det her, er det det samme stræk - og
     # ét stræk giver én opladning.
     done_until: float | None = None
-    note: str = "ingen opladning planlagt"
+    note: str = NO_PLAN
     # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
 
@@ -235,7 +240,7 @@ class ChargePlan:
                     f"{self.block.minutes_until(now):.0f} min"
                 )
             else:
-                self.note = "ingen opladning planlagt"
+                self.note = NO_PLAN
             return False
 
         dear_from, dear_until = self._dear_key(now, decision, window)
