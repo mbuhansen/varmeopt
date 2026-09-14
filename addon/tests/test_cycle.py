@@ -72,9 +72,13 @@ class CycleTest(unittest.TestCase):
         self.app = Varmeopt(options(), Store(tmp))
         # Én belagt celle, så vi kan se præcis hvor meget en cyklus lægger til.
         self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
+        # Varmepumpens eget fremløb står her lig setpunktet, så cellen
+        # ovenfor er den der læres i. Det er BT12 der er tabellens akse.
+        bt12 = self.app.options.entity_hp_flow
         self.ha = FakeHa(
             {
                 FLOW: State(FLOW, "31.0", {}, "flow-1"),
+                bt12: State(bt12, "31.0", {}, "bt12-1"),
                 COP: State(COP, "4.4", {}, "måling-1"),
                 OUT: State(OUT, "17.2", {}, "ude-1"),
             }
@@ -90,8 +94,20 @@ class CycleTest(unittest.TestCase):
 
     # -------------------------------------------------------------- dedup
 
+    def test_a_restart_does_not_learn_the_standing_measurement_again(self):
+        # Målingen på føleren er fra før genstarten og blev lært dengang.
+        # Første cyklus åbner kun vinduet. Hver udrulning er en genstart, og
+        # før kom den sidste måling med to gange - på det BT12 der stod efter
+        # genstarten, ikke det den blev målt ved.
+        self.cycle(times=3)
+
+        self.assertEqual(self.samples, 10.0)
+        self.assertIn("efter start", self.app.status["learn_note"])
+
     def test_same_measurement_is_only_learned_once(self):
         # Kernen: pumpen kører stabilt, sensoren står stille, vi poller videre.
+        self.cycle()
+        self.ha.measure(4.4, "måling-2")
         self.cycle(times=5)
 
         self.assertEqual(self.samples, 11.0)
@@ -100,32 +116,108 @@ class CycleTest(unittest.TestCase):
         self.cycle()
         self.ha.measure(4.6, "måling-2")
         self.cycle()
+        self.ha.measure(4.5, "måling-3")
+        self.cycle()
 
         self.assertEqual(self.samples, 12.0)
 
     def test_without_last_changed_we_learn_every_cycle(self):
         # Lokal afprøvning mod en attrap: uden tidsstempel kan to målinger
-        # ikke kendes fra hinanden, og så lærer vi hellere for meget.
+        # ikke kendes fra hinanden, og så lærer vi hellere for meget - fra
+        # anden cyklus, for den første åbner vinduet.
         self.ha.measure(4.4, None)
         self.cycle(times=3)
 
-        self.assertEqual(self.samples, 13.0)
+        self.assertEqual(self.samples, 12.0)
 
     def test_stopped_pump_is_not_remembered_as_learned(self):
         # En ignoreret måling må ikke optage pladsen som "sidst lært", ellers
         # kunne den spærre for en rigtig måling bagefter.
-        self.ha.measure(0, "måling-1")
+        self.cycle()
+        self.ha.measure(0, "måling-2")
         self.cycle()
 
         self.assertEqual(self.samples, 10.0)
         self.assertIsNone(self.app._last_learned_stamp)
 
     def test_implausible_measurement_is_not_remembered_as_learned(self):
-        self.ha.measure(99, "måling-1")
+        self.cycle()
+        self.ha.measure(99, "måling-2")
         self.cycle()
 
         self.assertEqual(self.samples, 10.0)
         self.assertIsNone(self.app._last_learned_stamp)
+
+    # --------------------------------------------------------------- BT12
+
+    def _bt12(self, temp):
+        eid = self.app.options.entity_hp_flow
+        if temp is None:
+            self.ha._states.pop(eid, None)
+        else:
+            self.ha._states[eid] = State(eid, str(temp), {}, f"bt12-{temp}")
+
+    def test_the_heat_pump_s_own_flow_is_the_axis(self):
+        # Glidende opladning: UVR'ens setpunkt står på 31, men varmepumpen
+        # får sit eget setpunkt og går op. Målingen hører til det fremløb
+        # pumpen faktisk leverede - middelværdien af BT12 over målingens
+        # vindue - og ikke til 31.
+        self.app.table = CopTable()
+        self._bt12(45.0)
+        self.cycle()
+        self.ha.measure(4.4, "måling-2")
+        self.cycle()
+        for temp in (48.0, 50.0, 52.0):
+            self._bt12(temp)
+            self.cycle()
+        self._bt12(50.0)
+        self.ha.measure(4.0, "måling-3")
+        self.cycle()
+
+        self.assertEqual(self.app.table.flow_temps, [45, 50])
+        self.assertEqual(self.app.table.row(31), {})
+
+    def test_without_bt12_nothing_is_learned(self):
+        # Setpunktet er ikke en reserve for BT12. Det er netop den
+        # forurening der skal ud af tabellen.
+        self.app.table = CopTable()
+        self._bt12(None)
+        self.cycle()
+        self.ha.measure(4.4, "måling-2")
+        self.cycle()
+
+        self.assertEqual(self.app.table.cell_count, 0)
+        self.assertIn("mangler BT12", self.app.status["learn_note"])
+
+    def test_learning_does_not_wait_for_the_setpoint(self):
+        # Aksen er BT12. At UVR'ens setpunkt ikke svarer, må ikke tie
+        # læringen - og vinduet må ikke vokse videre og slå målinger sammen.
+        self.app.table = CopTable()
+        self._bt12(40.0)
+        self.ha._states.pop(FLOW)
+        self.cycle()
+        self.ha.measure(4.4, "måling-2")
+        self.cycle()
+
+        self.assertEqual(self.app.table.flow_temps, [40])
+
+    def test_a_stopped_pump_starts_a_new_window(self):
+        # Står pumpen stille, er BT12 bare vandet i røret. De minutter må ikke
+        # trække den næste målings fremløb ned.
+        self.app.table = CopTable()
+        self._bt12(50.0)
+        self.cycle()
+        self.ha.measure(4.4, "måling-2")
+        self.cycle()
+        self.ha.measure(0, "stop")
+        for temp in (25.0, 25.0, 25.0):
+            self._bt12(temp)
+            self.cycle()
+        self._bt12(50.0)
+        self.ha.measure(4.0, "start")
+        self.cycle()
+
+        self.assertEqual(self.app.table.flow_temps, [50])
 
     # ------------------------------------------------------------- øvrigt
 
@@ -640,27 +732,32 @@ class ForecastTest(unittest.TestCase):
         self.assertIsNone(self.app._cop_at(360))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class TenthOfSeptemberTest(unittest.TestCase):
     """Hele hændelsen, spillet af igen.
 
     Den 10. september lå Predbats plan stille: aftenens eksport var 3,38,
-    og batterigrenen værdisatte med rette energien til 3,04 - langt over
+    og batterigrenen værdisatte dengang energien til 3,04 - langt over
     pillefyrets 0,71. Beslutningen skulle have stået på pillefyr fra 14:31
     til 21:00. Den skiftede fjorten gange.
 
-    Aarsagen var to grene der måtte overtrumfe planen på én stikprøve af
+    Årsagen var to grene der måtte overtrumfe planen på én stikprøve af
     elmåleren. Huset lå og vippede omkring nul, så hvert minut hvor
     ``grid_power`` krydsede ±200 W, faldt prisen til importprisen og
     beslutningen vendte.
+
+    Planen herunder er syntetisk - to rækker - og ikke dagens rigtige plan.
+    Importen står på 4,50 og ikke 1,80 som da testen blev skrevet: siden 14.
+    september koster en kilowatt-time det billigste af at sælge mindre og at
+    købe den tilbage bagefter, og i en plan hvor importen efter salget er
+    1,80, vinder genkøbet. Det testen skal vise, er at *måleren* ikke flytter
+    prisen, og det gør den ikke ved nogen af de to tal.
     """
 
     ROWS = [
-        {"state": "demand", "import_rate": 180, "export_rate": 60, "soc_percent": 50},
-        {"state": "exp", "import_rate": 180, "export_rate": 380, "soc_percent": 50},
+        {"state": "demand", "import_rate": 450, "export_rate": 60, "soc_percent": 50},
+        {"state": "exp", "import_rate": 450, "export_rate": 380, "soc_percent": 50},
     ]
 
     def setUp(self):
@@ -875,6 +972,31 @@ class ControlTest(unittest.TestCase):
         command = self.app.status["command"]
         self.assertFalse(command.acting)
         self.assertIn("ingen COP", command.reason)
+
+
+
+
+class Bt12TableFileTest(unittest.TestCase):
+    """Setpunkt-tabellen skal ligge urørt, mens BT12-tabellen fyldes."""
+
+    def test_the_setpoint_table_is_never_written_again(self):
+        from varmeopt.migrate import COP_TABLE_BT12_FILE, COP_TABLE_FILE, load_cop_table
+
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        store = Store(tmp)
+        store.save(COP_TABLE_FILE, {"31": {"17": {"cop": 4.5, "count": 10.0}}})
+        before = store.path(COP_TABLE_FILE).read_bytes()
+
+        app = Varmeopt(options(), store)
+        app.table, _ = load_cop_table(store)
+        app.table.learn(45, 17, 4.0)
+        app._dirty = True
+        app.save()
+
+        self.assertEqual(store.path(COP_TABLE_FILE).read_bytes(), before)
+        self.assertEqual(store.load(COP_TABLE_BT12_FILE), {"45": {"17": {"cop": 4.0, "count": 1.0}}})
+        # Og den gamle svarer stadig, hvor den nye intet ved.
+        self.assertAlmostEqual(app.table.lookup(31, 17).cop, 4.5)
 
 
 if __name__ == "__main__":

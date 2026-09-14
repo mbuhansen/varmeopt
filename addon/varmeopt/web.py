@@ -133,6 +133,7 @@ _SOURCE_LABEL = {
     "interp": ("Interpoleret", "#2f6ea8"),
     "blend": ("Delvist lært", "#b4530a"),
     "curve": ("TA-kurve", "#8a8a82"),
+    "fallback": ("Setpunkt-tabel", "#6b6b8a"),
 }
 
 
@@ -656,9 +657,13 @@ class WebUI:
             "hentet_kode": selfupdate.current(),
             "tidspunkt": datetime.now().astimezone().isoformat(timespec="seconds"),
             "status": status,
+            # BT12-tabellen, og setpunkt-tabellen den falder tilbage på.
             "cop_tabel": table.to_raw(),
             "cop_celler": table.cell_count,
             "cop_målinger": round(table.sample_count),
+            "cop_tabel_setpunkt": (
+                table.fallback.to_raw() if table.fallback is not None else None
+            ),
         }
         if self._curve is not None:
             payload["varmekurve"] = self._curve().to_raw()
@@ -824,10 +829,22 @@ class WebUI:
     async def cop(self, _request: web.Request) -> web.Response:
         table = self._table()
         flows = table.flow_temps
+        # Tabellen læres på varmepumpens eget fremløb, BT12. Setpunkt-tabellen
+        # svarer hvor den endnu ikke ved nok, og det skal kunne ses.
+        fallback = table.fallback
+        fallback_note = (
+            '<p class="legend">Læres på varmepumpens eget fremløb (BT12). '
+            f"Setpunkt-tabellen bruges som fald: {fallback.cell_count} celler, "
+            f"{fallback.sample_count:.0f} målinger.</p>"
+            if fallback is not None
+            else ""
+        )
 
         if not flows:
             return _page(
-                "COP-tabel", "cop", "<h1>COP-tabel</h1><p class='sub'>Tabellen er tom.</p>"
+                "COP-tabel",
+                "cop",
+                "<h1>COP-tabel</h1><p class='sub'>Tabellen er tom.</p>" + fallback_note,
             )
 
         outdoors = sorted({o for f in flows for o in table.row(f)})
@@ -863,6 +880,7 @@ class WebUI:
             f'<span><span class="swatch" style="background:{_cop_colour(3.75)}"></span>COP 3,8</span>'
             f'<span><span class="swatch" style="background:{_cop_colour(5.5)}"></span>COP 5,5</span>'
             "<span>Blegere farve = færre målinger bag tallet</span></p>"
+            f"{fallback_note}"
         )
         return _page("COP-tabel", "cop", body)
 

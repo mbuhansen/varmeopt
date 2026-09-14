@@ -13,16 +13,23 @@ kom fra er belagt.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import math
+from dataclasses import dataclass, replace
 from typing import Any
 
 # Antal målinger før en lært celle står helt på egne ben. Under det blandes
-# den med TA-kurven i forhold til hvor godt den er belagt.
+# den med faldet - setpunkt-tabellen - eller TA-kurven, i forhold til hvor
+# godt den er belagt.
 FULL_TRUST_COUNT = 5.0
 
 # Ekstrapolation ud over tabellens kant får højst denne vægt, uanset hvor
 # mange målinger nabocellen har. Vi tror ikke på tal vi aldrig har målt.
 EXTRAPOLATION_COUNT_CAP = 2.0
+
+# Henfaldslængden, i grader, for evidensen uden for en rækkes kant. Uden en
+# glidning tog skridtet fra en rækkes sidste celle til en hundrededel uden
+# for den alle målingerne på én gang.
+EXTRAPOLATION_FADE_K = 0.5
 
 # Inden for så mange grader fremløb regnes en naborrække som evidens om
 # det samme driftspunkt - svagere, jo længere væk den ligger.
@@ -64,7 +71,7 @@ class Lookup:
     """Resultatet af et COP-opslag, med hele begrundelsen."""
 
     cop: float
-    source: str  # "exact" | "interp" | "blend" | "curve"
+    source: str  # "exact" | "interp" | "blend" | "curve" | "fallback"
     detail: str
     learned_cop: float | None = None
     learned_count: float = 0.0
@@ -157,17 +164,28 @@ def _blend_count(c1: float, w1: float, c2: float, w2: float) -> float:
     variansregningen ikke ser. Vi påstår aldrig at vide mere om et punkt
     imellem end vi ved om det bedst målte endepunkt.
     """
-    if c1 <= 0 or c2 <= 0:
+    # En side uden vægt bidrager intet - heller ikke sin mangel på evidens.
+    terms = [(c, w) for c, w in ((c1, w1), (c2, w2)) if w > 0.0]
+    if not terms or any(c <= 0 for c, _ in terms):
         return 0.0
-    variance_based = 1.0 / (w1 * w1 / c1 + w2 * w2 / c2)
-    return min(max(c1, c2), variance_based)
+    variance_based = 1.0 / sum(w * w / c for c, w in terms)
+    return min(max(c for c, _ in terms), variance_based)
 
 
 class CopTable:
     """Indlært COP som funktion af fremløbs- og udetemperatur."""
 
-    def __init__(self, table: dict[int, dict[int, Cell]] | None = None) -> None:
+    def __init__(
+        self,
+        table: dict[int, dict[int, Cell]] | None = None,
+        fallback: CopTable | None = None,
+    ) -> None:
         self._table: dict[int, dict[int, Cell]] = table or {}
+        # Den tabel der svarer, hvor den her ikke ved nok. Uden et fald er
+        # det fabrikskurven. Faldet læres ikke og gemmes ikke med tabellen -
+        # det er setpunkt-tabellen, som skal ligge urørt, mens tabellen på
+        # varmepumpens eget fremløb, BT12, fyldes op.
+        self.fallback = fallback
 
     # ------------------------------------------------------------- indlæsning
 
@@ -262,19 +280,32 @@ class CopTable:
     # ----------------------------------------------------------------- opslag
 
     def lookup(self, flow: float, outdoor: float) -> Lookup:
-        curve = ta_curve_cop(flow, outdoor)
         learned = self._learned_at(flow, outdoor)
 
-        if learned is None:
-            return Lookup(cop=curve, source="curve", detail="TA-kurve")
-
-        cop, count, detail = learned
-        if count >= FULL_TRUST_COUNT:
+        if learned is not None and learned[1] >= FULL_TRUST_COUNT:
+            cop, count, detail = learned
             source = "exact" if detail == "eksakt" else "interp"
             return Lookup(cop, source, detail, learned_cop=cop, learned_count=count)
 
+        # Det der blandes med, når tabellen selv er tynd: faldet hvis der er
+        # et, ellers fabrikskurven. Setpunkt-tabellen er et langt bedre gæt
+        # end kurven - den er sytten tusind målinger på det her anlæg - men
+        # den skal vige i samme takt som den nye tabel får sine egne.
+        if self.fallback is not None:
+            base = self.fallback.lookup(flow, outdoor)
+            if learned is None:
+                return replace(
+                    base, source="fallback", detail=f"setpunkt-tabel: {base.detail}"
+                )
+            under = base.cop
+        else:
+            under = ta_curve_cop(flow, outdoor)
+            if learned is None:
+                return Lookup(cop=under, source="curve", detail="TA-kurve")
+
+        cop, count, detail = learned
         weight = count / FULL_TRUST_COUNT
-        blended = curve * (1 - weight) + cop * weight
+        blended = under * (1 - weight) + cop * weight
         return Lookup(
             cop=blended,
             source="blend",
@@ -298,16 +329,16 @@ class CopTable:
             if got is None:
                 return None
             cop, count, how = got
-            if count < FULL_TRUST_COUNT:
-                return self._reinforce(f_low, outdoor, cop, count, how)
-            return cop, count, how if how == "eksakt" else f"F{f_low}, {how}"
+            count = _row_evidence(count)
+            plain = how if how == "eksakt" else f"F{f_low}, {how}"
+            return self._reinforce(flow, outdoor, cop, count, how, plain, {f_low: 1.0})
 
         # Uden for tabellens fremløbsspænd: brug nærmeste række, men lad den
         # kun tælle som svag evidens.
         if f_high is None and f_low is not None:
-            return self._edge_row(f_low, outdoor)
+            return self._edge_row(f_low, flow, outdoor)
         if f_low is None and f_high is not None:
-            return self._edge_row(f_high, outdoor)
+            return self._edge_row(f_high, flow, outdoor)
         if f_low is None or f_high is None:
             return None
 
@@ -324,17 +355,32 @@ class CopTable:
         span = f_high - f_low
         w_high = (flow - f_low) / span
         w_low = 1.0 - w_high
-        cop = low[0] * w_low + high[0] * w_high
-        count = _blend_count(low[1], w_low, high[1], w_high)
-        how = f"interp F{f_low}-{f_high}"
-        if count < FULL_TRUST_COUNT:
-            # Samme grund som på den eksakte række: to tynde naboer skal
-            # ikke sende opslaget i fabrikskurven, når en række lidt
-            # længere væk har rigelig evidens ved samme udetemperatur.
-            return self._reinforce(
-                flow, outdoor, cop, count, how, skip=frozenset({f_low, f_high})
+        # En række vejer kun i det omfang den ved noget her. Ligger
+        # udetemperaturen langt uden for rækkens celler, er dens evidens
+        # glidet ud mod nul - og så satte den før hele blandingen til nul,
+        # også med en vægt på en titusindedel: fra F56,0 til F56,0001 gik
+        # COP'en fra 4,03 til faldets 3,42, fordi F57 kun var målt i frost.
+        #
+        # Så hver side vejer ``w * min(1, n)``, og den evidens der er tilbage,
+        # ganges med den masse der er tilbage. Rigtige celler - en hel måling
+        # eller mere - interpoleres præcis som altid. En side uden evidens
+        # overlader sin vægt til lånet, hvor den anden række står som nabo;
+        # det er det samme regnestykke som når fremløbet rammer rækken.
+        mass_low = w_low * min(1.0, low[1])
+        mass_high = w_high * min(1.0, high[1])
+        mass = mass_low + mass_high
+        if mass > 0.0:
+            cop = (low[0] * mass_low + high[0] * mass_high) / mass
+            count = mass * _blend_count(
+                low[1], mass_low / mass, high[1], mass_high / mass
             )
-        return cop, count, how
+        else:
+            cop = low[0] * w_low + high[0] * w_high
+            count = 0.0
+        how = f"interp F{f_low}-{f_high}"
+        return self._reinforce(
+            flow, outdoor, cop, count, how, how, {f_low: w_low, f_high: w_high}
+        )
 
     def _reinforce(
         self,
@@ -343,51 +389,81 @@ class CopTable:
         cop: float,
         count: float,
         how: str,
-        skip: frozenset[int] = frozenset(),
+        plain: str,
+        weights: dict[int, float],
     ) -> tuple[float, float, str]:
-        """Lån evidens fra naborækkerne når den eksakte række er tynd.
+        """Lån evidens fra naborækkerne når opslaget selv er tyndt.
 
         Rammer fremløbet en række der findes, brugtes før kun den — også når
         den kun havde et par målinger ved denne udetemperatur, og også når en
         række fire grader væk havde snesevis. Resten blev hentet i
-        fabrikskurven i stedet, som ikke ved noget om dette anlæg. Det gjaldt
-        870 opslagspunkter på den rigtige tabel.
+        fabrikskurven i stedet, som ikke ved noget om dette anlæg.
 
-        Naboerne vejer med deres egen evidens delt med afstanden: en række 2 K
-        væk med 37 målinger bidrager 12,3, mens den eksakte række med 2
-        målinger bidrager 2. Den eksakte række vejer altid tungest pr. måling,
-        for den er trods alt den rigtige række.
+        **Alt her glider.** Lånet blev før slået til og fra: af en tærskel
+        (kun under fem målinger), af et stop (når vægten nåede fem) og af en
+        hård grænse (fem grader væk). Hver af de tre er et spring, og kl. 22
+        den 13. september gik COP'en 3,47 -> 4,03 -> 3,37 på få minutter,
+        mens setpunktet krøb en tiendedel og udetemperaturen vippede mellem
+        13,0 og 13,1. Beslutningen vippede med. Nu:
+
+        * Lånet fylder kun op til de fem målinger opslaget mangler, og det
+          skaleres ned i stedet for at stoppe. Når opslaget selv når fem,
+          er der intet at låne, og vejen derhen er lineær. En fade på
+          ``1 - count/5`` alene var ikke nok: naborækkerne kan have halvtreds
+          målingers vægt, og så gik COP'en næsten lodret det sidste stykke.
+        * Alle rækker inden for rækkevidden tæller, og hver af dem fader ud
+          med afstanden, så en række ved kanten bidrager nul og ikke n/6.
+        * En række der selv indgår i interpolationen, låner kun den del af
+          sig selv den ikke allerede bidrager med, ``1 - w``. Uden det fik
+          F33 fuld vægt som nabo ved fremløb 34,0 og ingen ved 33,99.
+
+        Naboerne vejer med deres egen evidens delt med afstanden, så den
+        rigtige række vejer stadig tungest pr. måling.
         """
-        total = cop * count
-        weight = count
-        used: list[str] = []
+        missing = FULL_TRUST_COUNT - count
+        if missing <= 0.0:
+            return cop, count, plain
 
+        borrowed: list[tuple[int, float, float]] = []
         for other in sorted(self.flow_temps, key=lambda f: abs(f - flow)):
             distance = abs(other - flow)
-            if other in skip or other == flow or distance > REINFORCE_K:
+            reach = 1.0 - distance / REINFORCE_K
+            own = weights.get(other, 0.0)
+            if reach <= 0.0 or own >= 1.0:
                 continue
             got = self._interp_row(self._table[other], outdoor)
             if got is None:
                 continue
-            share = got[1] / (1 + distance)
-            if share <= 0:
-                continue
-            total += got[0] * share
-            weight += share
-            used.append(f"F{other}")
-            if weight >= FULL_TRUST_COUNT:
-                break
+            share = got[1] / (1 + distance) * reach * (1.0 - own)
+            if share > 0.0:
+                borrowed.append((other, got[0], share))
 
-        if not used:
-            return cop, count, how if how == "eksakt" else f"F{flow}, {how}"
-        return total / weight, weight, f"{how} styrket af {'+'.join(used)}"
+        offered = sum(share for _, _, share in borrowed)
+        if offered <= 0.0:
+            return cop, count, plain
+        scale = min(1.0, missing / offered)
+        total = cop * count + sum(c * share * scale for _, c, share in borrowed)
+        weight = count + offered * scale
+        used = "+".join(f"F{other}" for other, _, _ in borrowed)
+        return total / weight, weight, f"{how} styrket af {used}"
 
-    def _edge_row(self, flow: int, outdoor: float) -> tuple[float, float, str] | None:
-        got = self._interp_row(self._table[flow], outdoor)
+    def _edge_row(
+        self, row_flow: int, flow: float, outdoor: float
+    ) -> tuple[float, float, str] | None:
+        """Nærmeste række, når fremløbet ligger uden for tabellen.
+
+        Evidensen tages ikke fra rækken i ét hug ved kanten. Den glider ned
+        til loftet over ``EXTRAPOLATION_FADE_K`` grader, og naborækkerne
+        låner med som inde i tabellen - ellers sprang opslaget på skridtet
+        fra rækken selv til en hundrededel uden for den.
+        """
+        got = self._interp_row(self._table[row_flow], outdoor)
         if got is None:
             return None
         cop, count, _ = got
-        return cop, min(count, EXTRAPOLATION_COUNT_CAP), f"nærmeste F{flow}"
+        count = _row_evidence(_faded_cap(count, abs(flow - row_flow)))
+        how = f"nærmeste F{row_flow}"
+        return self._reinforce(flow, outdoor, cop, count, how, how, {row_flow: 1.0})
 
     @staticmethod
     def _interp_row(
@@ -402,12 +478,23 @@ class CopTable:
             cell = row[int(outdoor)]
             return cell.cop, cell.count, "eksakt"
 
+        # Uden for rækkens udetemperaturer er evidensen svag - men den
+        # glider ned til loftet i stedet for at falde i ét skridt. Fra 13,0
+        # til 12,99 gik F33 fra atten målinger til to.
         if outdoor <= keys[0]:
             cell = row[keys[0]]
-            return cell.cop, min(cell.count, EXTRAPOLATION_COUNT_CAP), f"U<={keys[0]}"
+            return (
+                cell.cop,
+                _faded_cap(cell.count, keys[0] - outdoor),
+                f"U<={keys[0]}",
+            )
         if outdoor >= keys[-1]:
             cell = row[keys[-1]]
-            return cell.cop, min(cell.count, EXTRAPOLATION_COUNT_CAP), f"U>={keys[-1]}"
+            return (
+                cell.cop,
+                _faded_cap(cell.count, outdoor - keys[-1]),
+                f"U>={keys[-1]}",
+            )
 
         for lo, hi in zip(keys, keys[1:]):
             if lo <= outdoor <= hi:
@@ -418,6 +505,37 @@ class CopTable:
                 count = _blend_count(row[lo].count, w_lo, row[hi].count, w_hi)
                 return cop, count, f"interp U{lo}-{hi}"
         return None
+
+
+def _row_evidence(count: float) -> float:
+    """Én rækkes evidens, regnet som interpolationen regner den.
+
+    Under én måling vejer rækken ``n * n`` - den samme masse gange den samme
+    evidens som i ``_learned_at``. Ellers gav rækken selv et andet tal end
+    interpolationen en titusindedel ved siden af.
+    """
+    return count * min(1.0, count)
+
+
+def _faded_cap(count: float, beyond: float) -> float:
+    """Evidens uden for en række: ned mod loftet, og derfra ud til ingenting.
+
+    Den henfalder eksponentielt mod ``EXTRAPOLATION_COUNT_CAP``. Loftet gjaldt
+    før uanset afstand, så en række 14 grader væk stadig vejede to målinger -
+    og med BT12-tabellen fik én måling ved F45 en femtedel af opslaget ved
+    setpunkt 31, hvor setpunkt-tabellen havde snesevis. Nu fader den ud over
+    samme rækkevidde som naborækkerne låner inden for.
+
+    Eksponentielt og ikke lineært: lineært fra 52 målinger til 2 over en grad
+    tog zonen under fem målinger - hvor lånet og fabrikskurven tager over -
+    ned på seks hundrededele af en grad, og COP'en faldt 0,33 der. Et henfald
+    gør den zone lige bred, uanset hvor mange målinger rækken havde.
+    """
+    beyond = max(0.0, beyond)
+    if count > EXTRAPOLATION_COUNT_CAP:
+        decay = math.exp(-beyond / EXTRAPOLATION_FADE_K)
+        count = EXTRAPOLATION_COUNT_CAP + (count - EXTRAPOLATION_COUNT_CAP) * decay
+    return count * max(0.0, 1.0 - beyond / REINFORCE_K)
 
 
 # ------------------------------------------------------------------- hjælpere

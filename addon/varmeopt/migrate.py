@@ -16,7 +16,11 @@ from .store import Store
 
 log = logging.getLogger(__name__)
 
+# Setpunkt-tabellen: sytten tusind målinger lært på UVR'ens setpunkt. Den
+# læres ikke mere og skrives aldrig igen - den er fald for BT12-tabellen.
 COP_TABLE_FILE = "cop_table.json"
+# Tabellen på varmepumpens eget fremløb, BT12. Den læres fra 14. september.
+COP_TABLE_BT12_FILE = "cop_table_bt12.json"
 CURVE_FILE = "heat_curve.json"
 SOLAR_FILE = "solar.json"
 STANDBY_FILE = "standby.json"
@@ -113,17 +117,38 @@ def load_heat_curve(
 
 
 def load_cop_table(store: Store) -> tuple[CopTable, str]:
-    """Indlæs COP-tabellen fra eget lager.
+    """Indlæs BT12-tabellen med setpunkt-tabellen som fald.
 
-    Returnerer tabellen og en linje der kan logges og vises i web-UI'et. Har
-    lageret ingen tabel, starter den tom og lærer forfra — der er ikke andre
-    steder at hente den.
+    Tabellen var lært på UVR'ens setpunkt. Under en glidende opladning styres
+    varmepumpens eget setpunkt, og pumpen kunne gå mod 60 °C, mens UVR'en
+    viste 33 - så blev lave COP'er lært ind under et fremløb pumpen aldrig
+    kørte ved. Nu læres der på BT12, i sin egen fil, og den gamle tabel
+    svarer hvor den nye endnu ikke ved nok. Den gamle fil skrives aldrig
+    igen, så de sytten tusind målinger kan ikke gå tabt af at aksen skiftede.
+
+    Returnerer den nye tabel - med den gamle i ``fallback`` - og en linje der
+    kan logges og vises i web-UI'et.
     """
-    if not store.exists(COP_TABLE_FILE):
-        return CopTable(), "ingen tabel i lageret - starter tom og lærer forfra"
+    old: CopTable | None = None
+    notes: list[str] = []
+    if store.exists(COP_TABLE_FILE):
+        old, dropped = CopTable.from_raw(store.load(COP_TABLE_FILE, {}))
+        note = (
+            f"setpunkt-tabel som fald: {old.cell_count} celler, "
+            f"{old.sample_count:.0f} målinger"
+        )
+        if dropped:
+            note += f" ({len(dropped)} kasseret)"
+        notes.append(note)
 
-    table, dropped = CopTable.from_raw(store.load(COP_TABLE_FILE, {}))
-    note = f"indlæst fra eget lager: {table.cell_count} celler, {table.sample_count:.0f} målinger"
-    if dropped:
-        note += f" ({len(dropped)} kasseret)"
-    return table, note
+    if store.exists(COP_TABLE_BT12_FILE):
+        table, dropped = CopTable.from_raw(store.load(COP_TABLE_BT12_FILE, {}))
+        table.fallback = old
+        note = f"BT12-tabel: {table.cell_count} celler, {table.sample_count:.0f} målinger"
+        if dropped:
+            note += f" ({len(dropped)} kasseret)"
+    else:
+        table = CopTable(fallback=old)
+        note = "BT12-tabel: tom - lærer forfra på varmepumpens eget fremløb"
+    notes.insert(0, note)
+    return table, " · ".join(notes)

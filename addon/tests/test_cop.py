@@ -295,8 +295,6 @@ class CurveTest(unittest.TestCase):
         self.assertAlmostEqual(ta_curve_cop(70, 0), ta_curve_cop(60, 0))
 
 
-if __name__ == "__main__":
-    unittest.main()
 
 
 class ReinforceTest(unittest.TestCase):
@@ -310,7 +308,8 @@ class ReinforceTest(unittest.TestCase):
 
         got = t.lookup(24, 18)
 
-        self.assertGreater(got.learned_count, 5.0)
+        # Lånet fylder op til fuld tillid og ikke længere.
+        self.assertGreaterEqual(got.learned_count, FULL_TRUST_COUNT)
         self.assertNotEqual(got.source, "blend")
         self.assertLess(abs(got.cop - 4.60), 0.05)
         self.assertIn("styrket af F26", got.detail)
@@ -347,6 +346,167 @@ class ReinforceTest(unittest.TestCase):
 
         got = t.lookup(40.8, 10)
 
-        self.assertGreater(got.learned_count, 5.0)
+        # Lånet fylder op til fuld tillid og ikke længere.
+        self.assertGreaterEqual(got.learned_count, FULL_TRUST_COUNT)
         self.assertGreater(got.cop, 5.0)
 
+
+# Cellerne omkring fremløb 33-35 som de lå på anlægget den 13. september
+# kl. 22:24. F34/U13 er et udsving - 2,86 på tre målinger - og netop derfor
+# er det her opslaget sprang.
+SEPTEMBER_13 = dict(
+    f32={13: (4.54, 27), 14: (4.97, 44), 15: (4.30, 20), 16: (4.45, 44)},
+    f33={13: (4.88, 18), 14: (4.51, 13), 15: (4.34, 10), 16: (4.53, 19)},
+    f34={11: (5.28, 1), 12: (4.25, 11), 13: (2.86, 3), 14: (4.24, 5), 15: (4.08, 9), 16: (4.29, 1)},
+    f35={10: (4.18, 5), 11: (4.36, 9), 12: (3.89, 2), 13: (5.34, 6), 14: (4.11, 6), 15: (3.43, 3), 16: (4.10, 2)},
+    f36={10: (4.71, 28), 12: (3.68, 4), 14: (3.91, 4), 15: (4.47, 3)},
+)
+
+
+class ContinuityTest(unittest.TestCase):
+    """En tiendedel grad må ikke flytte COP'en en sjettedel.
+
+    Kl. 22 den 13. september gik opslaget 3,47 -> 4,03 -> 3,37 på få minutter
+    mens setpunktet krøb fra 33,7 til 33,8 og udetemperaturen vippede mellem
+    13,0 og 13,1. Naborækkerne blev slået til og fra af en tærskel, et tidligt
+    stop og en hård afstandsgrænse, og beslutningen vippede med.
+    """
+
+    STEP = 0.01
+    # En ægte hældning i tabellen er et par kroner pr. kelvin i det værste
+    # hjørne. Det er 0,02 pr. skridt; 0,05 giver luft og fanger et spring.
+    MAX_JUMP = 0.05
+
+    def _sweep(self, t, flows, outdoors):
+        worst = (0.0, None)
+        for flow in flows:
+            prev = None
+            for out in outdoors:
+                cop = t.lookup(flow, out).cop
+                if prev is not None and abs(cop - prev[1]) > worst[0]:
+                    worst = (abs(cop - prev[1]), (flow, prev[0], out))
+                prev = (out, cop)
+        for out in outdoors:
+            prev = None
+            for flow in flows:
+                cop = t.lookup(flow, out).cop
+                if prev is not None and abs(cop - prev[1]) > worst[0]:
+                    worst = (abs(cop - prev[1]), (out, prev[0], flow))
+                prev = (flow, cop)
+        return worst
+
+    @staticmethod
+    def _range(lo, hi, step):
+        n = round((hi - lo) / step)
+        return [round(lo + i * step, 4) for i in range(n + 1)]
+
+    def test_the_evening_of_13_september_has_no_jumps(self):
+        t = table(**SEPTEMBER_13)
+
+        jump, where = self._sweep(
+            t, self._range(33.0, 35.0, self.STEP), self._range(12.5, 13.5, self.STEP)
+        )
+
+        self.assertLess(jump, self.MAX_JUMP, f"spring på {jump:.2f} ved {where}")
+
+    def test_a_neighbour_fades_out_at_the_edge_of_its_reach(self):
+        # En tyk række lige ved grænsen må ikke falde ud i ét hug.
+        t = table(f40={0: (3.0, 2)}, f45={0: (5.0, 500)})
+
+        jump, where = self._sweep(t, self._range(39.0, 41.0, self.STEP), [0])
+
+        self.assertLess(jump, self.MAX_JUMP, f"spring på {jump:.2f} ved {where}")
+
+    def test_the_edge_of_a_row_does_not_cut_its_evidence_in_one_step(self):
+        # Uden for en rækkes udetemperaturer gælder kun svag evidens. Men et
+        # skridt fra 13,0 til 12,99 må ikke tage de atten målinger på én gang.
+        t = table(f33={13: (4.88, 18), 14: (4.51, 13)})
+
+        jump, where = self._sweep(t, [33], self._range(11.0, 14.0, self.STEP))
+
+        self.assertLess(jump, self.MAX_JUMP, f"spring på {jump:.2f} ved {where}")
+
+
+    def test_a_row_with_no_evidence_here_does_not_zero_its_neighbour(self):
+        # F57 har kun celler ved -3, så ved U7,9 ligger den mere end fem
+        # grader fra sin kant og bærer ingen evidens. Før blev hele
+        # interpolationen F56-57 så sat til nul målinger allerede en
+        # titusindedel over F56 - og COP'en faldt fra 4,03 til faldets tal.
+        t = table(f56={8: (4.03, 740)}, f57={-3: (3.0, 50)})
+
+        # Tæt på rækken: ved 56,01 redder lånet fra F56 selv opslaget, men
+        # ikke ved 56,0001.
+        flows = [55.99, 56.0, 56.0001, 56.001, 56.01, 56.02]
+        jump, where = self._sweep(t, flows, [7.9])
+
+        self.assertLess(jump, self.MAX_JUMP, f"spring på {jump:.2f} ved {where}")
+
+    def test_rows_measured_in_different_weather_meet_smoothly(self):
+        t = table(f40={12: (5.0, 6)}, f41={5: (4.5, 6)})
+
+        flows = self._range(40.9, 41.1, self.STEP) + [40.999, 41.0, 41.0001]
+        for outdoor in (6.0, 9.0):
+            jump, where = self._sweep(t, sorted(flows), [outdoor])
+
+            self.assertLess(jump, self.MAX_JUMP, f"spring på {jump:.2f} ved {where}")
+
+    def test_a_row_itself_and_a_hair_beside_it_agree_on_thin_evidence(self):
+        # F43 er kun målt ved U9, så ved U12,8 har den under én målings
+        # evidens tilbage. Rækken selv og interpolationen en titusindedel
+        # ved siden af skal regne den ens - ellers springer COP'en på rækken.
+        t = CopTable(
+            {42: {17: Cell(cop=5.8, count=1.0)}, 43: {9: Cell(cop=3.0, count=50.0)}},
+            fallback=table(f42={13: (4.0, 500)}, f43={13: (4.0, 500)}),
+        )
+
+        beside, on = t.lookup(42.9999, 12.8).cop, t.lookup(43.0, 12.8).cop
+
+        self.assertLess(abs(beside - on), 0.005)
+
+
+class FallbackTest(unittest.TestCase):
+    """BT12-tabellen starter tom og står på setpunkt-tabellens skuldre.
+
+    Tabellen læres fra 14. september på varmepumpens eget fremløb, BT12. Den
+    gamle, lært på UVR'ens setpunkt, har sytten tusind målinger og er det
+    bedste bud indtil den nye har sine egne - men den er forurenet af glidende
+    opladning, hvor pumpen gik mod 60 mens UVR'en viste 33, og derfor skal den
+    vige celle for celle i takt med at der kommer rigtige målinger.
+    """
+
+    def test_an_empty_bt12_table_answers_with_the_setpoint_table(self):
+        old = table(f35={10: (4.4, 50)})
+        new = CopTable(fallback=old)
+
+        got = new.lookup(35, 10)
+
+        self.assertAlmostEqual(got.cop, 4.4)
+        self.assertEqual(got.source, "fallback")
+        self.assertIn("setpunkt-tabel", got.detail)
+
+    def test_the_new_table_takes_over_one_measurement_at_a_time(self):
+        old = table(f35={10: (4.4, 50)})
+        values = []
+        for n in range(7):
+            cells = {35: {10: Cell(cop=3.4, count=float(n))}} if n else None
+            values.append(CopTable(cells, fallback=old).lookup(35, 10).cop)
+
+        # Fra den gamle tabels tal mod den nyes, aldrig tilbage.
+        self.assertEqual(values, sorted(values, reverse=True))
+        # Med én måling vejer den nye en femtedel - mod den gamle tabel, ikke
+        # mod fabrikskurven.
+        self.assertAlmostEqual(values[1], 4.4 * 0.8 + 3.4 * 0.2)
+        self.assertAlmostEqual(values[5], 3.4)
+        self.assertAlmostEqual(values[6], 3.4)
+
+    def test_the_fallback_is_not_written_with_the_table(self):
+        old = table(f35={10: (4.4, 50)})
+        new = CopTable(fallback=old)
+        new.learn(40, 10, 4.0)
+
+        self.assertEqual(list(new.to_raw()), ["40"])
+        self.assertEqual(new.sample_count, 1.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

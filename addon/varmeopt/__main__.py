@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import math
 import signal
 import sys
 import time
@@ -33,7 +34,7 @@ from .houseload import MAX_AGE_MINUTES, HouseLoad
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .migrate import (
-    COP_TABLE_FILE,
+    COP_TABLE_BT12_FILE,
     CURVE_FILE,
     CAPACITY_FILE,
     CHARGE_FILE,
@@ -104,6 +105,10 @@ TANK_HOLD_SECONDS = 30 * 60
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
 SAVE_INTERVAL_SECONDS = 300
 
+# Intet BT12-vindue åbnet endnu. Ikke ``None``: det er stemplet fra en
+# attrap uden ``last_changed``, og det lukker vinduet hver cyklus.
+_NO_WINDOW = object()
+
 
 class Varmeopt:
     def __init__(self, options: Options, store: Store) -> None:
@@ -161,6 +166,13 @@ class Varmeopt:
         self._hp_cop: float | None = None
         self._last_save = 0.0
         self._last_learned_stamp: str | None = None
+        # Varmepumpens eget fremløb, BT12, samlet over den måling der er i
+        # gang. COP-føleren giver én værdi for et helt vindue, og den hører
+        # til det fremløb pumpen leverede i vinduet - ikke til et øjebliksbillede.
+        self._bt12_sum = 0.0
+        self._bt12_count = 0
+        self._bt12_stamp: object = _NO_WINDOW
+        self._bt12_note = "—"
 
     # ------------------------------------------------------------------ cyklus
 
@@ -264,12 +276,23 @@ class Varmeopt:
             if not curve_note.startswith("ignoreret"):
                 self._dirty = True
 
+        # Kun mens pumpen kører: står den stille, er BT12 bare vandet i røret,
+        # og de minutter må ikke trække den næste målings fremløb ned.
+        if hp_flow is not None and _running(measured_cop):
+            self._bt12_sum += hp_flow
+            self._bt12_count += 1
+
+        # Læringen står på BT12 og udetemperaturen, ikke på setpunktet. Den
+        # skal ikke tie fordi UVR'ens setpunkt ikke svarer - og vinduet må
+        # ikke vokse videre og slå to målinger sammen imens.
         learn_note = "—"
+        if outdoor_temp is not None and measured_cop is not None:
+            learn_note = self._learn_window(outdoor_temp, measured_cop, measured_stamp)
+
         if flow_temp is not None and outdoor_temp is not None:
-            if measured_cop is not None:
-                learn_note = self._learn(
-                    flow_temp, outdoor_temp, measured_cop, measured_stamp
-                )
+            # Opslaget står på det *forventede* fremløb - setpunktet - og ikke
+            # på BT12. Det skal virke når pumpen står stille, og det må ikke
+            # flytte sig mens en glidende opladning kravler op.
             lookup = self.table.lookup(flow_temp, outdoor_temp)
         else:
             lookup = None
@@ -571,6 +594,11 @@ class Varmeopt:
                 "målt_cop": self.status.get("measured_cop"),
                 "celler": self.table.cell_count,
                 "målinger": round(self.table.sample_count),
+                "målinger_setpunkt": (
+                    round(self.table.fallback.sample_count)
+                    if self.table.fallback is not None
+                    else None
+                ),
             },
         )
 
@@ -683,6 +711,48 @@ class Varmeopt:
             attributes[f"tank_{key}_lagdeling"] = _round(tank.spread, 1)
 
         await ha.set_state(SENSOR_TANK, round(buffer.stored_kwh, 2), attributes)
+
+    def _learn_window(
+        self, outdoor_temp: float, measured_cop: float, stamp: str | None
+    ) -> str:
+        """Luk BT12-vinduet når der kommer en ny måling, og lær på det.
+
+        Tabellen var lært på UVR'ens setpunkt. Under en glidende opladning
+        styres varmepumpens eget setpunkt, og pumpen gik mod 60 °C, mens
+        UVR'en viste 33 - kl. 08:56-09:10 den 14. september blev der lært ind
+        under F34, mens fremløbet steg fra 35,6 til 41,7. Nu er aksen BT12,
+        midlet over vinduet siden forrige måling.
+
+        Mangler BT12, læres der ikke. Setpunktet er ikke en reserve - det er
+        netop den forurening der skal ud af tabellen.
+        """
+        if self._bt12_stamp is _NO_WINDOW:
+            # Første cyklus efter en start. Målingen der står på føleren, er
+            # fra før genstarten og blev lært dengang - lærte vi den nu, kom den
+            # med to gange, og på det BT12 der står *nu*, ikke det den blev
+            # målt ved. Vinduet åbnes bare; dets første punkt er allerede talt.
+            self._bt12_stamp = stamp
+            self._bt12_note = "venter på første måling efter start"
+            return self._bt12_note
+        if stamp is not None and stamp == self._bt12_stamp:
+            return self._bt12_note
+
+        flow = self._bt12_sum / self._bt12_count if self._bt12_count else None
+        self._bt12_sum, self._bt12_count = 0.0, 0
+        self._bt12_stamp = stamp
+
+        if flow is None:
+            note = (
+                "ignoreret: mangler BT12"
+                if _running(measured_cop)
+                else "ignoreret: pumpen står stille"
+            )
+        else:
+            note = self._learn(flow, outdoor_temp, measured_cop, stamp)
+            if not note.startswith("ignoreret"):
+                note = f"BT12 {flow:.1f}: {note}"
+        self._bt12_note = note
+        return note
 
     def _learn(
         self,
@@ -1543,7 +1613,9 @@ class Varmeopt:
 
     def save(self) -> None:
         try:
-            self.store.save(COP_TABLE_FILE, self.table.to_raw())
+            # Kun BT12-tabellen. Setpunkt-tabellen ligger i ``fallback`` og
+            # skrives aldrig igen.
+            self.store.save(COP_TABLE_BT12_FILE, self.table.to_raw())
             self.store.save(CURVE_FILE, self.curve.to_raw())
             self.store.save(
                 SOLAR_FILE,
@@ -1613,7 +1685,11 @@ async def run() -> None:
         app.status["note"] = note
         log.info(note)
 
-        app.curve, curve_note = load_heat_curve(store, app.table, options.dhw_setpoint)
+        # Kurven udledes af setpunkt-tabellen - den er indekseret på netop
+        # setpunktet - og kun hvis der ikke allerede ligger en kurvefil.
+        app.curve, curve_note = load_heat_curve(
+            store, app.table.fallback or app.table, options.dhw_setpoint
+        )
         log.info(curve_note)
 
         # Azimut har to gængse konventioner, og de er 180 grader fra
@@ -1663,7 +1739,7 @@ async def run() -> None:
             revision = await selfupdate.download(session)
             if revision is None:
                 return "Kunne ikke hente koden. Se loggen for hvorfor."
-            # Svar først, genstart bagefter - ellers dor forbindelsen
+            # Svar først, genstart bagefter - ellers dør forbindelsen
             # midt i, og brugeren ser en fejl i stedet for en kvittering.
             selfupdate.mark_boot()
             loop.call_later(1.0, selfupdate.restart)
@@ -1762,6 +1838,11 @@ def _mode(
     if curve.is_dhw(setpoint, outdoor):
         return "varmt vand / spa (gættet)", True
     return "varme", False
+
+
+def _running(cop: float | None) -> bool:
+    """Kører pumpen, efter COP-følerens seneste måling?"""
+    return cop is not None and math.isfinite(cop) and cop > 0
 
 
 def _round(value: float | None, digits: int) -> float | None:

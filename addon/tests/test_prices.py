@@ -174,17 +174,17 @@ class MarginalTest(unittest.TestCase):
         self.assertIn("genanskaffelse", price.detail)
 
     def test_energy_is_valued_against_a_coming_export(self):
-        # Eksport om en time til 1,60 er mere værd end de 1,20 det koster
-        # at skaffe energien igen.
+        # Eksport om en time til 1,60 er billigere at give afkald på end de
+        # 1,80 det koster at skaffe energien igen.
         #
         # Det er en værdisættelse, ikke en beslutning: om energien faktisk
         # bliver gemt, afgøres af hvad den ellers skulle bruges til.
-        p = plan(row(), row(), row(state="exp", export_rate=160), cheapest=1.00)
+        p = plan(row(), row(), row(state="exp", export_rate=160), cheapest=1.50)
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 1.60 * 0.90, places=9)
-        self.assertIn("værdisat mod eksport", price.detail)
+        self.assertIn("sælges ellers", price.detail)
 
     def test_a_cheap_charge_soon_frees_the_battery(self):
         p = plan(row(), row(state="chrg", import_rate=40))
@@ -453,10 +453,9 @@ class MarginalTest(unittest.TestCase):
 
     def test_a_charge_before_the_bottom_leaves_the_replacement_alone(self):
         # Fyldes batteriet inden det løber tørt, er energien ikke
-        # disponeret - så skal den ikke købes tilbage i bunden, og prisen
-        # er den almindelige genanskaffelse. Ladningen ligger 150 min ude og
-        # er dermed heller ikke "snart", så det er den billigste import i
-        # horisonten der svarer: 0,85.
+        # disponeret - så skal den ikke købes tilbage i bunden. Ladningen
+        # ligger 150 min ude, og det er *den* den kilowatt-time lægges
+        # tilbage ved: 0,85.
         p = plan(
             row(soc=40), row(soc=38), row(soc=36), row(soc=34), row(soc=32),
             row(state="chrg", soc=60, import_rate=85),
@@ -466,7 +465,7 @@ class MarginalTest(unittest.TestCase):
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertAlmostEqual(price.kr_per_kwh, 0.85 / BATTERY_ROUND_TRIP, places=9)
-        self.assertIn("genanskaffelse", price.detail)
+        self.assertIn("lades om 150 min", price.detail)
 
     def test_a_maxed_inverter_is_not_a_reason_to_price_at_the_grid(self):
         # Her stod det modsatte: importerede måleren mens batteriet
@@ -483,36 +482,63 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(price.kr_per_kwh, p.marginal(0).kr_per_kwh)
         self.assertIn("genanskaffelse", price.detail)
 
-    def test_export_valuation_never_makes_energy_cheaper(self):
-        # I båndet snit < eksport < snit/0,90 vendte grenen sit formål på
-        # hovedet: snit 1,00 og eksport 1,05 gav 0,945.
+    def test_a_poorly_paid_sale_ahead_makes_the_energy_cheap(self):
+        # Her stod "eksportværdisættelsen gør aldrig energien billigere" -
+        # dengang var salget en *værdi* der kun måtte løfte prisen. Nu er
+        # det en udvej: sælger Predbat til 1,05 om en halv time, er det det
+        # salg der ryger, og kilowatt-timen koster ikke mere end det, selv
+        # om nettet koster 2,00.
         p = plan(row(), row(state="exp", export_rate=105))
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertGreaterEqual(price.kr_per_kwh, 1.0)
+        self.assertAlmostEqual(price.kr_per_kwh, 1.05 * 0.90, places=9)
+        self.assertEqual(price.reason, "eksport")
 
     def test_a_battery_on_its_reserve_is_priced_at_its_replacement(self):
         # Under bunden bliver energien aldrig solgt - Predbat eksporterer
         # ikke derunder - så en kommende eksport er ikke et alternativ til
         # at bruge den. Bunden er planens egen reserve.
+        # Genkøbet er dyrt med vilje - loftet på 2,00 - så salget til 1,44
+        # ville vinde, hvis det talte.
         p = plan(
             row(soc=15),
             row(soc=15),
             row(state="exp", export_rate=160, soc=15),
-            cheapest=1.00,
         )
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
         self.assertEqual(p.reserve, 15)
-        self.assertAlmostEqual(price.kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=9)
-        self.assertIn("genanskaffelse", price.detail)
+        self.assertAlmostEqual(price.kr_per_kwh, 2.00, places=9)
+        self.assertIn("loftet", price.detail)
 
-    def test_the_best_paid_export_decides_not_the_first(self):
-        # Den marginale kilowatt-time bliver solgt i den bedste halvtime der
-        # er tilbage. En tidlig, dårligt betalt eksport siger ingenting om
-        # hvad energien er værd.
+    def test_an_unknown_soc_does_not_sell_across_the_bottom(self):
+        # Uden ladetilstand kan planen ikke sige hvornår *den her* energi
+        # løber tør, og så stoppede intet ved bunden: et salg efter at
+        # planen havde været nede på reserven og solen havde fyldt batteriet
+        # igen, prissatte strømmen til 0,90. Det salg er solens energi.
+        p = plan(
+            {"state": "", "import_rate": 250, "export_rate": 80},
+            row(import_rate=250, soc=30),
+            row(import_rate=250, soc=20),
+            row(import_rate=250, soc=10),
+            row(import_rate=250, soc=10),
+            row(import_rate=250, soc=50),
+            row(import_rate=250, soc=90),
+            row(state="exp", import_rate=250, export_rate=100, soc=80),
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertNotEqual(price.reason, "eksport")
+        self.assertGreater(price.kr_per_kwh, 2.0)
+
+    def test_the_worst_paid_export_decides_not_the_best(self):
+        # Her stod det modsatte: "den marginale kilowatt-time bliver solgt i
+        # den bedste halvtime". Men de bedste halvtimer sælger allerede for
+        # fuld effekt. Er der en kilowatt-time mindre, er det det dårligst
+        # betalte salg Predbat dropper.
         p = plan(
             row(soc=60),
             row(state="exp", export_rate=90, soc=55),
@@ -522,8 +548,8 @@ class MarginalTest(unittest.TestCase):
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertAlmostEqual(price.kr_per_kwh, 2.10 * 0.90, places=9)
-        self.assertIn("om 60 min", price.detail)
+        self.assertAlmostEqual(price.kr_per_kwh, 0.90 * 0.90, places=9)
+        self.assertIn("om 30 min", price.detail)
 
     def test_an_export_far_out_still_counts(self):
         # Der stod før en grænse på tre timer. Planen kender salget tolv
@@ -533,7 +559,7 @@ class MarginalTest(unittest.TestCase):
             row(soc=60),
             *[row(soc=55) for _ in range(15)],
             row(state="exp", export_rate=210, soc=45),
-            cheapest=1.00,
+            cheapest=2.00,
         )
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
@@ -543,23 +569,137 @@ class MarginalTest(unittest.TestCase):
 
     def test_a_charge_before_the_sale_takes_the_export_out_of_play(self):
         # Fyldes batteriet før salget, er det ikke *den her* kilowatt-time
-        # der bliver solgt bagefter.
+        # der bliver solgt bagefter. Ladningen er dyr med vilje: ellers vinder
+        # den over salget alligevel, og testen kan ikke se om grænsen findes.
         p = plan(
             row(soc=60),
-            row(state="chrg", import_rate=100, soc=90),
+            row(state="chrg", import_rate=250, soc=90),
             row(state="exp", export_rate=210, soc=45),
         )
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
+        self.assertAlmostEqual(price.kr_per_kwh, 2.50 / BATTERY_ROUND_TRIP, places=9)
         self.assertIn("lades om", price.detail)
+
+    def test_the_morning_of_14_september(self):
+        # Kl. 06:29 lå der to salg i samme stræk, uden at batteriet blev
+        # fyldt eller tømt imellem: 07:00 til 2,26 og 19:00 til 5,26.
+        # Strømmen blev prissat til 5,26 × 0,90 = 4,73, og huset kørte på
+        # pillefyr. Men bruger man en kilowatt-time kl. 06, sælger Predbat
+        # ikke mindre kl. 19 - aftenens halvtimer kører allerede for fuld
+        # effekt. Det er salget kl. 07, den mindst værd, der ryger.
+        p = plan(
+            row(import_rate=277, export_rate=183, soc=72),
+            row(import_rate=277, export_rate=183, soc=72),
+            row(state="exp", import_rate=331, export_rate=226, soc=71),
+            row(state="exp", import_rate=331, export_rate=226, soc=57),
+            *[row(import_rate=250, export_rate=150, soc=45) for _ in range(22)],
+            row(state="exp", import_rate=740, export_rate=526, soc=78),
+            row(state="exp", import_rate=740, export_rate=526, soc=65),
+            *[row(import_rate=250, export_rate=150, soc=24) for _ in range(20)],
+            row(import_rate=256, export_rate=166, soc=10),
+            row(import_rate=256, export_rate=166, soc=10),
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=700))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 2.26 * 0.90, places=9)
+        self.assertEqual(price.reason, "eksport")
+        self.assertIn("om 60 min", price.detail)
+
+    def test_the_evening_of_13_september(self):
+        # Kl. 22:24: salg kl. 07 til 2,26 og kl. 08:30 til 2,18, og først
+        # derefter en ladning fra nettet kl. 14 til 1,88. En kilowatt-time
+        # brugt nu koster det billigste af at sælge mindre og at lade mere,
+        # og det er salget til 2,18.
+        p = plan(
+            row(import_rate=250, export_rate=161, soc=82),
+            *[row(import_rate=250, export_rate=150, soc=80) for _ in range(17)],
+            row(state="exp", import_rate=331, export_rate=226, soc=75),
+            row(state="exp", import_rate=331, export_rate=226, soc=64),
+            row(import_rate=321, export_rate=218, soc=50),
+            row(state="exp", import_rate=321, export_rate=218, soc=51),
+            *[row(import_rate=250, export_rate=150, soc=45) for _ in range(10)],
+            row(state="chrg", import_rate=188, export_rate=112, soc=73),
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=800))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 2.18 * 0.90, places=9)
+        self.assertEqual(price.reason, "eksport")
+
+    def test_low_prices_after_the_sale_buy_it_back(self):
+        # Predbat eksporterer kun ned til det forventede aften- og natforbrug,
+        # så en kilowatt-time brugt før salget er et mindre salg - medmindre
+        # priserne bagefter er lave nok til at den købes tilbage. Her er
+        # importen bagefter 1,00, og så koster den 1,20 og ikke 1,89.
+        p = plan(row(), row(state="exp", export_rate=210), cheapest=1.00)
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.00 / BATTERY_ROUND_TRIP, places=9)
+        self.assertIn("genanskaffelse", price.detail)
+
+    def test_high_prices_after_the_sale_make_it_a_smaller_sale(self):
+        # Samme salg, men importen bagefter er 3,00. Så købes den ikke
+        # tilbage, og kilowatt-timen er et mindre salg til 2,10.
+        p = plan(
+            row(import_rate=300),
+            row(state="exp", import_rate=300, export_rate=210),
+            row(import_rate=300),
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 2.10 * 0.90, places=9)
+        self.assertIn("sælges ellers", price.detail)
+
+    def test_the_afternoon_of_14_september(self):
+        # Planen kl. 11:50: batteriet ladet fra nettet til 96 % kl. 14-15:30,
+        # så salg kl. 18-20:30 til 2,94, 5,26 og 3,90 ned til 17 %, og en
+        # ladning kl. 03 i nat til 1,84. Den gamle kode sagde 4,73 - det
+        # bedste salg - og den første rettelse 1,88: billigste import i
+        # morgen middag / 0,832. Men den kilowatt-time der mangler efter
+        # salget, lægges tilbage ved *nattens* ladning, til 1,84 / 0,832 =
+        # 2,21. Det er billigere end at sælge mindre til 2,94, så det er
+        # prisen.
+        p = plan(
+            *[row(import_rate=206, export_rate=126, soc=96) for _ in range(4)],
+            row(state="exp", import_rate=450, export_rate=294, soc=98),
+            row(state="exp", import_rate=450, export_rate=294, soc=85),
+            row(state="exp", import_rate=740, export_rate=526, soc=71),
+            row(state="exp", import_rate=740, export_rate=526, soc=58),
+            row(state="exp", import_rate=570, export_rate=390, soc=44),
+            row(state="exp", import_rate=570, export_rate=390, soc=31),
+            *[row(import_rate=280, export_rate=176, soc=15) for _ in range(6)],
+            *[row(state="frzchrg", import_rate=200, export_rate=130, soc=11) for _ in range(6)],
+            row(state="chrg", import_rate=184, export_rate=114, soc=11),
+            *[row(import_rate=157, export_rate=87, soc=12) for _ in range(4)],
+        )
+
+        price = p.marginal(0, grid=Grid(battery_power=0, pv_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 1.84 / BATTERY_ROUND_TRIP, places=9)
+        self.assertIn("lades om 660 min", price.detail)
+
+    def test_a_frozen_export_sells_the_sun_not_the_battery(self):
+        # «frzexp» holder ladetilstanden og sælger solen. En kilowatt-time
+        # taget af batteriet nu gør ikke det salg mindre. Genkøbet er dyrt
+        # med vilje - loftet på 2,00 - så salget ville vinde, hvis det talte.
+        p = plan(row(), row(state="frzexp", export_rate=160))
+
+        price = p.marginal(0, grid=Grid(battery_power=3000))
+
+        self.assertAlmostEqual(price.kr_per_kwh, 2.00, places=9)
+        self.assertIn("loftet", price.detail)
 
     def test_a_full_battery_can_afford_to_be_valued_against_export(self):
         p = plan(
             row(soc=75),
             row(),
             row(state="exp", export_rate=160),
-            cheapest=1.00,
+            cheapest=1.50,
         )
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
@@ -572,19 +712,22 @@ class MarginalTest(unittest.TestCase):
             {"state": "", "import_rate": 200, "export_rate": 80},
             row(),
             row(state="exp", export_rate=160),
-            cheapest=1.00,
+            cheapest=1.50,
         )
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertIn("værdisat mod eksport", price.detail)
+        self.assertIn("sælges ellers", price.detail)
 
-    def test_an_export_that_pays_less_than_the_battery_is_not_worth_saving_for(self):
+    def test_a_poor_sale_stops_at_the_export_floor(self):
+        # Et salg Predbat har lagt til 0,60, er stadig den billigste udvej,
+        # men det gør ikke energien billigere end eksportgulvet.
         p = plan(row(), row(state="exp", export_rate=60), cheapest=1.00)
 
         price = p.marginal(0, grid=Grid(battery_power=3000))
 
-        self.assertIn("genanskaffelse", price.detail)
+        self.assertAlmostEqual(price.kr_per_kwh, EXPORT_FLOOR, places=9)
+        self.assertIn("sælges ellers", price.detail)
 
     def test_physical_export_does_not_beat_the_plan(self):
         # Her stod "physical_export beats the plan": sagde måleren at der
