@@ -36,10 +36,8 @@ CHARGE_SOON_MINUTES = 120
 
 # Rabat på den fremtidige eksportpris. Den er fra Node-RED, hvor den var en
 # forsigtighed: et salg er et gæt om fremtiden og skulle ikke løfte energiens
-# værdi helt op til gættet. Siden 14. september er salget en *udvej* - det
-# billigste af at sælge mindre og at købe tilbage bagefter - og så trækker
-# rabatten den anden vej: den gør salget lidt mere tilbøjeligt til at vinde og
-# prisen lidt lavere. Det er et åbent spørgsmål om den skal blive.
+# værdi helt op til gættet. Den er stadig den eneste dæmpning på et salg der
+# ligger mange timer ude, og den skelner ikke mellem en halv time og elleve.
 EXPORT_DISCOUNT = 0.90
 
 # Hvor tomt batteriet er, når det er tomt. Det her er anlæggets eget tal og
@@ -740,85 +738,86 @@ class Plan:
             price = replace(price, detail=f"{price.detail} (solen dækker huset)")
         return price
 
-    def _marginal_export(
+    def _next_sale(
         self,
         after: int,
         next_charge: Slot | None,
         runs_dry: Slot | None = None,
     ) -> Slot | None:
-        """Det dårligst betalte salg der er tilbage, før batteriet fyldes
+        """Den dyreste halvtime i den næste salgsblok, før batteriet fyldes
         eller tømmes.
 
-        Ikke det bedste. Bruger vi en kilowatt-time nu, er der én mindre at
-        sælge, og Predbat dropper så det salg der er mindst værd - de bedste
-        halvtimer kører allerede for fuld effekt og bliver ikke mindre af at
-        batteriet har en kilowatt-time færre. Her stod før det bedst betalte,
-        og om morgenen den 14. september blev strømmen kl. 06 prissat til
-        4,73 - salget kl. 19 til 5,26 - mens der lå et salg kl. 07 til 2,26
-        i samme stræk. Huset kørte på pillefyr hele morgenen på det.
+        Predbat eksporterer kun ned til det forventede aften- og natforbrug,
+        så forbruget indtil et salg er mindre indtjening. Er der en dyr
+        eksport, er det den der skal fokuseres på. Men det er den *næste*
+        blok - de sammenhængende salgshalvtimer der kommer først - for et
+        billigt salg kl. 07 bliver mindre af forbruget kl. 06, før aftenens
+        dyre salg gør.
+
+        Her stod undervejs både det bedst betalte salg i hele strækket og det
+        dårligst betalte. Det bedste prissatte strømmen kl. 06 den 14.
+        september til 4,73 - salget kl. 19 - mens der lå et salg kl. 07 til
+        2,26 imellem. Det dårligste prissatte eftermiddagen til 2,65 op til
+        en salgsblok hvor halvtimen kl. 19 betalte 5,26.
 
         Frosne eksporter tæller ikke. «frzexp» holder ladetilstanden og
         sælger solen; det salg bliver ikke mindre af at batteriet har en
         kilowatt-time færre.
 
         Grænsen er opladningen, ikke uret: fyldes batteriet inden, er det ikke
-        *den her* kilowatt-time der bliver solgt bagefter. Der stod før en
-        grænse på tre timer, som kom fra den første portering og aldrig havde
-        nogen begrundelse — planen kender salget tolv timer i forvejen.
-
-        Bunden er den anden grænse. Natten til den 9. september lå batteriet
-        på 32 % kl. 03:20, og planen kørte det ned til reserven på 9 % kl.
-        07:20 — men et salg kl. 21:20 til 1,31, atten timer og en bund senere,
-        prissatte hele døgnet til 1,18. Det salg er solens energi, ikke
-        nattens: den kilowatt-time der lå der kl. 03:20, var brugt længe før.
+        *den her* kilowatt-time der bliver solgt bagefter. Bunden er den anden
+        grænse. Natten til den 9. september lå batteriet på 32 % kl. 03:20, og
+        planen kørte det ned til reserven på 9 % kl. 07:20 — men et salg kl.
+        21:20 til 1,31, atten timer og en bund senere, prissatte hele døgnet
+        til 1,18. Det salg er solens energi, ikke nattens.
         """
-        # Prisen følger med som sit eget tal. Den står i ``worst.export_price``
-        # og kan ikke være ``None`` når ``worst`` er sat - men den invariant
-        # ligger i et ``continue`` en omgang tidligere, og hverken en
-        # typetjekker eller en læser kan se den derfra.
-        worst: Slot | None = None
-        worst_price: float | None = None
+        best: Slot | None = None
+        best_price: float | None = None
         for candidate in self.slots[after:]:
             if next_charge is not None and candidate.index >= next_charge.index:
                 break
             if runs_dry is not None and candidate.index > runs_dry.index:
                 break
             price = candidate.export_price
-            if not candidate.exporting or candidate.frozen or price is None:
+            selling = candidate.exporting and not candidate.frozen and price is not None
+            if not selling:
+                # Blokken er slut ved første halvtime der ikke sælger.
+                if best is not None:
+                    break
                 continue
-            if worst_price is None or price < worst_price:
-                worst, worst_price = candidate, price
-        return worst
+            assert price is not None
+            if best_price is None or price > best_price:
+                best, best_price = candidate, price
+        return best
 
     def _battery_price(self, slot: Slot) -> Price | None:
         """Hvad det koster at bruge en kilowatt-time af batteriet.
 
-        Predbat eksporterer kun ned til det forventede aften- og natforbrug.
-        En kilowatt-time brugt før et planlagt salg er derfor et mindre salg -
-        medmindre priserne *bagefter* er lave nok til at den købes tilbage.
-        Prisen er det billigste af de to: det dårligst betalte salg der
-        bliver mindre, og genkøbet ved næste ladning eller bund.
+        Predbat eksporterer kun ned til det forventede aften- og natforbrug,
+        så forbruget indtil et planlagt salg er mindre indtjening. Ligger der
+        et salg forude, er prisen det salg - den næste salgsblok, på dens
+        dyreste halvtime. Genkøbet ved næste ladning eller bund regnes først
+        når der ikke er flere salg forude.
 
-        Her stod før et *max*: var salget mere værd end genanskaffelsen,
-        vandt salget. Aftenen den 13. september blev strømmen prissat til
-        2,26, genkøbet kl. 14, mens der lå et salg til 2,18 kl. 08:30 inden.
-        Og om eftermiddagen den 14. til 4,73 - det bedste salg kl. 19 - hvor
-        det mindre salg kostede 2,65 og genkøbet ved nattens ladning 2,21.
+        Her stod en dag det billigste af salget og genkøbet, og den 14.
+        september kl. 12 blev strømmen prissat til 1,84 - genkøbet i morgen
+        tidlig - op til en salgsblok kl. 18:30 med halvtimer til 5,26. Huset
+        kørte varmepumpe på strøm der ellers var solgt. Genkøbet kan først
+        komme på tale når salget er overstået.
         """
         after = slot.index + 1
         next_charge = self._next_where(lambda s: s.refills, after)
         runs_dry = self._runs_dry(slot)
 
-        back = self._replacement_price(slot, next_charge, runs_dry)
         sold = self._sold_price(slot, next_charge, runs_dry)
-        if sold is not None and sold.kr_per_kwh < back.kr_per_kwh:
+        if sold is not None:
             return sold
-        return back
+        return self._replacement_price(slot, next_charge, runs_dry)
 
     def _sold_price(
         self, slot: Slot, next_charge: Slot | None, runs_dry: Slot | None
     ) -> Price | None:
-        """Den ene udvej: sælg en kilowatt-time mindre.
+        """Prisen når der ligger et salg forude: det salg der bliver mindre.
 
         Det er en *værdisættelse*, ikke en beslutning. Om energien faktisk
         bliver gemt, afgøres af hvad den så bruges til: kan varmepumpen lave
@@ -832,7 +831,7 @@ class Plan:
         bottom = runs_dry
         if slot.soc_percent is None:
             bottom = self._next_where(self._depleted, slot.index + 1)
-        export = self._marginal_export(slot.index + 1, next_charge, bottom)
+        export = self._next_sale(slot.index + 1, next_charge, bottom)
         if export is None or export.export_price is None:
             return None
         soc = slot.soc_percent if slot.soc_percent is not None else ASSUMED_SOC
@@ -885,8 +884,9 @@ class Plan:
         # aflade ned til 5 %. Den siger kun hvornår planen ikke har mere at
         # give af, og det er dér den manglende kilowatt-time bliver købt.
         #
-        # Tømmes batteriet undervejs af en planlagt eksport, kan salget være
-        # den billigere udvej, og det afgøres i ``_battery_price``. Uden det blev
+        # Tømmes batteriet undervejs af en planlagt eksport, er det salget der
+        # gælder - det afgøres i ``_battery_price``, før genkøbet overhovedet
+        # kommer på tale. Uden det blev
         # aftenen den 3. september prissat til 1,85 - importprisen i bunden
         # fredag kl. 08:02 - selv om der inden lå en eksport kl. 07:32 til
         # 1,15. Batteriet løb ikke tørt; det blev solgt.

@@ -748,16 +748,11 @@ class TenthOfSeptemberTest(unittest.TestCase):
     beslutningen vendte.
 
     Planen herunder er syntetisk - to rækker - og ikke dagens rigtige plan.
-    Importen står på 4,50 og ikke 1,80 som da testen blev skrevet: siden 14.
-    september koster en kilowatt-time det billigste af at sælge mindre og at
-    købe den tilbage bagefter, og i en plan hvor importen efter salget er
-    1,80, vinder genkøbet. Det testen skal vise, er at *måleren* ikke flytter
-    prisen, og det gør den ikke ved nogen af de to tal.
     """
 
     ROWS = [
-        {"state": "demand", "import_rate": 450, "export_rate": 60, "soc_percent": 50},
-        {"state": "exp", "import_rate": 450, "export_rate": 380, "soc_percent": 50},
+        {"state": "demand", "import_rate": 180, "export_rate": 60, "soc_percent": 50},
+        {"state": "exp", "import_rate": 180, "export_rate": 380, "soc_percent": 50},
     ]
 
     def setUp(self):
