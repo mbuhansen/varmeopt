@@ -83,15 +83,25 @@ SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
 # læse rigtigt, bliver oftere læst rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
 
-def _clock_ahead(minutes: float) -> str:
+def _clock_ahead(minutes: float, now: float | None = None) -> str:
     """Så mange minutter frem som et klokkeslæt på væggen.
 
     Planlæggeren får den ind udefra i stedet for at kende uret selv, så
     den bliver ved med at være til at prøve af uden en systemklokke.
+
+    Minutterne tæller fra starten af den halvtime vi står i, som planens
+    rækker. Her stod ``datetime.now()`` som nulpunkt, og så blev rækken kl.
+    19:00 skrevet «kl. 19:24» når uret stod på 13:24.
     """
+    base = slot_start(time.time() if now is None else now)
     return "kl. " + (
-        datetime.now().astimezone() + timedelta(minutes=minutes)
+        datetime.fromtimestamp(base).astimezone() + timedelta(minutes=minutes)
     ).strftime("%H:%M")
+
+
+def _elapsed_minutes(now: float) -> float:
+    """Hvor langt inde i den halvtime vi står i, i minutter."""
+    return (now - slot_start(now)) / 60
 
 
 # Så længe en tavs tank må svare med sin sidste gode aflæsning. Lageret
@@ -120,6 +130,9 @@ class Varmeopt:
         self.solar_day = DayTracker()
         self.forecast = Forecast()
         self._forecast_at: float | None = None
+        # Vægurstiden udsigten blev hentet. Dens punkter tæller minutter fra
+        # dengang, og den hentes kun hver halve time.
+        self._forecast_wall: float | None = None
         self.guard = Guard(
             enabled=options.control_enabled,
             min_dwell_minutes=options.control_min_dwell_minutes,
@@ -335,7 +348,7 @@ class Varmeopt:
             # læses fra vinduets begyndelse.
             dhw_kwh_over=lambda start_min, hours: (
                 self.house_load.vessels.kwh_between(
-                    time.time() + start_min * 60, hours
+                    slot_start(time.time()) + start_min * 60, hours
                 )
             ),
             # Og hvad det koster at få den varme til at *stå* der. Lagerets
@@ -355,6 +368,9 @@ class Varmeopt:
             deadline_minutes=minutes_until_hour(
                 self.options.store_full_by_hour, time.time()
             ),
+            # Planens minutter tæller fra halvtimens start. Det her er hvor
+            # langt inde i den vi er - se ``Planner.decide``.
+            elapsed_minutes=_elapsed_minutes(time.time()),
         )
         # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
         # det. Siger den nej, står beslutningen der stadig, men flaget
@@ -918,11 +934,13 @@ class Varmeopt:
             log.warning("kunne ikke hente vejrudsigten: %s", exc)
             return
 
+        fetched = datetime.now(timezone.utc)
         forecast = Forecast.from_response(
-            response, self.options.entity_weather, datetime.now(timezone.utc)
+            response, self.options.entity_weather, fetched
         )
         if len(forecast):
             self.forecast = forecast
+            self._forecast_wall = fetched.timestamp()
             log.info(
                 "vejrudsigt: %d timer frem, %.1f til %.1f grader",
                 forecast.horizon_minutes / 60,
@@ -952,10 +970,23 @@ class Varmeopt:
         så blev COP'en slået op tre grader for lavt og pladsen målt til en
         temperatur lavere end den blokken når.
         """
-        temp = self.forecast.temperature_at(minutes)
+        temp = self._temperature_at(minutes)
         if temp is None:
             return None
         return self.table.lookup(self.options.hp_charge_temp, temp).cop
+
+    def _temperature_at(self, minutes: float) -> float | None:
+        """Udsigtens temperatur i en af planens rækker.
+
+        Planlæggerens minutter tæller fra halvtimens start; udsigtens fra da
+        den blev hentet. Uden omregningen kunne COP og husforbrug blive læst
+        af et punkt der lå op til en time forkert: op til en halvtime for hvor
+        langt vi er inde i halvtimen, og op til en halvtime for hvor gammel
+        udsigten er.
+        """
+        if self._forecast_wall is not None:
+            minutes = minutes + (slot_start(time.time()) - self._forecast_wall) / 60
+        return self.forecast.temperature_at(minutes)
 
     def _demand_at(self, minutes: int) -> float | None:
         """Hvad huset ventes at trække om så mange minutter.
@@ -969,7 +1000,7 @@ class Varmeopt:
         Den målte værdi står med vilje ikke her. Den hører til nuet, og
         det her er en udsigt - se ``Planner._displaced_kwh``.
         """
-        temp = self.forecast.temperature_at(minutes)
+        temp = self._temperature_at(minutes)
         if temp is None:
             return None
         return self.house_load.curve.predict(temp)
@@ -981,7 +1012,7 @@ class Varmeopt:
         giver virkningsgraden. Uden udsigt er der intet svar, og planlæggeren
         falder tilbage på den COP vi har nu.
         """
-        temp = self.forecast.temperature_at(minutes)
+        temp = self._temperature_at(minutes)
         if temp is None:
             return None
         setpoint = self.curve.predict(temp)

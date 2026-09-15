@@ -943,6 +943,49 @@ class FallbackStretchTest(unittest.TestCase):
         self.assertEqual(d.dear_ends_in, d.dear_starts_in + d.dear_span_minutes)
 
 
+class HalfHourFrameTest(unittest.TestCase):
+    """Minutterne tæller fra halvtimens start, som planens rækker.
+
+    Kl. 16:17 er række 2 halvtimen kl. 17:00 - 43 minutter frem, ikke 60.
+    """
+
+    def test_the_amount_fits_the_time_that_is_actually_left(self):
+        # Billigt i de to halvtimer vi har, dyrt fra kl. 17. Klokken er 16:17,
+        # så der er 43 minutter at lade i, ikke 60.
+        d = planner().decide(
+            plan(40, 40, 300, 300, 300, 300),
+            cop_now=4.0, cop_later=4.0, headroom_kwh=40.0, stored_kwh=0.0,
+            demand_kw=10.0, elapsed_minutes=17,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertEqual(d.window_starts_in, 60)
+        self.assertAlmostEqual(d.charge_kwh, 16.0 * 43 / 60, places=6)
+
+    def test_a_deadline_on_the_hour_lands_on_a_row(self):
+        # Fristen kl. 17 er 43 minutter fra 16:17 - og i planens ramme række 2.
+        # Før blev den lagt op mod rækkerne som 43, og så kunne ingen blok
+        # passe ind i den: to halvtimer mod én.
+        d = planner().decide(
+            plan(40, 40, 40, 40, 300, 300, 300, 300),
+            cop_now=4.0, cop_later=4.0, headroom_kwh=40.0, stored_kwh=0.0,
+            demand_kw=10.0, deadline_minutes=43, elapsed_minutes=17,
+        )
+
+        self.assertTrue(d.deadline_on_the_clock)
+        self.assertEqual(d.window_starts_in, 60)
+        self.assertAlmostEqual(d.charge_kwh, 16.0 * 43 / 60, places=6)
+
+    def test_without_elapsed_time_nothing_changes(self):
+        d = planner().decide(
+            plan(40, 40, 300, 300, 300, 300),
+            cop_now=4.0, cop_later=4.0, headroom_kwh=40.0, stored_kwh=0.0,
+            demand_kw=10.0,
+        )
+
+        self.assertAlmostEqual(d.charge_kwh, 16.0, places=6)
+
+
 class ThinMarginTest(unittest.TestCase):
     """Fristen siger hvornår, ikke at der skal lades."""
 

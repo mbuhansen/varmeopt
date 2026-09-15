@@ -361,12 +361,26 @@ class Planner:
         demand_kw: float | None = None,
         demand_kw_at: Any = None,
         deadline_minutes: float | None = None,
+        elapsed_minutes: float = 0.0,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
-        ``deadline_minutes`` er fristen på uret: minutter til lageret skal
-        være fyldt. Den er ikke et prisargument og skal ikke udledes af et -
-        se ``_frist``.
+        **Minutterne tæller fra starten af den halvtime vi står i**, ikke fra
+        nu. Det er planens egen ramme: række 0 er den halvtime vi står i, og
+        «60 minutter frem» er rækken der begynder en hel time efter den - kl.
+        17:00, når uret står på 16:17. ``elapsed_minutes`` er hvor langt inde i
+        halvtimen vi er, og det er kun hvor der skal bruges en *varighed* at
+        den trækkes fra: kl. 16:17 er der 43 minutter til 17:00, ikke 60.
+
+        Her regnede planlæggeren som om række 0 begyndte nu. Så blev mængden
+        op til 29 minutters ladning for stor, blokken løb ind i den dyre
+        halvtime, og fristen på uret - den eneste af tallene der faktisk talte
+        fra nu - kunne ikke lægges op mod rækkerne: kl. 16:14 svarede den
+        «ingen plads til 46 min» til en frist der lå præcis på en halvtime.
+
+        ``deadline_minutes`` er fristen på uret: minutter *fra nu* til
+        lageret skal være fyldt. Den regnes om til planens ramme her. Den er
+        ikke et prisargument og skal ikke udledes af et - se ``_frist``.
 
         ``demand_kw`` er husets forbrug *nu*, målt. ``demand_kw_at`` er et
         opslag: hvad huset ventes at trække om så mange minutter. Se
@@ -451,8 +465,18 @@ class Planner:
                 reason=f"{why}; intet at hente ved at gemme",
             )
 
+        elapsed = (
+            min(max(0.0, elapsed_minutes), SLOT_MINUTES)
+            if _finite(elapsed_minutes)
+            else 0.0
+        )
+        deadline = (
+            deadline_minutes + elapsed
+            if deadline_minutes is not None and _finite(deadline_minutes)
+            else None
+        )
         priced = starts or best_when
-        frist = self._frist(priced, deadline_minutes)
+        frist = self._frist(priced, deadline)
         on_the_clock = frist != priced
 
         # Spørgsmål 2a: er forskellen stor nok til at handle på?
@@ -513,7 +537,9 @@ class Planner:
                 above = max(0.0, peak_headroom_kwh - headroom_kwh)
             room = max(0.0, room - max(0.0, solar_expected_kwh - above))
         window = min(frist, self.horizon_minutes)
-        room = min(room, self.charge_kw * window / 60)
+        # Tiden til fristen, ikke fristens minuttal: den halvtime vi står i,
+        # er allerede delvis gået.
+        room = min(room, self.charge_kw * max(0.0, window - elapsed) / 60)
 
         if room < self.min_charge_kwh:
             return _with(

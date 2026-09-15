@@ -307,6 +307,18 @@ class ChargePlan:
         # ``slot_start(now)`` ligge op til 29 minutter tilbage i tiden, og så
         # ville blokken blive tilsvarende for kort.
         ends = max(starts, now) + minutes * 60
+        # Men den må ikke løbe ind i det dyre. Fristen tæller fra halvtimens
+        # start, ligesom planens rækker: kl. 16:17 er en frist på 60 minutter
+        # kl. 17:00, og en blok på 60 minutter der starter nu, sluttede før
+        # kl. 17:17 - sytten minutter inde i den halvtime den skulle undgå.
+        deadline = slot_start(now) + window * 60
+        if ends > deadline:
+            ends = deadline
+            if ends <= max(starts, now):
+                self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
+                return False
+            minutes = (ends - max(starts, now)) / 60
+            want = min(float(want), rate_kw * minutes / 60)
         self.block = Block(dear_from, dear_until, starts, ends, float(want))
         if self.block.running(now):
             self._running = True
@@ -338,6 +350,8 @@ class ChargePlan:
         sker kun når de rammer pillefyrets loft. Gælder det, findes der et
         stræk, og så er vi ikke her.
         """
+        # Minutterne tæller fra halvtimens start, som planens rækker.
+        base = slot_start(now)
         starts = getattr(decision, "dear_starts_in", None)
         span = getattr(decision, "dear_span_minutes", None)
         if starts is not None and span is not None and _finite(starts) and _finite(span):
@@ -348,10 +362,10 @@ class ChargePlan:
                 if _finite(ends) and first < ends:
                     last = float(ends)
                 return (
-                    slot_start(now + first * 60),
-                    slot_start(now + last * 60),
+                    slot_start(base + first * 60),
+                    slot_start(base + last * 60),
                 )
-        top = slot_start(now + (decision.window_minutes or window) * 60)
+        top = slot_start(base + (decision.window_minutes or window) * 60)
         return top, top + SLOT_SECONDS
 
     def _finish(self, now: float, why: str) -> bool:

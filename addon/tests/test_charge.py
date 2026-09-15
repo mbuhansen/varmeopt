@@ -122,6 +122,12 @@ class BlockTest(unittest.TestCase):
         #
         # Tiden går rigtigt: planen skydes frem som halvtimerne går, og
         # fristen tæller ned. Ellers ville blokken skubbe sig selv foran sig.
+        #
+        # Og i planens ramme: uret begynder på en halvtime, og fristen tæller
+        # fra starten af den halvtime vi står i. Her talte fristen fra nu,
+        # mens planen rullede på ``minute // 30`` og uret stod 3 min 20 s inde
+        # i halvtimen - de to blandede rammer som blokken ikke længere tåler.
+        start = slot_start(self.now)
         dear_at = 8 * 30  # de dyre halvtimer begynder her
         flags = []
         for minute in range(dear_at):
@@ -129,11 +135,11 @@ class BlockTest(unittest.TestCase):
             slot = minute // 30
             flags.append(
                 self.charge.update(
-                    self.now + minute * 60,
+                    start + minute * 60,
                     FakeDecision(
                         planned_kwh=want,
-                        window_starts_in=dear_at - minute,
-                        window_minutes=dear_at - minute,
+                        window_starts_in=dear_at - slot * 30,
+                        window_minutes=dear_at - slot * 30,
                     ),
                     plan(*RATES[slot:]),
                     16.0,
@@ -434,6 +440,43 @@ class FallbackLockTest(unittest.TestCase):
 
         self.assertNotIn("allerede ladet op", self.charge.note)
         self.assertIsNotNone(self.charge.slots())
+
+
+class HalfHourFrameTest(unittest.TestCase):
+    """Fristen tæller fra halvtimens start, og blokken må ikke løbe forbi den."""
+
+    def setUp(self):
+        # 16:17 - sytten minutter inde i halvtimen.
+        self.base = slot_start(1_757_000_000.0)
+        self.now = self.base + 17 * 60
+        self.plan = plan(40, 40, 300, 300)
+
+    def test_a_block_does_not_run_into_the_dear_half_hour(self):
+        # 16 kWh er en time ved 16 kW. Starter den kl. 16:17 og kører en hel
+        # time, slutter den 17:17 - sytten minutter inde i det dyre.
+        charge = ChargePlan()
+        running = charge.update(
+            self.now,
+            FakeDecision(planned_kwh=16.0, window_starts_in=60, window_minutes=60),
+            self.plan,
+            16.0,
+        )
+
+        self.assertTrue(running)
+        self.assertEqual(charge.slots(), (self.base, self.base + 60 * 60))
+        self.assertAlmostEqual(charge.block.kwh, 16.0 * 43 / 60, places=6)
+
+    def test_a_block_that_fits_is_left_alone(self):
+        charge = ChargePlan()
+        charge.update(
+            self.now,
+            FakeDecision(planned_kwh=8.0, window_starts_in=60, window_minutes=60),
+            self.plan,
+            16.0,
+        )
+
+        self.assertEqual(charge.slots(), (self.base, self.now + 30 * 60))
+        self.assertAlmostEqual(charge.block.kwh, 8.0, places=6)
 
 
 class StorageTest(unittest.TestCase):
