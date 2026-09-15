@@ -22,6 +22,7 @@ class FakeDecision:
     source: str = "varmepumpe"
     dear_starts_in: int | None = None
     dear_span_minutes: int | None = None
+    dear_ends_in: int | None = None
 
 
 def plan(*rates):
@@ -382,6 +383,57 @@ class OncePerStretchTest(unittest.TestCase):
 
         self.assertIsNotNone(self.charge.slots())
         self.assertNotIn("allerede ladet op", self.charge.note)
+
+
+class FallbackLockTest(unittest.TestCase):
+    """Den 15. september: et relativt stræk må ikke låse hele horisonten.
+
+    Kl. 11:56 blev en blok på 5,6 kWh lagt mod et stræk fra kl. 12:30 til
+    horisontens kant - «dyrere end nu» set fra ladevinduet, og natten på
+    batteri er også dyrere. Da den var kørt, stod der «allerede ladet op» til
+    næste formiddag, mens beslutningen bad om 8-23 kWh.
+    """
+
+    def setUp(self):
+        self.now = 1_757_000_000.0
+        self.plan = plan(*([35] * 6 + [155] * 42))
+        self.charge = ChargePlan()
+
+    def at(self, minute, ends_in):
+        return FakeDecision(
+            planned_kwh=5.6,
+            window_starts_in=30,
+            window_minutes=420 - minute,
+            dear_starts_in=30,
+            dear_span_minutes=1410,
+            dear_ends_in=ends_in,
+        )
+
+    def run_block(self):
+        # Toppen slutter 480 minutter frem.
+        for minute in (0, 15, 22, 30):
+            self.charge.update(
+                self.now + minute * 60, self.at(minute, 480 - minute), self.plan, 16.0
+            )
+        self.assertIsNone(self.charge.slots())
+
+    def test_the_same_peak_is_still_covered(self):
+        self.run_block()
+
+        self.assertFalse(
+            self.charge.update(self.now + 60 * 60, self.at(60, 420), self.plan, 16.0)
+        )
+        self.assertIn("allerede ladet op", self.charge.note)
+
+    def test_once_the_peak_is_over_a_new_block_may_be_laid(self):
+        # Ni timer senere er eksporten forbi. Det relative stræk rækker stadig
+        # langt ind i næste dag, men det var toppen der blev ladet op imod.
+        self.run_block()
+
+        self.charge.update(self.now + 9 * 3600, self.at(0, 480), self.plan, 16.0)
+
+        self.assertNotIn("allerede ladet op", self.charge.note)
+        self.assertIsNotNone(self.charge.slots())
 
 
 class StorageTest(unittest.TestCase):

@@ -326,6 +326,11 @@ class ChargePlan:
         vægurstid, gulvet til halvtimen, så det samme stræk ser ens ud
         hvert minut.
 
+        Enden er ``dear_ends_in`` når planlæggeren giver den, og ellers
+        strækkets egen. De to er ens for et ægte stræk. For et stræk fra
+        tilbagefaldet slutter ``dear_ends_in`` med toppen, fordi det relative
+        spænd kan række til horisontens kant - og så låste én blok hele døgnet.
+
         Har planlæggeren intet stræk at give - der er ingen timer hvor
         pumpen taber, og heller ingen der er dyrere end nu - falder vi tilbage
         på den dyreste halvtime, som før. Netop dér er det ufarligt: den
@@ -338,9 +343,13 @@ class ChargePlan:
         if starts is not None and span is not None and _finite(starts) and _finite(span):
             first, length = float(starts), float(span)
             if length > 0:
+                last = first + length
+                ends = getattr(decision, "dear_ends_in", None)
+                if _finite(ends) and first < ends:
+                    last = float(ends)
                 return (
                     slot_start(now + first * 60),
-                    slot_start(now + (first + length) * 60),
+                    slot_start(now + last * 60),
                 )
         top = slot_start(now + (decision.window_minutes or window) * 60)
         return top, top + SLOT_SECONDS

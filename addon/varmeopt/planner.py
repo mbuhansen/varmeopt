@@ -84,6 +84,11 @@ class Decision:
     # ``charge.py`` bruger de to tal til at kende strækket igen næste minut.
     dear_starts_in: int | None = None
     dear_span_minutes: int | None = None
+    # Hvornår strækket regnes for dækket, set fra spærren i ``charge.py``.
+    # For et ægte stræk er det dets ende. For et stræk fra tilbagefaldet er
+    # det enden på toppen: «dyrere end nu» kan række til horisontens kant, og
+    # den 15. september brændte en halv time på uret derfor hele døgnet.
+    dear_ends_in: int | None = None
     saving_kr: float | None = None
     window_minutes: int | None = None
     reason: str = ""
@@ -429,9 +434,11 @@ class Planner:
         # turen ud ad den her dør - men det er præcis dér ``charge.py``
         # skal kunne se hvilket stræk vi er inde i. Uden det ville spærren
         # miste hukommelsen på de eneste cyklusser den findes for.
-        starts, span = self._dear_stretch(plan, vp_now, cop_now, cop_later)
+        starts, span, ends = self._dear_stretch(
+            plan, vp_now, cop_now, cop_later, best_when
+        )
         stretch: dict[str, Any] = (
-            {"dear_starts_in": starts, "dear_span_minutes": span}
+            {"dear_starts_in": starts, "dear_span_minutes": span, "dear_ends_in": ends}
             if span > 0
             else {}
         )
@@ -962,6 +969,13 @@ class Planner:
         En enkelt billig halvtime midt i et vindue afslutter det heller ikke.
         Huset trækker jo videre af lageret i den, og et eksportvindue delt af
         en halv time blev ellers halveret.
+
+        «Dyrere» betyder dyrere med mindst hysteresen - samme snit som
+        ``_dear_period`` og kildevalget. Her stod ``heat > vp_now``, og den
+        15. september kl. 11:56 var det nok at COP'en nu sprang fra 4,95 til
+        5,48: Predbats ladevindue til 0,78 kostede 0,323 i varme mod 0,3215 nu,
+        og så var det «dyrt». Fristen faldt til en halv time, blokken til 5,6
+        kWh, og tre timers billig strøm lå ubrugt bagefter.
         """
         first = last = None
         gap = 0
@@ -972,7 +986,7 @@ class Planner:
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
-            if heat > vp_now:
+            if heat > vp_now + self.hysteresis:
                 if first is None:
                     first = minutes
                 last = minutes
@@ -1045,24 +1059,77 @@ class Planner:
         vp_now: float,
         cop_now: Any,
         cop_later: Any,
-    ) -> tuple[int, int]:
+        best_when: int | None = None,
+    ) -> tuple[int, int, int]:
         """Strækket der lades op imod. Absolut når der findes et.
 
-        Findes der timer hvor pumpen taber til pillefyret, er *de* timer
-        strækket. Findes der ingen, falder vi tilbage på den relative:
-        hvad der er dyrere end nu.
+        Returnerer (minutter til det begynder, længden, minutter til spærren
+        regner det for dækket).
 
-        Tilbagefaldet er ufarligt netop dér. Pilleloftets uafgjorte - som er
-        grunden til at den dyreste halvtime vandrer - opstår kun når en
-        halvtime rammer loftet, og på et døgn uden absolut stræk gør ingen
-        af dem det. Så er den dyreste halvtime entydig, og en spærre der
-        hænger på den, står stille. Hver tilstand har sin egen stabile
-        nøgle, af hver sin grund.
+        Findes der timer hvor pumpen taber til pillefyret, er *de* timer
+        strækket, og det slutter hvor de slutter. Findes der ingen, falder vi
+        tilbage på den relative: hvad der er dyrere end nu.
+
+        Her stod at tilbagefaldet var ufarligt, fordi den dyreste halvtime
+        er entydig når ingen rammer pilleloftet. Det holdt for toppen, men
+        spærren fik ikke toppen - den fik hele det relative spænd. Og det er en
+        egenskab ved **hvornår man spørger**: set fra et ladevindue er natten
+        på batteri også dyrere, så spændet rakte til horisontens kant. Den 15.
+        september kørte en blok på 5,6 kWh en halv time, og bagefter stod der
+        «allerede ladet op» til næste formiddag.
+
+        Så mængden regnes stadig over hele spændet, men spærren slutter med
+        toppen - de sammenhængende halvtimer fra den dyreste og frem, der
+        ligger inden for hysteresen af den. Er toppen forbi, er det den blokken
+        blev lagt imod, der er forbi.
         """
         starts, span = self._dear_period(plan, cop_now, cop_later)
         if span > 0:
-            return starts, span
-        return self._dear_window(plan, vp_now, cop_now, cop_later)
+            return starts, span, starts + span
+        starts, span = self._dear_window(plan, vp_now, cop_now, cop_later)
+        if span <= 0:
+            return 0, 0, 0
+        ends = starts + span
+        peak = self._peak_end(plan, best_when, cop_now, cop_later)
+        if peak is not None and starts < peak < ends:
+            ends = peak
+        return starts, span, ends
+
+    def _peak_end(
+        self,
+        plan: Any,
+        best_when: int | None,
+        cop_now: Any,
+        cop_later: Any,
+    ) -> int | None:
+        """Minutter til toppen slutter, regnet fra den dyreste halvtime.
+
+        Toppen fortsætter så længe varmen ligger inden for hysteresen af den
+        dyreste. Uden den tolerance ville to halvtimer i samme time, der kun
+        skilles af vejrudsigtens COP, kunne bytte plads og flytte enden.
+        """
+        if best_when is None:
+            return None
+        first = plan.marginal(best_when)
+        if first is None:
+            return None
+        top = self.cheapest_heat(
+            first.kr_per_kwh, self._cop_for(best_when, cop_now, cop_later)
+        )
+        last = best_when
+        for minutes in range(
+            best_when + SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES
+        ):
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            heat = self.cheapest_heat(
+                price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
+            )
+            if heat < top - self.hysteresis:
+                break
+            last = minutes
+        return last + SLOT_MINUTES
 
 
     # ------------------------------------------------------------ fremskrivning

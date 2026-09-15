@@ -866,6 +866,83 @@ class HorizonTest(unittest.TestCase):
         self.assertEqual(span, 4 * 30)
 
 
+class FallbackStretchTest(unittest.TestCase):
+    """Den 15. september: et døgn uden timer hvor pumpen taber til pillefyret.
+
+    Den dyreste varme lå på 0,61 under eksporten kl. 19-21 - under
+    pillefyrets 0,656 - så strækket kom fra tilbagefaldet, «dyrere end nu».
+    Kl. 11:56 sprang COP'en nu fra 4,95 til 5,48, og halvtimen kl. 12 til 0,78
+    blev 0,2 øre dyrere end nu. Fristen faldt til 30 minutter, blokken til
+    5,6 kWh, og da den var kørt, var strækket brændt til næste formiddag.
+    """
+
+    # Batteri nu, Predbats ladevindue kl. 12-15:30, strøm gemt til salget,
+    # eksporten til 2,09 og natten på batteri.
+    RATES = (94, 78, 78, 69, 69, 81, 81) + (188,) * 7 + (209,) * 2 + (143,) * 30
+
+    def decide(self):
+        return planner().decide(
+            plan(*self.RATES),
+            cop_now=5.48,
+            cop_later=4.5,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_there_is_no_absolute_stretch_that_day(self):
+        self.assertEqual(planner()._dear_period(plan(*self.RATES), 5.48, 4.5), (0, 0))
+
+    def test_a_fraction_of_an_ore_does_not_make_the_charging_window_dear(self):
+        # Varmen kl. 12 kostede 0,323 mod 0,3215 nu. Uden hysteresen var det
+        # dyrt, og fristen blev en halv time.
+        p = planner()
+        vp_now = p.heat_price(0.94, 5.48)
+
+        starts, _span = p._dear_window(plan(*self.RATES), vp_now, 5.48, 4.5)
+
+        self.assertEqual(starts, 7 * 30)
+        self.assertEqual(self.decide().window_starts_in, 7 * 30)
+
+    def test_a_sale_just_above_the_battery_price_is_not_a_stretch(self):
+        # Formiddagen den 15. september: to blokke på 3,6 og 3,9 kWh, begge
+        # «nu», begge mod et stræk på én halv time. Batteriets strøm prissættes
+        # til 0,90 x det næste salg, så salgshalvtimen er altid lidt dyrere -
+        # ved COP 4,4 kun 2-3 øre i varme. Uden hysteresen var det et stræk,
+        # fristen blev en halv time, og der blev ladet på batteristrøm lige før
+        # et salg til næsten samme pris.
+        tail = (78, 78, 69, 69, 81, 81) + (188,) * 7 + (209,) * 2 + (143,) * 25
+        for when, now, sale, cop in (("08:46", 133, 148, 4.47), ("10:02", 94, 100, 4.4)):
+            with self.subTest(when):
+                rates = (now, sale, now) + tail
+                d = planner().decide(
+                    plan(*rates), cop_now=cop, cop_later=cop, headroom_kwh=30.0,
+                    stored_kwh=0.0, demand_kw=2.0,
+                )
+
+                self.assertNotEqual(d.window_starts_in, 30)
+                self.assertEqual(d.dear_starts_in, 9 * 30)
+
+    def test_the_lock_ends_with_the_peak_not_with_the_horizon(self):
+        # Strækket «dyrere end nu» rækker til horisontens kant, for natten på
+        # batteri er også dyrere end ladevinduet. Det er rigtigt til mængden,
+        # men låsen må ikke hænge på det: en halv time på uret brændte hele
+        # døgnet. Den slutter med eksporten, halvtime 14-15.
+        d = self.decide()
+
+        self.assertEqual(d.dear_ends_in, 16 * 30)
+        self.assertGreater(d.dear_starts_in + d.dear_span_minutes, d.dear_ends_in)
+
+    def test_an_absolute_stretch_keeps_its_own_end(self):
+        rates = [30] * 2 + [300] * 4 + [30] * 6
+        d = planner().decide(
+            plan(*rates), cop_now=3.0, cop_later=3.0, headroom_kwh=30.0,
+            stored_kwh=0.0, demand_kw=2.0,
+        )
+
+        self.assertEqual(d.dear_ends_in, d.dear_starts_in + d.dear_span_minutes)
+
+
 class ThinMarginTest(unittest.TestCase):
     """Fristen siger hvornår, ikke at der skal lades."""
 
