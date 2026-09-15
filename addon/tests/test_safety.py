@@ -492,7 +492,9 @@ class ChargeFlagTest(unittest.TestCase):
         ]
         self.ha._states[entity] = State(
             entity, "ok", {"raw": {"rows": rows, "time": midnight}}, "plan",
-            last_updated=datetime.fromtimestamp(at - 7 * 60, timezone.utc).isoformat(),
+            # Alderen måles mod det rigtige ur, ikke det forfalskede - ellers
+            # blev planen for gammel når suiten kørte langt fra kl. 17.
+            last_updated=datetime.now(timezone.utc).isoformat(),
         )
         with mock.patch("time.time", return_value=at):
             asyncio.run(self.app.cycle(self.ha))
@@ -500,6 +502,22 @@ class ChargeFlagTest(unittest.TestCase):
         plan = self.app.status["plan"]
         self.assertEqual(len(plan), 3)
         self.assertAlmostEqual(plan.marginal(0).kr_per_kwh, 3.00, places=9)
+
+    def test_the_main_block_is_the_last_thing_in_the_module(self):
+        # ``asyncio.run`` vender ikke tilbage, så alt defineret efter
+        # ``if __name__ == "__main__"`` findes ikke på anlægget. Knappen gav
+        # «NameError: _toggle_charge» - og testene kunne ikke se det, fordi
+        # de importerer modulet i stedet for at køre det.
+        import ast
+        import inspect
+
+        import varmeopt.__main__ as main
+
+        tree = ast.parse(inspect.getsource(main))
+        last = tree.body[-1]
+
+        self.assertIsInstance(last, ast.If)
+        self.assertIn("__main__", ast.unparse(last.test))
 
     def test_the_button_charges_until_the_store_is_full(self):
         # Halvtomme tanke og en ladeeffekt på 16 kW: pladsen delt med

@@ -255,6 +255,26 @@ class ChargeButtonTest(unittest.TestCase):
 
         self.assertEqual(self.pressed, [False])
 
+    def test_a_failing_press_is_shown_on_the_page_not_as_a_500(self):
+        import asyncio
+
+        from varmeopt.web import WebUI
+
+        def boom(_start):
+            raise TypeError("noget gik galt")
+
+        ui = WebUI(
+            lambda: {"projection": [], "decision": None},
+            lambda: None,
+            charge_plan=lambda: self.charge,
+            on_charge=boom,
+        )
+        with self.assertLogs("varmeopt", level="ERROR"):
+            html = asyncio.run(ui.plan(self.Post("start"))).text
+
+        self.assertIn("knappen fejlede: TypeError: noget gik galt", html)
+        self.assertIn("test_web_why.py", html)
+
     def test_without_a_callback_there_is_no_button(self):
         import asyncio
 

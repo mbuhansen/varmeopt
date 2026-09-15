@@ -14,6 +14,7 @@ from __future__ import annotations
 import dataclasses
 import html
 import json
+import logging
 import math
 import time
 from datetime import datetime, timedelta
@@ -27,6 +28,9 @@ from .cop import CopTable
 from .curve import HeatCurve
 
 PORT = 8099
+
+# Samme logger som hovedløkken, så en fejl her også står i fejlsøgningsfilens log.
+log = logging.getLogger("varmeopt")
 
 _CSS = """
 :root {
@@ -387,8 +391,16 @@ class WebUI:
             and request.method == "POST"
             and self._on_charge is not None
         ):
-            form = await request.post()
-            note = self._on_charge(form.get("action") == "start")
+            try:
+                form = await request.post()
+                note = self._on_charge(form.get("action") == "start")
+            except Exception as exc:  # noqa: BLE001 - en knap må ikke give en 500
+                # Den 16. september gav knappen en 500 på anlægget, som ikke
+                # kunne genskabes lokalt. En fejl her skal stå på siden - med
+                # hvor den skete - og i loggen, ikke gemme sig bag «Server got
+                # itself in trouble».
+                log.exception("knappen på plan-siden fejlede")
+                note = f"knappen fejlede: {_where(exc)}"
 
         status = self._status()
         rows = status.get("projection") or []
@@ -1266,6 +1278,18 @@ def _clock(minutes: float, now: float | None = None) -> str:
     return (datetime.fromtimestamp(base).astimezone() + timedelta(minutes=minutes)).strftime(
         "%H:%M"
     )
+
+
+def _where(exc: BaseException) -> str:
+    """En undtagelse i én linje: hvad, og i hvilken fil og linje den skete."""
+    import traceback
+
+    frames = traceback.extract_tb(exc.__traceback__)
+    place = ""
+    if frames:
+        last = frames[-1]
+        place = f" ({last.filename.rsplit('/', 1)[-1]}:{last.lineno} i {last.name})"
+    return f"{type(exc).__name__}: {exc}{place}"
 
 
 def _when(minutes: float | None) -> str:
