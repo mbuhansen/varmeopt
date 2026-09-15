@@ -1921,15 +1921,6 @@ def _tank_summary(buffer: Buffer) -> str:
     return "  ".join(parts)
 
 
-if __name__ == "__main__":
-    if sys.platform == "win32":
-        # Add-on'en kører på Linux, men lokal afprøvning på Windows kræver
-        # SelectorEventLoop for at aiohttps DNS-resolver kan starte.
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    with contextlib.suppress(KeyboardInterrupt):
-        asyncio.run(run())
-
-
 def _toggle_charge(app: Any, start: bool) -> str:
     """Start eller stop en opladning med knappen på plan-siden.
 
@@ -1980,3 +1971,17 @@ def _toggle_standby(app: Any, arm: bool) -> str:
         app._dirty = True
         app.save()
     return note
+
+
+# Skal stå sidst i filen. ``asyncio.run`` vender ikke tilbage så længe
+# add-on'en kører, så intet der er defineret efter den her blok, findes på
+# anlægget. Den 15. september stod den over ``_toggle_charge`` og
+# ``_toggle_standby``: begge knapper gav «NameError» og en 500, mens testene -
+# der importerer modulet og aldrig kører blokken - var grønne.
+if __name__ == "__main__":
+    if sys.platform == "win32":
+        # Add-on'en kører på Linux, men lokal afprøvning på Windows kræver
+        # SelectorEventLoop for at aiohttps DNS-resolver kan starte.
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    with contextlib.suppress(KeyboardInterrupt):
+        asyncio.run(run())
