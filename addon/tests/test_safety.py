@@ -404,7 +404,11 @@ class ChargeFlagTest(unittest.TestCase):
 
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-lad-"))
-        self.app = Varmeopt(options(), Store(tmp))
+        # Uden frist på uret. Testene handler om flaget, ikke om fristen, og
+        # med fristen kl. 17 afhang de af hvornår suiten blev kørt: i det
+        # sidste kvarter før sytten er der ikke tid til et minimumstræk, og
+        # så var flaget med rette slukket.
+        self.app = Varmeopt(options(store_full_by_hour=-1), Store(tmp))
         self.app.table.learn(31, 17, 4.4)
         self.ha = FakeHa(
             {
