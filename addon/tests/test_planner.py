@@ -933,6 +933,27 @@ class FallbackStretchTest(unittest.TestCase):
         self.assertEqual(d.dear_ends_in, 16 * 30)
         self.assertGreater(d.dear_starts_in + d.dear_span_minutes, d.dear_ends_in)
 
+    def test_the_lock_ends_with_the_first_peak_not_the_highest(self):
+        # To toppe næsten lige høje: 1,80 om to timer, 1,79 om tretten, med
+        # en dal til 0,60 imellem. Vejrudsigtens COP falder 0,1 undervejs, og
+        # så er den fjerne top en halv øre dyrere i varme. Låsen fulgte den
+        # dyreste og rakte fjorten timer - hen over dalen, hvor der skulle
+        # lades op igen.
+        rates = (30,) * 4 + (180,) * 2 + (60,) * 20 + (179,) * 2 + (120,) * 40
+
+        d = planner().decide(
+            plan(*rates),
+            cop_now=4.5,
+            cop_later=lambda minutes: 4.5 if minutes < 600 else 4.4,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+        self.assertEqual(d.window_minutes, 26 * 30, "den fjerne top er den dyreste")
+        self.assertEqual(d.dear_starts_in, 4 * 30)
+        self.assertEqual(d.dear_ends_in, 6 * 30)
+
     def test_an_absolute_stretch_keeps_its_own_end(self):
         rates = [30] * 2 + [300] * 4 + [30] * 6
         d = planner().decide(

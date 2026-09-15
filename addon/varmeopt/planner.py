@@ -449,7 +449,7 @@ class Planner:
         # skal kunne se hvilket stræk vi er inde i. Uden det ville spærren
         # miste hukommelsen på de eneste cyklusser den findes for.
         starts, span, ends = self._dear_stretch(
-            plan, vp_now, cop_now, cop_later, best_when
+            plan, vp_now, cop_now, cop_later
         )
         stretch: dict[str, Any] = (
             {"dear_starts_in": starts, "dear_span_minutes": span, "dear_ends_in": ends}
@@ -1085,7 +1085,6 @@ class Planner:
         vp_now: float,
         cop_now: Any,
         cop_later: Any,
-        best_when: int | None = None,
     ) -> tuple[int, int, int]:
         """Strækket der lades op imod. Absolut når der findes et.
 
@@ -1105,9 +1104,8 @@ class Planner:
         «allerede ladet op» til næste formiddag.
 
         Så mængden regnes stadig over hele spændet, men spærren slutter med
-        toppen - de sammenhængende halvtimer fra den dyreste og frem, der
-        ligger inden for hysteresen af den. Er toppen forbi, er det den blokken
-        blev lagt imod, der er forbi.
+        den første top i strækket - se ``_peak_end``. Er toppen forbi, er det
+        den blokken blev lagt imod, der er forbi.
         """
         starts, span = self._dear_period(plan, cop_now, cop_later)
         if span > 0:
@@ -1116,7 +1114,7 @@ class Planner:
         if span <= 0:
             return 0, 0, 0
         ends = starts + span
-        peak = self._peak_end(plan, best_when, cop_now, cop_later)
+        peak = self._peak_end(plan, starts, cop_now, cop_later)
         if peak is not None and starts < peak < ends:
             ends = peak
         return starts, span, ends
@@ -1124,38 +1122,41 @@ class Planner:
     def _peak_end(
         self,
         plan: Any,
-        best_when: int | None,
+        starts: int,
         cop_now: Any,
         cop_later: Any,
     ) -> int | None:
-        """Minutter til toppen slutter, regnet fra den dyreste halvtime.
+        """Minutter til den første top i strækket er forbi.
 
-        Toppen fortsætter så længe varmen ligger inden for hysteresen af den
-        dyreste. Uden den tolerance ville to halvtimer i samme time, der kun
-        skilles af vejrudsigtens COP, kunne bytte plads og flytte enden.
+        Fra strækkets start og frem: toppen fortsætter så længe varmen ligger
+        inden for hysteresen af det højeste den har nået, og slutter ved det
+        første fald ud over den. Uden tolerancen ville to halvtimer i samme
+        time, der kun skilles af vejrudsigtens COP, kunne bytte plads og flytte
+        enden.
+
+        Her stod den *dyreste* halvtime i hele horisonten som udgangspunkt.
+        Ligger der to næsten lige høje toppe - en i aften og en i morgen - kan
+        en COP-forskel på 0,1 i udsigten gøre den fjerne dyrest, og så rakte
+        låsen hen over dalen imellem, hvor der skulle lades op igen.
+
+        Ligger resten af horisonten på et plateau inden for hysteresen, rækker
+        toppen til kanten. Det er ufarligt: inden for plateauet er der intet
+        at hente ved at lade op igen, og en dal bagved afslutter det.
         """
-        if best_when is None:
-            return None
-        first = plan.marginal(best_when)
-        if first is None:
-            return None
-        top = self.cheapest_heat(
-            first.kr_per_kwh, self._cop_for(best_when, cop_now, cop_later)
-        )
-        last = best_when
-        for minutes in range(
-            best_when + SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES
-        ):
+        top: float | None = None
+        last: int | None = None
+        for minutes in range(starts, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
-            if heat < top - self.hysteresis:
+            if top is not None and heat < top - self.hysteresis:
                 break
+            top = heat if top is None else max(top, heat)
             last = minutes
-        return last + SLOT_MINUTES
+        return None if last is None else last + SLOT_MINUTES
 
 
     # ------------------------------------------------------------ fremskrivning
