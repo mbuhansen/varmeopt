@@ -933,6 +933,26 @@ class FallbackStretchTest(unittest.TestCase):
         self.assertEqual(d.dear_ends_in, 16 * 30)
         self.assertGreater(d.dear_starts_in + d.dear_span_minutes, d.dear_ends_in)
 
+    def test_the_stretch_is_measured_against_what_charging_costs(self):
+        # Marginen regnes mod opladningens pris (COP 4 ved ladetemperaturen),
+        # strækket blev regnet mod rumvarmens pris nu (COP 3). Varmen kl. 2-5
+        # koster 0,52 - 12 øre over opladningens 0,40, men under rumvarmens
+        # 0,48 + hysteresen. Så var der ingen stræk, intet fortrængt, og svaret
+        # blev «intet at lade op til» med 12 øre at hente.
+        d = planner().decide(
+            plan(*((100,) * 4 + (148,) * 6 + (100,) * 38)),
+            cop_now=3.0,
+            cop_later=4.0,
+            charge_cop_at=4.0,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertEqual(d.dear_starts_in, 4 * 30)
+        self.assertEqual(d.dear_span_minutes, 6 * 30)
+
     def test_the_lock_ends_with_the_first_peak_not_the_highest(self):
         # To toppe næsten lige høje: 1,80 om to timer, 1,79 om tretten, med
         # en dal til 0,60 imellem. Vejrudsigtens COP falder 0,1 undervejs, og

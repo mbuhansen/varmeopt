@@ -448,8 +448,12 @@ class Planner:
         # turen ud ad den her dør - men det er præcis dér ``charge.py``
         # skal kunne se hvilket stræk vi er inde i. Uden det ville spærren
         # miste hukommelsen på de eneste cyklusser den findes for.
+        # Strækket måles mod opladningens pris, ligesom marginen ovenfor. Her
+        # stod ``vp_now`` - rumvarmens pris nu - og når den lå over
+        # opladningens, kunne en top med 12 øre at hente ligge under snittet:
+        # intet stræk, intet fortrængt, «intet at lade op til».
         starts, span, ends = self._dear_stretch(
-            plan, vp_now, cop_now, cop_later
+            plan, vp_charge, cop_now, cop_later
         )
         stretch: dict[str, Any] = (
             {"dear_starts_in": starts, "dear_span_minutes": span, "dear_ends_in": ends}
