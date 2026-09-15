@@ -477,6 +477,30 @@ class ChargeFlagTest(unittest.TestCase):
         self.assertGreater(attrs["lad_kwh"], 0)
         self.assertIsNotNone(attrs["vindue_min"])
 
+    def test_a_plan_written_before_the_half_hour_is_read_from_now(self):
+        # Predbat skrev planen 16:55 med række 0 i halvtimen 16:30. Kl. 17:02
+        # er den række forbi, og prisen nu er rækken kl. 17:00.
+        from unittest import mock
+
+        at = datetime(2026, 9, 15, 17, 2).timestamp()
+        midnight = datetime(2026, 9, 15).astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
+        entity = self.app.options.entity_predbat_plan
+        rows = [
+            {"state": "holdchrg", "import_rate": r, "export_rate": 40,
+             "soc_percent": 60, "slot_minute": 990 + 30 * i}
+            for i, r in enumerate((40, 300, 300, 300))
+        ]
+        self.ha._states[entity] = State(
+            entity, "ok", {"raw": {"rows": rows, "time": midnight}}, "plan",
+            last_updated=datetime.fromtimestamp(at - 7 * 60, timezone.utc).isoformat(),
+        )
+        with mock.patch("time.time", return_value=at):
+            asyncio.run(self.app.cycle(self.ha))
+
+        plan = self.app.status["plan"]
+        self.assertEqual(len(plan), 3)
+        self.assertAlmostEqual(plan.marginal(0).kr_per_kwh, 3.00, places=9)
+
     def test_the_minutes_in_the_attributes_count_from_now(self):
         # Kl. 16:17: dyrt fra 17:00. «vindue_min» og «slutter_om_min» hedder
         # minutter *om*, og de sagde 60 om noget der ligger 43 minutter ude,

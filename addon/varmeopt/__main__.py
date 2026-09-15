@@ -1043,11 +1043,14 @@ class Varmeopt:
             )
             return {}
 
+        # Række 0 er den halvtime Predbat stod i da den regnede. Lige efter et
+        # halvtimeskift er det den forrige, og planens minutter tæller fra den
+        # halvtime vi står i - se ``Plan.aligned``.
         plan = Plan.from_predbat(
             state.attributes,
             trip=await self._round_trip(ha),
             empty_percent=self.options.battery_empty_percent,
-        )
+        ).aligned(slot_start(time.time()))
         if not len(plan):
             log.warning(
                 "kunne ikke læse Predbats plan fra %s", self.options.entity_predbat_plan

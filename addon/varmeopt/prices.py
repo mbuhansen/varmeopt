@@ -21,6 +21,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, replace
+from datetime import datetime
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -162,6 +163,40 @@ def _number(value: Any) -> float | None:
     except (TypeError, ValueError):
         return None
     return result if math.isfinite(result) else None
+
+
+def _stamp(value: Any) -> float | None:
+    """Predbats tidsstempel («2026-09-15T00:00:00+0200») som epoch-sekunder."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except ValueError:
+        return None
+
+
+def _first_half_hour(attributes: Any, rows: Any) -> float | None:
+    """Hvornår række 0 i Predbats plan begynder.
+
+    Hver række bærer ``slot_minute`` - minutter efter midnat, rundet ned til
+    halvtimen - og planen bærer midnat i ``time``. Rækkens egen ``time`` er
+    ikke svaret for række 0: den står på det minut Predbat regnede (16:55),
+    ikke på halvtimen (16:30). Fra række 1 er den halvtimen, så den er
+    tilbagefaldet.
+    """
+    if not isinstance(rows, list) or not rows:
+        return None
+    raw = attributes.get("raw") if isinstance(attributes, dict) else None
+    midnight = _stamp(raw.get("time")) if isinstance(raw, dict) else None
+    first = rows[0] if isinstance(rows[0], dict) else {}
+    minute = _number(first.get("slot_minute"))
+    if midnight is not None and minute is not None:
+        return midnight + minute * 60
+    if len(rows) > 1 and isinstance(rows[1], dict):
+        second = _stamp(rows[1].get("time"))
+        if second is not None:
+            return second - SLOT_MINUTES * 60
+    return None
 
 
 @dataclass(frozen=True)
@@ -336,8 +371,12 @@ class Plan:
         trip: float = BATTERY_ROUND_TRIP,
         export_floor: float = EXPORT_FLOOR,
         empty_percent: float = BATTERY_EMPTY_PERCENT,
+        starts_at: float | None = None,
     ) -> None:
         self.slots = slots
+        # Hvornår række 0 begynder, som epoch-sekunder - halvtimen Predbat
+        # stod i da den regnede. ``None`` når planen ikke siger det.
+        self.starts_at = starts_at
         # Hvornår batteriet er tomt. Anlæggets tal, ikke Predbats reserve.
         self.empty_percent = empty_percent
         self.round_trip = trip if 0 < trip <= 1 else BATTERY_ROUND_TRIP
@@ -427,7 +466,13 @@ class Plan:
                     soc_percent=_number(row.get("soc_percent")),
                 )
             )
-        plan = cls(tuple(slots), trip, export_floor, empty_percent)
+        plan = cls(
+            tuple(slots),
+            trip,
+            export_floor,
+            empty_percent,
+            starts_at=_first_half_hour(attributes, rows),
+        )
         unknown = sorted({s.state for s in plan.slots if not s.understood})
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
@@ -437,6 +482,32 @@ class Plan:
                 ", ".join(repr(u) for u in unknown),
             )
         return plan
+
+    def aligned(self, half_hour: float) -> Plan:
+        """Planen med række 0 i den halvtime der begynder ``half_hour``.
+
+        Predbat regner ca. hvert femte minut, og række 0 er den halvtime den
+        stod i da den regnede. Den 15. september var planen skrevet 16:55:14
+        med første række i halvtimen 16:30 - så læst kl. 17:02 var række 0
+        en halvtime der var forbi, og alt blev forskudt en halv time: prisen
+        nu var den gamle, og en blok kunne løbe ind i den dyre halvtime.
+
+        Rækker der er forbi, springes over. Kender planen ikke sin første
+        halvtime, eller ligger den ikke bagud, står den som den er.
+        """
+        if self.starts_at is None:
+            return self
+        behind = int(round((half_hour - self.starts_at) / (SLOT_MINUTES * 60)))
+        if behind <= 0:
+            return self
+        slots = tuple(replace(s, index=s.index - behind) for s in self.slots[behind:])
+        return Plan(
+            slots,
+            self.round_trip,
+            self.export_floor,
+            self.empty_percent,
+            starts_at=self.starts_at + behind * SLOT_MINUTES * 60,
+        )
 
     # ------------------------------------------------------------------ opslag
 

@@ -39,6 +39,60 @@ def plan(*rows, cheapest=None):
     return Plan.from_predbat({"raw": {"rows": rows}})
 
 
+class AlignedTest(unittest.TestCase):
+    """Række 0 er halvtimen Predbat stod i da den regnede - ikke nødvendigvis nu.
+
+    Den 15. september: planen skrevet 16:55:14, første række med
+    ``slot_minute`` 990 (16:30). Læst kl. 17:02 er den række forbi.
+    """
+
+    MIDNIGHT = "2026-09-15T00:00:00+0200"
+
+    def predbat(self, **raw):
+        rows = [
+            dict(row(import_rate=182), slot_minute=990, time="2026-09-15T16:55:00+0200"),
+            dict(row(import_rate=270), slot_minute=1020, time="2026-09-15T17:00:00+0200"),
+            dict(row(import_rate=300), slot_minute=1050, time="2026-09-15T17:30:00+0200"),
+        ]
+        return Plan.from_predbat({"raw": {"rows": rows, "time": self.MIDNIGHT, **raw}})
+
+    def at(self, hour, minute):
+        from datetime import datetime, timedelta, timezone
+
+        return datetime(2026, 9, 15, hour, minute, tzinfo=timezone(timedelta(hours=2))).timestamp()
+
+    def test_the_plan_knows_its_first_half_hour(self):
+        self.assertEqual(self.predbat().starts_at, self.at(16, 30))
+
+    def test_a_half_hour_behind_drops_the_row_that_is_over(self):
+        p = self.predbat().aligned(self.at(17, 0))
+
+        self.assertEqual(len(p), 2)
+        self.assertAlmostEqual(p.marginal(0).kr_per_kwh, 2.70, places=9)
+        self.assertEqual([s.minutes_ahead for s in p.slots], [0, 30])
+        self.assertEqual(p.starts_at, self.at(17, 0))
+
+    def test_a_plan_in_step_is_left_alone(self):
+        p = self.predbat()
+
+        self.assertIs(p.aligned(self.at(16, 30)), p)
+
+    def test_without_slot_minute_the_next_rows_time_is_used(self):
+        rows = [
+            row(import_rate=182),
+            dict(row(import_rate=270), time="2026-09-15T17:00:00+0200"),
+        ]
+        p = Plan.from_predbat({"raw": {"rows": rows}})
+
+        self.assertEqual(p.starts_at, self.at(16, 30))
+
+    def test_a_plan_that_does_not_say_is_left_alone(self):
+        p = plan(row(), row())
+
+        self.assertIsNone(p.starts_at)
+        self.assertIs(p.aligned(self.at(17, 0)), p)
+
+
 class ParseTest(unittest.TestCase):
     def test_rates_come_in_oere_and_are_converted(self):
         p = plan(row(import_rate=250, export_rate=95))
