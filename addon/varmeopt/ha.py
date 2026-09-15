@@ -44,7 +44,7 @@ class State:
     last_changed: str | None = None
     # last_changed flytter sig kun når *tilstanden* skifter værdi.
     # Predbats plan ligger i attributterne, så til forældelse skal
-    # last_updated bruges - den flytter sig også når attributter gor.
+    # last_updated bruges - den flytter sig også når attributter gør.
     last_updated: str | None = None
 
     def age_seconds(self, now: datetime | None = None) -> float | None:

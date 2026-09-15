@@ -14,13 +14,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY varmeopt ./varmeopt
 
 # Startskallen hentes aldrig ned fra GitHub. Den skal kunne rydde op efter en
-# selvopdatering hvis den hentede kode ikke engang kan importeres, og saa maa
-# den ikke selv kunne vaere den oedelagte kode.
+# selvopdatering hvis den hentede kode ikke engang kan importeres, og så må
+# den ikke selv kunne være den ødelagte kode.
 COPY bootstrap.py .
 
-# /data/code staar foer /app, saa en hentet udgave vinder over den indbyggede.
-# Arbejdsmappen flyttes vaek fra /app, fordi "python -m" ellers saetter /app
-# forrest paa sys.path og saa ville den indbyggede kode altid vinde.
+# /data/code står før /app, så en hentet udgave vinder over den indbyggede.
+# Arbejdsmappen flyttes væk fra /app, fordi "python -m" ellers sætter /app
+# forrest på sys.path og så ville den indbyggede kode altid vinde.
 WORKDIR /
 ENV PYTHONPATH=/data/code:/app
 
