@@ -98,6 +98,11 @@ class Block:
     # det samme, er den første halvtime :00 - men den er ikke tyve minutter
     # gammel. Mindstekørselstiden regnes herfra.
     began_at: float | None = None
+    # Startet med knappen på plan-siden. En manuel blok er brugerens ordre:
+    # den stoppes ikke af at pillefyret vinder, og den brænder ikke et dyrt
+    # stræk - planlæggeren må gerne lægge sin egen bagefter, hvis der stadig
+    # mangler noget.
+    manual: bool = False
 
     @property
     def began(self) -> float:
@@ -120,6 +125,7 @@ class Block:
             "ends_at": round(self.ends_at, 1),
             "kwh": round(self.kwh, 3),
             "began_at": None if self.began_at is None else round(self.began_at, 1),
+            "manual": self.manual,
         }
 
     @classmethod
@@ -137,6 +143,7 @@ class Block:
                 began_at=(
                     float(raw["began_at"]) if raw.get("began_at") is not None else None
                 ),
+                manual=raw.get("manual") is True,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -178,6 +185,54 @@ class ChargePlan:
         """Blokkens start og slut, til at tegne «lad op» med."""
         return None if self.block is None else (self.block.starts_at, self.block.ends_at)
 
+    def running(self, now: float) -> bool:
+        """Kører der en blok lige nu - automatisk eller manuel?"""
+        return self.block is not None and self.block.running(now)
+
+    @property
+    def manual(self) -> bool:
+        return self.block is not None and self.block.manual
+
+    # ----------------------------------------------------------------- knappen
+
+    def start_manual(self, now: float, minutes: float, rate_kw: float) -> str:
+        """Lad op nu, i så mange minutter - startet med knappen på plan-siden.
+
+        En ventende automatisk blok erstattes; en der allerede kører, får lov
+        at køre færdig, for den er lagt på priser og bundet af sin start.
+        """
+        if self.running(now) and not self.manual:
+            return "der kører allerede en opladning"
+        if minutes <= 0 or rate_kw <= 0:
+            return "ingen plads i lageret at lade op i"
+        start = slot_start(now)
+        ends = now + minutes * 60
+        self.block = Block(
+            dear_from=start,
+            dear_until=ends,
+            starts_at=start,
+            ends_at=ends,
+            kwh=rate_kw * minutes / 60,
+            began_at=now,
+            manual=True,
+        )
+        self._running = True
+        self._full_since = None
+        self.note = f"manuel opladning, {minutes:.0f} min"
+        return f"opladning startet — {self.block.kwh:.1f} kWh over {minutes:.0f} min"
+
+    def stop(self, now: float) -> str:
+        """Stop den blok der kører - med knappen.
+
+        En manuel blok efterlader intet. En automatisk regnes som klaret, ellers
+        ville planlæggeren lægge den igen i næste minut.
+        """
+        if not self.running(now):
+            return "der kører ingen opladning"
+        manual = self.manual
+        self._finish(now, "stoppet med knappen")
+        return "manuel opladning stoppet" if manual else "opladning stoppet"
+
     # -------------------------------------------------------------- skridtet
 
     def update(
@@ -216,11 +271,12 @@ class ChargePlan:
             # fordi pillefyret vandt et minut - men et fuldt lager går
             # forud, for der er ingen varme at levere ind i.
             young = (now - self.block.began) / 60 < min_runtime_minutes
-            if chosen == "pillefyr" and not young:
+            if chosen == "pillefyr" and not young and not self.block.manual:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
             self.note = (
-                f"lader {self.block.kwh:.1f} kWh, "
+                f"{'manuel opladning' if self.block.manual else 'lader'} "
+                f"{self.block.kwh:.1f} kWh, "
                 f"{self.block.minutes_left(now):.0f} min tilbage"
             )
             return True
@@ -391,7 +447,7 @@ class ChargePlan:
         return top, top + SLOT_SECONDS
 
     def _finish(self, now: float, why: str) -> bool:
-        if self.block is not None:
+        if self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
         self.block = None
         self._running = False

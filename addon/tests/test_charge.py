@@ -517,6 +517,93 @@ class HalfHourFrameTest(unittest.TestCase):
         self.assertAlmostEqual(charge.block.kwh, 8.0, places=6)
 
 
+class ManualTest(unittest.TestCase):
+    """Opladningen startet med knappen på plan-siden."""
+
+    def setUp(self):
+        self.now = 1_757_000_000.0
+        self.plan = plan(155, 155, 155, 155)
+        self.charge = ChargePlan()
+
+    def step(self, minute, **over):
+        values = dict(decision=FakeDecision(planned_kwh=None), plan=self.plan, rate_kw=12.0)
+        values.update(over)
+        return self.charge.update(self.now + minute * 60, **values)
+
+    def test_it_charges_right_away_for_its_minutes(self):
+        self.charge.start_manual(self.now, 90, 12.0)
+
+        self.assertTrue(self.step(0))
+        self.assertTrue(self.step(89))
+        self.assertFalse(self.step(90))
+        self.assertIsNone(self.charge.slots())
+
+    def test_the_boiler_winning_does_not_stop_it(self):
+        # Knappen er en ordre. Pillefyret kan være billigere - det er derfor
+        # der er en knap.
+        self.charge.start_manual(self.now, 90, 12.0)
+
+        self.assertTrue(self.step(30, source="pillefyr", min_runtime_minutes=15))
+
+    def test_a_full_store_does(self):
+        self.charge.start_manual(self.now, 90, 12.0)
+        self.step(10, full=True)
+
+        self.assertFalse(self.step(14, full=True))
+        self.assertIn("fuldt", self.charge.note)
+
+    def test_it_does_not_burn_a_stretch(self):
+        # Planlæggeren må gerne lægge sin egen blok bagefter.
+        self.charge.start_manual(self.now, 30, 12.0)
+        self.step(31)
+
+        self.assertIsNone(self.charge.done_until)
+
+    def test_it_can_be_stopped_and_leaves_nothing_behind(self):
+        self.charge.start_manual(self.now, 90, 12.0)
+
+        note = self.charge.stop(self.now + 600)
+
+        self.assertIn("stoppet", note)
+        self.assertFalse(self.charge.running(self.now + 601))
+        self.assertIsNone(self.charge.done_until)
+
+    def test_stopping_an_automatic_block_counts_it_as_done(self):
+        # Ellers ville planlæggeren lægge den igen i næste minut.
+        charge = ChargePlan()
+        charge.update(
+            self.now, FakeDecision(window_starts_in=90, window_minutes=90),
+            plan(35, 35, 35, 155), 16.0,
+        )
+        self.assertTrue(charge.running(self.now))
+
+        charge.stop(self.now + 60)
+
+        self.assertIsNotNone(charge.done_until)
+
+    def test_it_does_not_take_over_a_running_automatic_block(self):
+        charge = ChargePlan()
+        charge.update(
+            self.now, FakeDecision(window_starts_in=90, window_minutes=90),
+            plan(35, 35, 35, 155), 16.0,
+        )
+
+        note = charge.start_manual(self.now + 60, 90, 12.0)
+
+        self.assertIn("kører allerede", note)
+        self.assertFalse(charge.manual)
+
+    def test_it_survives_a_restart(self):
+        self.charge.start_manual(self.now, 90, 12.0)
+
+        back = ChargePlan.from_raw(self.charge.to_raw())
+
+        self.assertTrue(back.manual)
+        self.assertTrue(
+            back.update(self.now + 1800, FakeDecision(source="pillefyr"), self.plan, 12.0)
+        )
+
+
 class StorageTest(unittest.TestCase):
     def test_a_running_block_survives_a_restart(self):
         # En genstart midt i en opladning må ikke starte kompressoren forfra

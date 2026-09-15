@@ -195,6 +195,76 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn('<td class="raw">—</td><td class="raw">—</td>', html)
 
 
+class ChargeButtonTest(unittest.TestCase):
+    """Knappen øverst til højre på plan-siden: lad op nu, eller stop."""
+
+    class Post:
+        method = "POST"
+
+        def __init__(self, action):
+            self.action = action
+
+        async def post(self):
+            return {"action": self.action}
+
+    def setUp(self):
+        from varmeopt.charge import ChargePlan
+
+        self.charge = ChargePlan()
+        self.pressed = []
+
+    def ui(self):
+        from varmeopt.web import WebUI
+
+        def on_charge(start):
+            self.pressed.append(start)
+            if start:
+                import time
+
+                return self.charge.start_manual(time.time(), 60, 12.0)
+            return "stoppet"
+
+        return WebUI(
+            lambda: {"projection": [], "decision": None},
+            lambda: None,
+            charge_plan=lambda: self.charge,
+            on_charge=on_charge,
+        )
+
+    def html(self, request=None):
+        import asyncio
+
+        return asyncio.run(self.ui().plan(request)).text
+
+    def test_the_page_has_a_start_button(self):
+        html = self.html()
+
+        self.assertIn('class="head"', html)
+        self.assertIn('value="start">Lad op nu</button>', html)
+        self.assertIn('method="post" action="./plan"', html)
+
+    def test_pressing_it_starts_a_charge_and_turns_into_stop(self):
+        html = self.html(self.Post("start"))
+
+        self.assertEqual(self.pressed, [True])
+        self.assertIn('value="stop">Stop opladning</button>', html)
+        self.assertIn("opladning startet", html)
+
+    def test_stop_is_passed_on(self):
+        self.html(self.Post("stop"))
+
+        self.assertEqual(self.pressed, [False])
+
+    def test_without_a_callback_there_is_no_button(self):
+        import asyncio
+
+        from varmeopt.web import WebUI
+
+        ui = WebUI(lambda: {"projection": [], "decision": None}, lambda: None)
+
+        self.assertNotIn("Lad op nu", asyncio.run(ui.plan(None)).text)
+
+
 class UsagePageTest(unittest.TestCase):
     """Forbrugsfanen: hvad der er målt, og hvad kurven har lært."""
 

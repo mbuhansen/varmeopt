@@ -115,6 +115,11 @@ TANK_HOLD_SECONDS = 30 * 60
 # pr. minut ville slide unødigt på lagringen uden at redde mere.
 SAVE_INTERVAL_SECONDS = 300
 
+# Højst så længe kører en opladning startet med knappen. Et fuldt lager
+# afslutter den før; loftet er for når tankene ikke svarer, og pladsen derfor
+# ikke kendes.
+MANUAL_CHARGE_MAX_MINUTES = 180.0
+
 # Intet BT12-vindue åbnet endnu. Ikke ``None``: det er stemplet fra en
 # attrap uden ``last_changed``, og det lukker vinduet hver cyklus.
 _NO_WINDOW = object()
@@ -1806,6 +1811,8 @@ async def run() -> None:
             options=options,
             standby=lambda: app.standby,
             on_standby=lambda arm: _toggle_standby(app, arm),
+            charge_plan=lambda: app.charge_plan,
+            on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,
         )
         await web.start()
@@ -1923,8 +1930,44 @@ if __name__ == "__main__":
         asyncio.run(run())
 
 
+def _toggle_charge(app: Any, start: bool) -> str:
+    """Start eller stop en opladning med knappen på plan-siden.
+
+    En manuel opladning kører til lageret er fuldt - regnet som pladsen op
+    til ladetemperaturen delt med den målte ladeeffekt - dog mindst ét
+    minimumstræk og højst ``MANUAL_CHARGE_MAX_MINUTES``. Svarer tankene ikke
+    alle, kendes pladsen ikke, og så gælder loftet; «fuldt» afslutter den
+    alligevel, når tankene svarer igen.
+
+    Flaget tændes i næste cyklus, og planen gemmes med det samme, så en
+    genstart ikke glemmer den.
+    """
+    now = time.time()
+    if not start:
+        note = app.charge_plan.stop(now)
+    else:
+        rate = app.charge_rate.effective_kw
+        minutes = MANUAL_CHARGE_MAX_MINUTES
+        buffer = app.status.get("tank")
+        if buffer is not None and buffer.complete:
+            room = buffer.room_to(app.options.hp_charge_temp)
+            if room <= 0.01:
+                return "lageret er fuldt — der er ikke noget at lade op i"
+            if rate > 0:
+                minutes = room / rate * 60
+        minutes = min(
+            MANUAL_CHARGE_MAX_MINUTES,
+            max(app.options.hp_min_runtime_minutes, minutes),
+        )
+        note = app.charge_plan.start_manual(now, minutes, rate)
+    log.info("opladning med knappen: %s", note)
+    app._dirty = True
+    app.save()
+    return note
+
+
 def _toggle_standby(app: Any, arm: bool) -> str:
-    """Aabn eller luk et ståtabsvindue, og gem resultatet med det samme.
+    """Åbn eller luk et ståtabsvindue, og gem resultatet med det samme.
 
     Gemmes der ikke her, ville en måling der lige er afsluttet kunne gå
     tabt ved en genstart inden næste automatiske gemning - og den måling

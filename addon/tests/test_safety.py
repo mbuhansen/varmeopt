@@ -501,6 +501,34 @@ class ChargeFlagTest(unittest.TestCase):
         self.assertEqual(len(plan), 3)
         self.assertAlmostEqual(plan.marginal(0).kr_per_kwh, 3.00, places=9)
 
+    def test_the_button_charges_until_the_store_is_full(self):
+        # Halvtomme tanke og en ladeeffekt på 16 kW: pladsen delt med
+        # effekten, og flaget tænder i næste cyklus - også selv om planen
+        # siger at der intet er at hente.
+        from varmeopt.__main__ import _toggle_charge
+
+        self.plan(80, 80, 80, 80)
+        asyncio.run(self.app.cycle(self.ha))
+        self.assertEqual(self.flag(), "off")
+        room = self.app.status["tank"].room_to(self.app.options.hp_charge_temp)
+
+        note = _toggle_charge(self.app, True)
+        asyncio.run(self.app.cycle(self.ha))
+
+        self.assertIn("startet", note)
+        self.assertEqual(self.flag(), "on")
+        block = self.app.charge_plan.block
+        self.assertTrue(block.manual)
+        self.assertAlmostEqual(
+            (block.ends_at - block.began) / 60,
+            min(180.0, room / self.app.charge_rate.effective_kw * 60),
+            delta=0.1,
+        )
+
+        _toggle_charge(self.app, False)
+        asyncio.run(self.app.cycle(self.ha))
+        self.assertEqual(self.flag(), "off")
+
     def test_the_minutes_in_the_attributes_count_from_now(self):
         # Kl. 16:17: dyrt fra 17:00. «vindue_min» og «slutter_om_min» hedder
         # minutter *om*, og de sagde 60 om noget der ligger 43 minutter ude,

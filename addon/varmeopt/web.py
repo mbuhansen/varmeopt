@@ -119,6 +119,10 @@ table.plan td.raw { color:var(--muted); font-variant-numeric:tabular-nums; }
         border-radius:10px; font-size:10px; font-weight:600;
         background:var(--fg); color:var(--bg); vertical-align:1px; }
 .tag.target { background:var(--accent); color:#fff; }
+.head { display:flex; justify-content:space-between; align-items:flex-start;
+        gap:12px; flex-wrap:wrap; }
+.head form { margin:0; text-align:right; }
+.head .hint { color:var(--muted); font-size:12px; margin:5px 0 0; }
 """
 
 # Kurvens egen farve. Fast frem for currentColor, fordi linjen er det ene
@@ -198,7 +202,11 @@ class WebUI:
         standby: Callable[[], Any] | None = None,
         on_standby: Callable[[bool], str] | None = None,
         house_load: Callable[[], Any] | None = None,
+        charge_plan: Callable[[], Any] | None = None,
+        on_charge: Callable[[bool], str] | None = None,
     ) -> None:
+        self._charge_plan = charge_plan
+        self._on_charge = on_charge
         self._status = status
         self._table = table
         self._port = port
@@ -222,6 +230,7 @@ class WebUI:
         app.router.add_get("/tank", self.tank)
         app.router.add_get("/cop", self.cop)
         app.router.add_get("/plan", self.plan)
+        app.router.add_post("/plan", self.plan)
         app.router.add_get("/curve", self.curve)
         app.router.add_get("/usage", self.usage)
         app.router.add_get("/system", self.system)
@@ -371,16 +380,26 @@ class WebUI:
         )
         return _page("Lager", "tank", body)
 
-    async def plan(self, _request: web.Request) -> web.Response:
+    async def plan(self, request: web.Request | None) -> web.Response:
+        note = ""
+        if (
+            request is not None
+            and request.method == "POST"
+            and self._on_charge is not None
+        ):
+            form = await request.post()
+            note = self._on_charge(form.get("action") == "start")
+
         status = self._status()
         rows = status.get("projection") or []
         decision = status.get("decision")
+        heading = self._plan_head(note)
 
         if not rows:
             return _page(
                 "Plan",
                 "plan",
-                "<h1>Plan</h1><p class='sub'>Ingen plan fra Predbat endnu. "
+                f"{heading}<p class='sub'>Ingen plan fra Predbat endnu. "
                 "Kildevalget står stadig — det kræver ingen plan.</p>"
                 + (_price_section(status) if status.get("price_now") else ""),
             )
@@ -475,7 +494,7 @@ class WebUI:
         hours = rows[-1].minutes / 60
 
         body = (
-            "<h1>Plan</h1>"
+            f"{heading}"
             f'<p class="sub">{len(rows)} halvtimer frem, {hours:.0f} timer · '
             "priserne er Predbats, COP fremad regnes på nuværende udetemperatur</p>"
             f"{summary}"
@@ -485,6 +504,31 @@ class WebUI:
         )
         return _page("Plan", "plan", body)
 
+    def _plan_head(self, note: str = "") -> str:
+        """Overskriften med knappen til en manuel opladning i højre hjørne.
+
+        Kører der en opladning - startet med knappen eller lagt af
+        planlæggeren - bliver knappen til «Stop». Svaret fra et tryk står
+        under knappen, og ellers hvad opladningen er i gang med.
+        """
+        title = "<h1>Plan</h1>"
+        if self._on_charge is None or self._charge_plan is None:
+            return f'<div class="head">{title}</div>'
+        charge = self._charge_plan()
+        if charge.running(time.time()):
+            button = (
+                '<button class="plain" name="action" value="stop">'
+                "Stop opladning</button>"
+            )
+            hint = note or charge.note
+        else:
+            button = '<button name="action" value="start">Lad op nu</button>'
+            hint = note or "lader til lageret er fuldt"
+        return (
+            f'<div class="head">{title}'
+            f'<form method="post" action="./plan">{button}'
+            f'<p class="hint">{_esc(hint)}</p></form></div>'
+        )
 
     async def usage(self, _request: web.Request) -> web.Response:
         """Husets forbrug: hvad der er målt, og hvad kurven har lært."""
