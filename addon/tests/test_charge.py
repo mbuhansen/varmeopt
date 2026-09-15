@@ -260,6 +260,44 @@ class InterruptionTest(unittest.TestCase):
             )
         )
 
+    def test_the_minimum_runtime_counts_from_when_the_block_began(self):
+        # En blok der lægges kl. :20, starter kl. :20 - men dens start står
+        # på halvtimen, så «ung» blev regnet fra :00. Et minut senere var den
+        # tyve minutter gammel, pillefyret vandt, og kompressoren stoppede
+        # efter én minut med strækket brugt op.
+        late = slot_start(self.now) + 20 * 60
+        self.assertTrue(
+            self.charge.update(
+                late, FakeDecision(window_starts_in=90, window_minutes=90),
+                self.plan, 16.0,
+            )
+        )
+
+        self.assertTrue(
+            self.charge.update(
+                late + 60,
+                FakeDecision(source="pillefyr"),
+                self.plan,
+                16.0,
+                min_runtime_minutes=15,
+            )
+        )
+
+    def test_a_block_that_began_survives_a_restart_with_its_start(self):
+        late = slot_start(self.now) + 20 * 60
+        self.charge.update(
+            late, FakeDecision(window_starts_in=90, window_minutes=90), self.plan, 16.0
+        )
+
+        back = ChargePlan.from_raw(self.charge.to_raw())
+
+        self.assertTrue(
+            back.update(
+                late + 60, FakeDecision(source="pillefyr"), self.plan, 16.0,
+                min_runtime_minutes=15,
+            )
+        )
+
     def test_but_a_full_store_goes_before_the_minimum_runtime(self):
         # Der er ingen varme at levere ind i et fuldt lager, så der er heller
         # ikke noget at beskytte.

@@ -35,7 +35,7 @@ blevet billigere. Alt andet venter.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 SLOT_SECONDS = 1800.0
@@ -93,6 +93,15 @@ class Block:
     starts_at: float
     ends_at: float
     kwh: float
+    # Hvornår kompressoren faktisk starter. ``starts_at`` står på halvtimen,
+    # så planens rækker kan tegne blokken; lægges den kl. :20 og starter med
+    # det samme, er den første halvtime :00 - men den er ikke tyve minutter
+    # gammel. Mindstekørselstiden regnes herfra.
+    began_at: float | None = None
+
+    @property
+    def began(self) -> float:
+        return self.starts_at if self.began_at is None else self.began_at
 
     def running(self, now: float) -> bool:
         return self.starts_at <= now < self.ends_at
@@ -110,6 +119,7 @@ class Block:
             "starts_at": round(self.starts_at, 1),
             "ends_at": round(self.ends_at, 1),
             "kwh": round(self.kwh, 3),
+            "began_at": None if self.began_at is None else round(self.began_at, 1),
         }
 
     @classmethod
@@ -123,6 +133,10 @@ class Block:
                 starts_at=float(raw["starts_at"]),
                 ends_at=float(raw["ends_at"]),
                 kwh=float(raw["kwh"]),
+                # Fra en ældre udgave mangler den; så gælder halvtimen.
+                began_at=(
+                    float(raw["began_at"]) if raw.get("began_at") is not None else None
+                ),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -130,6 +144,12 @@ class Block:
             return None
         if block.dear_until <= block.dear_from:
             return None
+        if block.began_at is not None and not (
+            block.starts_at <= block.began_at <= block.ends_at
+        ):
+            # En start uden for blokken ville kunne holde den «ung» hele
+            # vejen og skærme den mod pillefyret. Så hellere halvtimen.
+            block = replace(block, began_at=None)
         return block
 
 
@@ -195,7 +215,7 @@ class ChargePlan:
             # Kortcykling slider. En blok der lige er startet, afsluttes ikke
             # fordi pillefyret vandt et minut - men et fuldt lager går
             # forud, for der er ingen varme at levere ind i.
-            young = (now - self.block.starts_at) / 60 < min_runtime_minutes
+            young = (now - self.block.began) / 60 < min_runtime_minutes
             if chosen == "pillefyr" and not young:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
@@ -319,7 +339,9 @@ class ChargePlan:
                 return False
             minutes = (ends - max(starts, now)) / 60
             want = min(float(want), rate_kw * minutes / 60)
-        self.block = Block(dear_from, dear_until, starts, ends, float(want))
+        self.block = Block(
+            dear_from, dear_until, starts, ends, float(want), began_at=max(starts, now)
+        )
         if self.block.running(now):
             self._running = True
             self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
