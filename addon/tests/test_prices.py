@@ -278,15 +278,24 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(price.source, BATTERY)
         self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
 
-    def test_a_frozen_export_sells_the_sun(self):
-        # "frzexp" holder ladetilstanden og sælger solen. Så er det solens
-        # kilowatt-time der bliver brugt, ikke batteriets.
-        p = plan(row(state="frzexp", export_rate=140))
+    def test_a_frozen_export_is_not_a_sale(self):
+        # Den 15. september kl. 10:30: en frzexp-halvtime til 1,00 mellem
+        # halvtimer hvor batteriet var 0,94 værd. Den fik eksportprisen, blev
+        # et dyrt stræk på én halv time, og der blev ladet op mod det. En
+        # frossen eksport sælger ikke batteriet, så den koster det samme som
+        # halvtimerne omkring den.
+        p = plan(
+            row(),
+            row(state="frzexp", export_rate=100),
+            row(),
+            cheapest=0.80,
+        )
 
-        price = p.marginal(0)
+        frozen = p.marginal(30)
 
-        self.assertEqual(price.source, SUN)
-        self.assertAlmostEqual(price.kr_per_kwh, 1.40, places=9)
+        self.assertNotEqual(frozen.reason, "eksport")
+        self.assertEqual(frozen.source, BATTERY)
+        self.assertAlmostEqual(frozen.kr_per_kwh, p.marginal(0).kr_per_kwh, places=9)
 
     def test_an_empty_battery_under_a_covering_sun_is_the_sun(self):
         # Batteriet er ude af spillet, men panelerne bærer huset og der
@@ -700,9 +709,9 @@ class MarginalTest(unittest.TestCase):
         self.assertAlmostEqual(price.kr_per_kwh, 5.26 * 0.90, places=9)
         self.assertIn("sælges ellers om 180 min", price.detail)
 
-    def test_a_frozen_export_sells_the_sun_not_the_battery(self):
-        # «frzexp» holder ladetilstanden og sælger solen. En kilowatt-time
-        # taget af batteriet nu gør ikke det salg mindre. Genkøbet er dyrt
+    def test_a_frozen_export_ahead_is_not_what_the_battery_is_saved_for(self):
+        # «frzexp» sælger ikke batteriet. En kilowatt-time taget af det nu
+        # gør ikke det salg mindre. Genkøbet er dyrt
         # med vilje - loftet på 2,00 - så salget ville vinde, hvis det talte.
         p = plan(row(), row(state="frzexp", export_rate=160))
 

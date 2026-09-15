@@ -225,12 +225,12 @@ class Slot:
 
     @property
     def frozen(self) -> bool:
-        """Fastholder Predbat ladetilstanden i den halvtime?
+        """Er det en frossen tilstand - «frzexp», «frzchrg» og slægtninge?
 
-        Forskellen mellem «exp» og «frzexp» er hvor det der sælges, kommer
-        fra: en almindelig eksport tømmer batteriet ud på nettet, mens en
-        frossen eksport holder ladetilstanden og sælger solen. Det afgør
-        hvem der må undvære, hvis varmepumpen tager en kilowatt-time.
+        Forskellen mellem «exp» og «frzexp» er om batteriet faktisk sælges:
+        en almindelig eksport tømmer det ud på nettet, en frossen gør ikke.
+        Derfor tæller en frossen eksport hverken som salg i sin egen halvtime
+        eller som det salg batteriets strøm gemmes til.
         """
         return self.word.startswith("frz") or "freeze" in self.word
 
@@ -616,8 +616,16 @@ class Plan:
         #    afkald på. Kilden er derimod ikke «eksport», for eksport er
         #    ikke et sted strøm kommer fra: en almindelig eksport tømmer
         #    batteriet ud på nettet, så den kilowatt-time varmepumpen tager,
-        #    er batteriets. En frossen eksport holder ladetilstanden og sælger
-        #    solen, og så er det solens.
+        #    er batteriets.
+        #
+        #    En frossen eksport er ikke et salg. Her fik «frzexp» før
+        #    eksportprisen med solen som kilde, og den 15. september kl. 10:30
+        #    blev en frzexp-halvtime til 1,00 derfor 1,7 øre dyrere i varme end
+        #    batteriets 0,94 omkring den - nok til at være et dyrt stræk, og
+        #    der blev ladet op mod det. Anlæggets ejer har afgjort at den ikke
+        #    tæller som en rigtig eksport, så den prissættes som enhver anden
+        #    halvtime hvor inverteren dækker huset: af batteriets værdi
+        #    nedenfor. Det er samme regel som ``_next_sale`` allerede fulgte.
         #
         #    Her stod før ``physical_export or slot.exporting``, så måleren
         #    kunne udløse grenen på egen hånd. Det var forkert: måleren
@@ -626,13 +634,12 @@ class Plan:
         #    mens batterigrenen med rette værdisatte energien til 3,04 mod
         #    aftenens top - så hvert minut hvor huset tilfældigvis sendte
         #    strøm ud, faldt prisen til under det halve og beslutningen vippede.
-        if slot.exporting:
+        if slot.exporting and not slot.frozen:
             if slot.export_price is not None:
-                sold = SUN if slot.frozen else BATTERY
                 return Price(
                     slot.export_price,
                     "eksport",
-                    sold,
+                    BATTERY,
                     detail="der sælges i den halvtime - prisen er den "
                     "indtægt vi giver afkald på",
                 )
@@ -760,9 +767,8 @@ class Plan:
         2,26 imellem. Det dårligste prissatte eftermiddagen til 2,65 op til
         en salgsblok hvor halvtimen kl. 19 betalte 5,26.
 
-        Frosne eksporter tæller ikke. «frzexp» holder ladetilstanden og
-        sælger solen; det salg bliver ikke mindre af at batteriet har en
-        kilowatt-time færre.
+        Frosne eksporter tæller ikke. «frzexp» sælger ikke batteriet, så det
+        salg bliver ikke mindre af at batteriet har en kilowatt-time færre.
 
         Grænsen er opladningen, ikke uret: fyldes batteriet inden, er det ikke
         *den her* kilowatt-time der bliver solgt bagefter. Bunden er den anden
