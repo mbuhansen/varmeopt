@@ -15,12 +15,14 @@ import dataclasses
 import html
 import json
 import math
+import time
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 
 from . import VERSION, selfupdate
+from .charge import slot_start
 from .cop import CopTable
 from .curve import HeatCurve
 
@@ -999,8 +1001,8 @@ def _decision_banner(decision: Any, command: Any = None) -> str:
     if decision.charge and decision.charge_kwh is not None:
         extra = (
             f'<div class="sub" style="margin:6px 0 0">Lad {decision.charge_kwh:.1f} kWh '
-            f"op nu — {decision.saving_kr:.2f} kr at hente mod om "
-            f"{decision.window_minutes} min</div>"
+            f"op nu — {decision.saving_kr:.2f} kr at hente mod "
+            f"{_when(decision.window_minutes)}</div>"
         )
     else:
         extra = '<div class="sub" style="margin:6px 0 0">Lader ikke op</div>'
@@ -1056,7 +1058,7 @@ def _price_section(status: dict[str, Any]) -> str:
             rows.append(
                 (
                     "At hente",
-                    f"{decision.saving_kr:.2f} kr mod om {decision.window_minutes} min",
+                    f"{decision.saving_kr:.2f} kr mod {_when(decision.window_minutes)}",
                 )
             )
 
@@ -1209,9 +1211,22 @@ def _load_curve_chart(curve: Any) -> str:
     )
 
 
-def _clock(minutes: float) -> str:
-    """Minutter frem som et klokkeslæt. «kl. 17:30» kan læses; «om 210 min» skal regnes."""
-    return (datetime.now().astimezone() + timedelta(minutes=minutes)).strftime("%H:%M")
+def _clock(minutes: float, now: float | None = None) -> str:
+    """Minutter frem som et klokkeslæt. «kl. 17:30» kan læses; «om 210 min» skal regnes.
+
+    Minutterne er planens og tæller fra starten af den halvtime vi står i.
+    Her stod ``datetime.now()`` som nulpunkt, så kl. 16:17 blev et stræk der
+    begynder 17:00, skrevet «fra kl. 17:17».
+    """
+    base = slot_start(time.time() if now is None else now)
+    return (datetime.fromtimestamp(base).astimezone() + timedelta(minutes=minutes)).strftime(
+        "%H:%M"
+    )
+
+
+def _when(minutes: float | None) -> str:
+    """«kl. 19:00», eller en tankestreg når der ikke er noget tidspunkt."""
+    return "—" if minutes is None else f"kl. {_clock(minutes)}"
 
 
 def _need_line(

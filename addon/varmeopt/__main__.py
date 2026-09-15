@@ -1182,7 +1182,7 @@ class Varmeopt:
         window = plan.cheapest_window(int(self.options.hp_min_runtime_minutes))
         if window is not None:
             start, average = window
-            attributes["billigste_vindue_om_min"] = start
+            attributes["billigste_vindue_om_min"] = _round(self._from_now(start), 0)
             attributes["billigste_vindue_pris"] = round(average, 3)
 
         await ha.set_state(SENSOR_PRICE, round(price.kr_per_kwh, 3), attributes)
@@ -1291,7 +1291,7 @@ class Varmeopt:
                 "begrundelse": decision.reason,
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
-                "vindue_min": decision.window_minutes,
+                "vindue_min": _round(self._from_now(decision.window_minutes), 0),
                 # Blokken: hvornår den ligger, og hvor meget den er sat til.
                 # Opladningen er planlagt én gang og køres én gang - se
                 # charge.py - så det her er et skema og ikke et øjebliksbud.
@@ -1344,7 +1344,7 @@ class Varmeopt:
                 "lad_op": decision.charge,
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
-                "vindue_min": decision.window_minutes,
+                "vindue_min": _round(self._from_now(decision.window_minutes), 0),
             },
         )
 
@@ -1496,15 +1496,32 @@ class Varmeopt:
         return implied
 
     def _charge_minutes(self) -> tuple[float | None, float | None]:
-        """Blokkens start og slut i minutter frem, til attributterne."""
-        window = self._charge_window()
-        return (None, None) if window is None else (window[0], window[1])
+        """Blokkens start og slut i minutter frem *fra nu*, til attributterne.
+
+        Ikke fra halvtimens start som ``_charge_window``. Attributterne hedder
+        «starter om» og «slutter om», og kl. 16:17 sagde de 60 om en blok
+        der slutter 17:00, mens noten ved siden af sagde «43 min tilbage».
+        En blok der er i gang, starter om 0 minutter.
+        """
+        slots = self.charge_plan.slots()
+        if slots is None:
+            return None, None
+        now = time.time()
+        starts, ends = slots
+        return max(0.0, (starts - now) / 60), (ends - now) / 60
+
+    @staticmethod
+    def _from_now(minutes: float | None) -> float | None:
+        """Planens minutter - fra halvtimens start - som minutter fra nu."""
+        if minutes is None:
+            return None
+        return max(0.0, minutes - _elapsed_minutes(time.time()))
 
     def _charge_window(self) -> tuple[int, int] | None:
         """Blokkens start og slut som minutter frem, til plan-tabellen.
 
         Regnet fra **halvtimens begyndelse**, ikke fra dette sekund. Planens
-        rækker er nummereret sadan: række 0 er den halvtime vi står i, og
+        rækker er nummereret sådan: række 0 er den halvtime vi står i, og
         web-siden skriver klokkeslættet som halvtimens start. Blokken ligger
         også på det gitter, så de to skal måles fra det samme nulpunkt.
 

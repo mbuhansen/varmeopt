@@ -374,6 +374,22 @@ class ChargeCardTest(unittest.TestCase):
         self.assertIn("fra kl. ", card)
         self.assertNotIn("210 min", card)
 
+    def test_the_clock_counts_from_the_half_hour(self):
+        # Planens minutter tæller fra halvtimens start. Kl. 16:17 er 60
+        # minutter frem rækken kl. 17:00 - her stod der «17:17».
+        from datetime import datetime
+        from unittest import mock
+
+        from varmeopt.web import _clock
+
+        at = datetime(2026, 9, 15, 16, 17, 40).timestamp()
+
+        self.assertEqual(_clock(60, now=at), "17:00")
+        with mock.patch("time.time", return_value=at):
+            card = self.card(window_starts_in=60, window_minutes=180)
+        self.assertIn("fra kl. 17:00", card)
+        self.assertIn("dyrest kl. 19:00", card)
+
     def test_a_deadline_on_the_clock_does_not_claim_the_price_rises(self):
         # Fristen kan komme fra uret i stedet for fra prisrækken. Så er
         # "strømmen bliver dyr kl. 17" en påstand ingen har efterprøvet -

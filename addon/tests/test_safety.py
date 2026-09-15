@@ -477,3 +477,19 @@ class ChargeFlagTest(unittest.TestCase):
         self.assertGreater(attrs["lad_kwh"], 0)
         self.assertIsNotNone(attrs["vindue_min"])
 
+    def test_the_minutes_in_the_attributes_count_from_now(self):
+        # Kl. 16:17: dyrt fra 17:00. «vindue_min» og «slutter_om_min» hedder
+        # minutter *om*, og de sagde 60 om noget der ligger 43 minutter ude,
+        # mens noten ved siden af talte fra nu.
+        from unittest import mock
+
+        at = datetime(2026, 9, 15, 16, 17).timestamp()
+        with mock.patch("time.time", return_value=at):
+            self.plan(40, 40, 300, 300)
+            asyncio.run(self.app.cycle(self.ha))
+        attrs = self.ha.attributes[SENSOR_CHARGE]
+
+        self.assertEqual(attrs["vindue_min"], 43)
+        self.assertEqual(attrs["starter_om_min"], 0)
+        self.assertLessEqual(attrs["slutter_om_min"], 43)
+
