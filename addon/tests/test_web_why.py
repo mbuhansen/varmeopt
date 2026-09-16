@@ -605,3 +605,60 @@ class UsageChartTest(unittest.TestCase):
         self.assertIn("ikke talt et helt døgn", _today_card(Usage()))
         self.assertIn("Ingen døgn talt op", _usage_chart(Usage()))
         self.assertIn("ikke talt et helt døgn", _today_card(None))
+
+
+class HistoryWindowTest(unittest.TestCase):
+    """«Målt over tid» viser de samme fire døgn som forbruget ovenfor.
+
+    To grafer over hinanden læses som det samme spænd. Her stod fjorten døgn
+    i den nederste, og en top i den lå så ti dage før den dag man kiggede på.
+    """
+
+    @staticmethod
+    def history(days, step_hours=6):
+        # Ét punkt hver sjette time, ældste først, med stigende forbrug så
+        # det kan ses hvilken ende der blev klippet af.
+        last = 1_757_000_000.0
+        points = []
+        count = int(days * 24 / step_hours)
+        for index in range(count):
+            at = last - (count - 1 - index) * step_hours * 3600
+            points.append((at, 1.0 + index * 0.1, 5.0, False))
+        return points
+
+    def test_only_the_last_four_days_are_drawn(self):
+        from varmeopt.web import _history_chart
+
+        html = _history_chart(self.history(days=12))
+
+        self.assertIn("over 4.0 døgn", html)
+        # Fire punkter i døgnet i fire døgn, plus det der ligger præcis på
+        # kanten: snittet er «ikke ældre end fire døgn», ikke «yngre end».
+        self.assertEqual(html.count("<circle"), 17)
+
+    def test_a_shorter_history_is_drawn_whole(self):
+        from varmeopt.web import _history_chart
+
+        html = _history_chart(self.history(days=2))
+
+        # Otte punkter med seks timer imellem spænder 42 timer, ikke 48.
+        self.assertIn("over 1.8 døgn", html)
+        self.assertEqual(html.count("<circle"), 8)
+
+    def test_the_window_follows_the_newest_measurement_not_the_clock(self):
+        # Stod add-on'en stille en uge, er de sidste fire døgn med målinger
+        # stadig det man vil se. En tom graf ville ligne at der ikke blev målt.
+        from varmeopt.web import _history_chart
+
+        gammel = [(at - 30 * 86400, kw, o, m) for at, kw, o, m in self.history(days=6)]
+        html = _history_chart(gammel)
+
+        self.assertIn("over 4.0 døgn", html)
+        self.assertEqual(html.count("<circle"), 17)
+
+    def test_two_points_left_after_clipping_still_draw(self):
+        from varmeopt.web import _history_chart
+
+        html = _history_chart(self.history(days=10, step_hours=48))
+
+        self.assertIn("<svg", html)

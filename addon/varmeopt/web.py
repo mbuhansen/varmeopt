@@ -26,7 +26,7 @@ from . import VERSION, selfupdate
 from .charge import slot_start
 from .cop import CopTable
 from .curve import HeatCurve
-from .usage import MINUTES_PER_DAY
+from .usage import KEEP_DAYS, MINUTES_PER_DAY
 
 PORT = 8099
 
@@ -1135,7 +1135,21 @@ def _price_section(status: dict[str, Any]) -> str:
 
 
 def _history_chart(history: Any) -> str:
-    """De sidste par ugers målinger, som de faldt.
+    """De sidste fire døgns målinger, som de faldt.
+
+    Samme vindue som forbruget ovenfor, og det er hele grunden til at der
+    klippes: to grafer over hinanden på siden, den ene over fire døgn og den
+    anden over fjorten, læses som det samme spænd. Toppen i den nederste lå
+    så ti dage før den dag man kiggede på.
+
+    Der klippes mod den **nyeste måling** og ikke mod uret. Har add-on'en
+    stået stille en uge, er de sidste fire døgn med målinger stadig det man
+    vil se — en tom graf ville bare se ud som om der ikke blev målt. Datoerne
+    står under kurven, så der er ikke noget at tage fejl af.
+
+    Historikken på disken beholder sine fjorten døgn. Den koster nogle få
+    kilobyte, og med dem kan vinduet udvides igen uden at vente fire dage på
+    at der er noget at tegne.
 
     Modellerede vinduer — dem hvor spaen eller beholderen kørte og deres træk
     er trukket fra efter et skøn — tegnes åbne. De er med, fordi et hul i
@@ -1143,6 +1157,9 @@ def _history_chart(history: Any) -> str:
     kendes fra dem der er målt rent.
     """
     points = [h for h in (history or []) if h[1] is not None]
+    if points:
+        cutoff = points[-1][0] - KEEP_DAYS * 86400
+        points = [h for h in points if h[0] >= cutoff]
     if len(points) < 2:
         return (
             '<h2>Målt over tid</h2><p class="legend">For få målinger endnu — '
