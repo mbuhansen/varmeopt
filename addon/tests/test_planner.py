@@ -970,7 +970,10 @@ class FallbackStretchTest(unittest.TestCase):
             demand_kw=2.0,
         )
 
-        self.assertEqual(d.window_minutes, 26 * 30, "den fjerne top er den dyreste")
+        # Og overskriften følger strækket, ikke horisonten. Her stod
+        # ``26 * 30`` - den fjerne top - så planen lagde en blok mod toppen om
+        # to timer og skrev «at hente om tretten timer» ved siden af.
+        self.assertEqual(d.window_minutes, 4 * 30, "toppen ligger i strækket")
         self.assertEqual(d.dear_starts_in, 4 * 30)
         self.assertEqual(d.dear_ends_in, 6 * 30)
 
@@ -982,6 +985,103 @@ class FallbackStretchTest(unittest.TestCase):
         )
 
         self.assertEqual(d.dear_ends_in, d.dear_starts_in + d.dear_span_minutes)
+
+
+class BatteryPlateauTest(unittest.TestCase):
+    """Batteriets genkøb lægger natten fladt oven på aftenen.
+
+    Den 16. september kl. 11:47 stod der på plan-siden: «Lad 10,6 kWh op nu —
+    0,77 kr at hente mod kl. 07:00», mens anlægget lagde varme op til
+    aftentoppen kl. 19. Kl. 19 er der eksport til 1,80; kl. 07 er importen
+    1,85 - et tal der slet ikke stikker op nogen steder.
+
+    Forklaringen er at batteriets marginalpris er den samme hele vejen fra det
+    begynder at aflade til det løber tørt: hver halvtime får «købes tilbage til
+    1,85», fordi det er den samme manglende kilowatt-time der bliver købt til
+    sidst. Kl. 21 til kl. 07 lå derfor på nøjagtig den samme pris, ti timer i
+    træk, og de ti timer er fem øre over aftenens eksport.
+
+    Oven på det flade lå vejrudsigten: 13,4 grader kl. 07 mod 15,5 kl. 19
+    gør COP'en en anelse ringere om morgenen. Det afgjorde hele spørgsmålet
+    «hvornår er det dyrest» med 0,0008 kr/kWh - to graders udsigt mod et helt
+    døgns priser.
+
+    Planen her har den samme form: en billig formiddag, en eksport til 1,78 om
+    aftenen, og derefter en flad strækning på 1,90 hvor batteriet er disponeret
+    frem til det løber tørt.
+    """
+
+    @staticmethod
+    def battery_plan():
+        rows = []
+
+        def add(count, state, import_rate, export_rate, soc):
+            for _ in range(count):
+                rows.append(
+                    {
+                        "state": state,
+                        "import_rate": import_rate,
+                        "export_rate": export_rate,
+                        "soc_percent": soc,
+                    }
+                )
+
+        add(3, "demand", 153, 72, 25)
+        add(2, "chrg", 127, 63, 40)
+        add(6, "demand", 150, 80, 65)
+        add(4, "frzexp", 270, 150, 80)
+        add(4, "exp", 305, 178, 60)
+        for soc in (24, 22, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11):
+            add(1, "demand", 150, 90, soc)
+        # Bunden. Her bliver den kilowatt-time vi bruger i aften, købt igen.
+        add(4, "demand", 190, 110, 10)
+        add(8, "chrg", 108, 50, 40)
+        return Plan.from_predbat({"raw": {"rows": rows}})
+
+    @staticmethod
+    def cop(minutes):
+        """Det bliver køligere natten igennem, som vejrudsigten den dag."""
+        return 4.485 - 0.085 * min(minutes, 1100) / 1100
+
+    def decide(self):
+        return planner(horizon_minutes=1440).decide(
+            self.battery_plan(),
+            cop_now=4.485,
+            cop_later=self.cop,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_the_plateau_really_is_flat_and_above_the_evening(self):
+        # Selve forudsætningen. Holder den ikke, siger de to næste ingenting.
+        p = self.battery_plan()
+        aften = p.marginal(450)
+        natten = [p.marginal(m) for m in range(570, 901, 30)]
+
+        self.assertEqual(aften.reason, "eksport")
+        self.assertEqual({pris.reason for pris in natten}, {"købes tilbage"})
+        self.assertEqual({round(pris.kr_per_kwh, 6) for pris in natten}, {1.9})
+        self.assertGreater(natten[0].kr_per_kwh, aften.kr_per_kwh)
+
+    def test_an_export_and_a_buy_back_are_not_one_peak(self):
+        # Låsen slutter med eksporten kl. 19-21, ikke med plateauet. Uden
+        # bruddet på begrundelsen rakte den til kl. 09:30 - hele natten på
+        # én blok - fordi de ti flade timer ligger inden for hysteresen af
+        # hinanden og af aftenen.
+        d = self.decide()
+
+        self.assertEqual(d.dear_starts_in, 450)
+        self.assertEqual(d.dear_ends_in, 570)
+        self.assertGreater(d.dear_starts_in + d.dear_span_minutes, d.dear_ends_in)
+
+    def test_the_peak_named_is_the_one_being_charged_for(self):
+        # Her stod plateauets sidste halvtime - den koldeste, ikke den
+        # dyreste - og den lå syv timer efter det stræk blokken blev lagt mod.
+        d = self.decide()
+
+        self.assertEqual(d.window_minutes, 450)
+        self.assertIn("toppen om 450 min", d.reason)
 
 
 class HalfHourFrameTest(unittest.TestCase):

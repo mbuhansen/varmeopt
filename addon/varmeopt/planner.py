@@ -79,8 +79,8 @@ class Decision:
     deadline_on_the_clock: bool = False
     # Det dyre stræk der lades op imod: hvornår det begynder, og hvor
     # længe det varer. Det er ikke det samme som ``window_minutes``, som er
-    # den *dyreste* halvtime - og forskellen er hele grunden til at flaget
-    # flimrede. En blok hører til et stræk, ikke til en halvtime, og
+    # den *dyreste* halvtime i strækket - og forskellen er hele grunden til
+    # at flaget flimrede. En blok hører til et stræk, ikke til en halvtime, og
     # ``charge.py`` bruger de to tal til at kende strækket igen næste minut.
     dear_starts_in: int | None = None
     dear_span_minutes: int | None = None
@@ -90,6 +90,10 @@ class Decision:
     # den 15. september brændte en halv time på uret derfor hele døgnet.
     dear_ends_in: int | None = None
     saving_kr: float | None = None
+    # Den dyreste halvtime. Findes der et stræk, er det strækkets egen top -
+    # ikke horisontens. De to er ikke det samme når batteriets marginalpris
+    # lægger timerne fladt oven på hinanden, og så er horisontens top valgt af
+    # vejrudsigtens COP. ``saving_kr`` hører til den her halvtime.
     window_minutes: int | None = None
     reason: str = ""
     # Svaret i ét kort udsagn, sat af den gren der ved hvad der skete.
@@ -461,6 +465,20 @@ class Planner:
             else {}
         )
 
+        # Den halvtime der skal stå på skærmen, og hvad der er at hente *der*.
+        #
+        # Marginen ovenfor bliver stående som den er: den svarer på om der
+        # overhovedet er noget at hente i horisonten, og det spørgsmål skal
+        # ikke kunne lukkes af at det bedste bud ligger uden for det første
+        # stræk. Men når blokken først er lagt mod et stræk, er det strækkets
+        # egen top der skal nævnes - se ``_stretch_top``.
+        top_gap = None
+        if span > 0:
+            top = self._stretch_top(plan, starts, ends, cop_now, cop_later)
+            if top is not None:
+                best_when, top_heat = top
+                top_gap = top_heat - vp_charge
+
         if best_when is None or margin <= 0:
             return _with(
                 decision,
@@ -717,7 +735,14 @@ class Planner:
         # varme der aldrig kom i tanken: "lad 5,9 kWh nu og spar 13,02 kr" er
         # 2,2 kr/kWh, hvor marginen højst kan være forskellen op til
         # pillefyret.
-        saving = margin * (want if need is None else min(want, need))
+        # Og gevinsten regnes mod den halvtime der bliver nævnt. Her stod
+        # ``margin``, og med toppen flyttet ind i strækket ville tallet og
+        # klokkeslættet i «0,77 kr at hente mod kl. 19:00» komme fra hver sit
+        # sted i døgnet. Er der intet at hente på strækkets top - det kan et
+        # absolut stræk have, hvor grænsen er pillefyrets og ikke vores egen
+        # pris - står marginen tilbage som før.
+        gain = margin if top_gap is None or top_gap <= 0 else top_gap
+        saving = gain * (want if need is None else min(want, need))
 
         # Rækker det ikke hele vejen, skal det stå der. Her blev mængden
         # kappet i stilhed af pladsen eller af tiden inden prisen stiger, og
@@ -1143,15 +1168,32 @@ class Planner:
         en COP-forskel på 0,1 i udsigten gøre den fjerne dyrest, og så rakte
         låsen hen over dalen imellem, hvor der skulle lades op igen.
 
-        Ligger resten af horisonten på et plateau inden for hysteresen, rækker
-        toppen til kanten. Det er ufarligt: inden for plateauet er der intet
-        at hente ved at lade op igen, og en dal bagved afslutter det.
+        Toppen slutter også hvor prisens **begrundelse** skifter, og den del
+        er der ikke af bekvemmelighed. Batteriets marginalpris er flad hele
+        vejen fra det begynder at aflade til det løber tørt: hver eneste
+        halvtime får den samme «købes tilbage til 1,85», fordi det er den
+        samme kilowatt-time der mangler til sidst. Den 16. september lå den
+        flade strækning fra kl. 21 til kl. 07 — ti timer på nøjagtig
+        1,8527 kr/kWh — og aftenens eksport til 1,80 lå fem øre under. Uden
+        bruddet fandt prisfaldet aldrig sted: hele plateauet ligger inden for
+        hysteresen, låsen rakte til kl. 07:30, og én blok om formiddagen
+        brændte hele natten. En eksport og et genkøb er to forskellige
+        begivenheder, og de skal ikke lægges sammen til én top, selv om de
+        tilfældigvis koster det samme.
+
+        Ligger resten af horisonten på et plateau med den samme begrundelse
+        og inden for hysteresen, rækker toppen til kanten. Det er ufarligt:
+        inden for plateauet er der intet at hente ved at lade op igen, og en
+        dal bagved afslutter det.
         """
         top: float | None = None
         last: int | None = None
+        reason: str | None = None
         for minutes in range(starts, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
+                break
+            if reason is not None and price.reason != reason:
                 break
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
@@ -1159,9 +1201,54 @@ class Planner:
             if top is not None and heat < top - self.hysteresis:
                 break
             top = heat if top is None else max(top, heat)
+            reason = price.reason
             last = minutes
         return None if last is None else last + SLOT_MINUTES
 
+    def _stretch_top(
+        self,
+        plan: Any,
+        starts: int,
+        ends: int,
+        cop_now: Any,
+        cop_later: Any,
+    ) -> tuple[int, float] | None:
+        """Den dyreste halvtime *inde i strækket*, og hvad varmen koster der.
+
+        Her stod den dyreste halvtime i hele horisonten, og det er et andet
+        spørgsmål. Blokken lægges mod ét stræk; overskriften skal pege på det
+        stræk, ikke på en halvtime et andet sted i døgnet.
+
+        Den 16. september kl. 11:47 stod der «0,77 kr at hente mod kl. 07:00»
+        mens anlægget lagde varme op til aftenen kl. 19. De to halvtimer
+        kostede det samme i strøm - 1,8527, plateauet fra ``_peak_end`` - og
+        kl. 07 vandt med 0,0008 kr/kWh, fordi vejrudsigten lover 13,4 grader i
+        morgen tidlig mod 15,5 i aften. Overskriften blev altså valgt af to
+        graders udsigt og ikke af en eneste pris.
+
+        Er flere halvtimer i strækket ikke til at skelne, er svaret den
+        første. Det er samme snit som kildevalget og strækkene bruger: under
+        hysteresen kan tallene ikke se forskel, og så er det tidspunktet
+        opladningen skal nå, der er det brugbare svar.
+        """
+        best: tuple[int, float] | None = None
+        rows: list[tuple[int, float]] = []
+        for minutes in range(starts, ends, SLOT_MINUTES):
+            price = plan.marginal(minutes)
+            if price is None:
+                break
+            heat = self.cheapest_heat(
+                price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
+            )
+            rows.append((minutes, heat))
+            if best is None or heat > best[1]:
+                best = (minutes, heat)
+        if best is None:
+            return None
+        for minutes, heat in rows:
+            if heat >= best[1] - self.hysteresis:
+                return minutes, heat
+        return best
 
     # ------------------------------------------------------------ fremskrivning
 
