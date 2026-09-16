@@ -1084,6 +1084,64 @@ class BatteryPlateauTest(unittest.TestCase):
         self.assertIn("toppen om 450 min", d.reason)
 
 
+class StretchTopTest(unittest.TestCase):
+    """Ties brydes hvor elprisen står stille - ikke hvor varmen ligner sig selv.
+
+    Første forsøg brød ties på hysteresen, og den er for løs. Den 16. september
+    kl. 12:35 gik strækket fra kl. 15, hvor eksporten er 1,6244, op til kl. 19,
+    hvor den er 1,8049. De 18 øre strøm er ved COP 4,4 kun 4 øre i varme - lige
+    under hysteresen på 5 - og så rakte reglen hen over springet og skrev
+    «dyrest kl. 15:00» på en dag hvor aftenen kl. 19 er det dyre.
+
+    Et spring på 18 øre er ikke to tal der ikke kan skelnes. Det er netop det
+    der gør kl. 19 til aftenens dyre time.
+    """
+
+    # Nu, så to timer til 1,62, så en time til 1,80, så billigt igen.
+    RATES = (110, 110, 162, 162, 162, 162, 180, 180, 90, 90, 90, 90)
+
+    def decide(self):
+        return planner().decide(
+            plan(*self.RATES),
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_the_step_is_smaller_than_the_hysteresis_in_heat(self):
+        # Forudsætningen. Er springet større end hysteresen, siger testen
+        # nedenfor ingenting - så ville enhver regel finde kl. 19.
+        p = planner()
+        lav = p.cheapest_heat(1.62, 4.4)
+        høj = p.cheapest_heat(1.80, 4.4)
+
+        self.assertGreater(høj, lav)
+        self.assertLess(høj - lav, p.hysteresis)
+
+    def test_the_top_is_the_step_and_not_the_start_of_the_stretch(self):
+        d = self.decide()
+
+        self.assertEqual(d.dear_starts_in, 2 * 30, "strækket begynder ved 1,62")
+        self.assertEqual(d.window_minutes, 6 * 30, "men toppen er springet til 1,80")
+
+    def test_a_plateau_at_one_price_still_answers_with_its_first_half_hour(self):
+        # Og den strammere regel må ikke tage det oprindelige fund med sig:
+        # står elprisen stille, er det kun COP'en der skiller halvtimerne, og
+        # så er den første svaret. Her falder COP'en hen over de to 1,80-timer.
+        d = planner().decide(
+            plan(*self.RATES),
+            cop_now=4.4,
+            cop_later=lambda minutes: 4.4 if minutes < 210 else 4.3,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+        self.assertEqual(d.window_minutes, 6 * 30)
+
+
 class HalfHourFrameTest(unittest.TestCase):
     """Minutterne tæller fra halvtimens start, som planens rækker.
 

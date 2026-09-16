@@ -55,6 +55,13 @@ SLOT_MINUTES = 30
 # enkelt halvtime deler ikke en aften i to.
 MAX_GAP_IN_WINDOW = 60
 
+# Hvornår to marginalpriser er den samme pris. Ikke en tolerance for hvad
+# der er «tæt nok» - det er hysteresens arbejde - men en gardering mod at
+# det samme regnestykke lander en flydertusindedel fra sig selv. Batteriets
+# genkøb giver bogstavelig talt det samme tal i hver halvtime, og det er
+# den lighed ``_stretch_top`` bryder ties på.
+PRICE_EPSILON = 1e-9
+
 
 @dataclass(frozen=True)
 class Decision:
@@ -1226,13 +1233,22 @@ class Planner:
         morgen tidlig mod 15,5 i aften. Overskriften blev altså valgt af to
         graders udsigt og ikke af en eneste pris.
 
-        Er flere halvtimer i strækket ikke til at skelne, er svaret den
-        første. Det er samme snit som kildevalget og strækkene bruger: under
-        hysteresen kan tallene ikke se forskel, og så er det tidspunktet
-        opladningen skal nå, der er det brugbare svar.
+        Toppen er altså den dyreste halvtime, og ties brydes tilbage så længe
+        **elprisen er den samme**. Kun dér er der ingenting at vælge imellem:
+        marginalprisen står stille, og det eneste der skiller halvtimerne, er
+        vejrudsigtens COP. Så er den første af dem det brugbare svar, for det
+        er det tidspunkt opladningen skal nå.
+
+        Her stod hysteresen som snit i stedet, og den er for løs. Kl. 12:35
+        samme dag gik strækket fra kl. 15, hvor eksporten er 1,6244, op til
+        kl. 19, hvor den er 1,8049. De 18 øre strøm er ved COP 4,4 kun 4 øre i
+        varme - lige under hysteresen på 5 - og så rakte reglen hen over
+        springet og udnævnte kl. 15 til toppen. Et prisspring på 18 øre er
+        ikke to tal man ikke kan skelne; det er netop det der gør kl. 19 til
+        aftenens dyre time.
         """
-        best: tuple[int, float] | None = None
-        rows: list[tuple[int, float]] = []
+        rows: list[tuple[int, float, float]] = []
+        top: int | None = None
         for minutes in range(starts, ends, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
@@ -1240,15 +1256,17 @@ class Planner:
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
             )
-            rows.append((minutes, heat))
-            if best is None or heat > best[1]:
-                best = (minutes, heat)
-        if best is None:
+            rows.append((minutes, price.kr_per_kwh, heat))
+            if top is None or heat > rows[top][2]:
+                top = len(rows) - 1
+        if top is None:
             return None
-        for minutes, heat in rows:
-            if heat >= best[1] - self.hysteresis:
-                return minutes, heat
-        return best
+        # Tilbage gennem plateauet, ikke gennem hele strækket: det er den
+        # sammenhængende række halvtimer med toppens egen elpris.
+        first = top
+        while first > 0 and abs(rows[first - 1][1] - rows[top][1]) < PRICE_EPSILON:
+            first -= 1
+        return rows[first][0], rows[first][2]
 
     # ------------------------------------------------------------ fremskrivning
 
