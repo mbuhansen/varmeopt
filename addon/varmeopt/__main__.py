@@ -42,6 +42,7 @@ from .migrate import (
     HOUSE_LOAD_FILE,
     SOLAR_FILE,
     STANDBY_FILE,
+    USAGE_FILE,
     load_cop_table,
     load_heat_curve,
     load_solar,
@@ -63,6 +64,7 @@ from .solar import DayTracker, SolarModel
 from .store import Store
 from .standby import StandbyTest
 from .tank import Buffer, Tank
+from .usage import Usage
 from .web import WebUI
 
 log = logging.getLogger("varmeopt")
@@ -77,6 +79,17 @@ SENSOR_DECISION = "sensor.varmeopt_beslutning"
 # tier. En attribut kommer ikke i Home Assistants langtidsstatistik, og så
 # kan tallet ikke tegnes en måned tilbage. Derfor sin egen sensor.
 SENSOR_HOUSE = "sensor.varmeopt_husforbrug"
+# Døgnets forbrug ud af lageret, delt på de tre. Hver sin sensor, fordi det
+# er sådan Home Assistant kan tegne dem hver for sig og lægge dem sammen i
+# energi-panelet - en attribut kan ingen af delene. ``total_increasing``
+# fortæller HA at tallet nulstilles ved midnat, så nulstillingen ikke bliver
+# læst som et forbrug med omvendt fortegn.
+SENSOR_USAGE = {
+    "varme": "sensor.varmeopt_forbrug_varme",
+    "vvb": "sensor.varmeopt_forbrug_vvb",
+    "spa": "sensor.varmeopt_forbrug_spa",
+}
+SENSOR_USAGE_TOTAL = "sensor.varmeopt_forbrug_i_alt"
 # Opladningen som sit eget flag. Den står også som attribut på
 # beslutningen, men et flag man kan spørge direkte om, er lettere at koble
 # videre end en attribut man skal grave ud - og en styring der er let at
@@ -163,6 +176,9 @@ class Varmeopt:
         # Husets forbrug læst af lageret, som bagstopper når
         # flowmåleren ligger under sin bund - se houseload.py.
         self.house_load = HouseLoad()
+        # Døgnets forbrug ud af lageret, delt på varme, varmt vand og spa,
+        # fire døgn tilbage - se usage.py.
+        self.usage = Usage()
         # Typeskiltet siger 16 kW; maskinen bestemmer selv og lander omkring
         # 12. Raten måles derfor frem for at gættes - se capacity.py.
         self.charge_rate = ChargeRate(nameplate_kw=options.hp_charge_kw)
@@ -272,6 +288,24 @@ class Varmeopt:
         )
         if self.house_load.measured_at is not None:
             self._dirty = True
+
+        # Døgnets forbrug ud af lageret. De tre tal kommer fra de samme to
+        # kilder som lige har været brugt ovenfor - husets målte træk, og
+        # skønnet over beholderen og spaen - så summen er lagerets samlede
+        # træk uden at noget tælles dobbelt. Se ``usage``.
+        vvb_kw, spa_kw = self._vessel_split(
+            dhw_fact, vessels.get("spa_heating"), vessels.get("vvb_bottom")
+        )
+        # Ét tidsstempel til begge: kaldes ``time.time()`` to gange, kan
+        # aflæsningen og det minut den bogføres i, høre til hver sin dag.
+        measured_at = time.time()
+        self.usage.observe(
+            measured_at,
+            self.house_load.kw_at(measured_at, outdoor_temp),
+            vvb_kw,
+            spa_kw,
+        )
+        self._dirty = True
 
         # Hvor hurtigt pumpen faktisk fylder lageret. Planlæggeren regner
         # både tid og mængde ud fra den, så et typeskilt der lyver en
@@ -569,6 +603,7 @@ class Varmeopt:
                 )
             await self._safely("behov", self._publish_demand(ha, balance, buffer))
             await self._safely("husforbrug", self._publish_house_load(ha))
+            await self._safely("forbrug", self._publish_usage(ha))
 
         if prices.get("price_now") is not None and ha is not None:
             price = prices["price_now"]
@@ -1546,28 +1581,40 @@ class Varmeopt:
         starts, ends = slots
         return int((starts - base) / 60), int((ends - base) / 60)
 
-    def _vessel_kw(
+    def _vessel_split(
         self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None
-    ) -> float | None:
-        """Hvad beholderen og spaen trækker ud af tankene lige nu.
+    ) -> tuple[float | None, float | None]:
+        """Beholderens og spaens træk hver for sig. ``None`` er «kører ikke».
 
-        Et skøn, ikke en måling — men uden det ville målingen af husets
-        forbrug være tavs de fem timer om dagen hvor spaen kører. Beholderen
-        tager mest når den er koldest, så den interpoleres mellem de to
-        yderpunkter over det spænd den faktisk bevæger sig i.
+        Et skøn, ikke en måling — der sidder ingen energimåler på nogen af
+        dem — men uden det ville målingen af husets forbrug være tavs de fem
+        timer om dagen hvor spaen kører. Beholderen tager mest når den er
+        koldest, så den interpoleres mellem de to yderpunkter over det spænd
+        den faktisk bevæger sig i.
+
+        De to står hver for sig, fordi døgnets forbrug skal kunne vises delt
+        på dem — se ``usage``. Det er vigtigt at det er *det samme* skøn der
+        bliver trukket fra husets tal og lagt til beholderens: ellers ville de
+        tre tal på forbrugssiden ikke kunne lægges sammen til lagerets træk.
         """
-        total = 0.0
-        if spa:
-            total += self.options.spa_kw
+        vvb = None
         if dhw:
             cold, hot = self.options.vvb_kw_cold, self.options.vvb_kw_hot
             if vvb_bottom is None:
-                total += (cold + hot) / 2
+                vvb = (cold + hot) / 2
             else:
                 # 40 °C er en tømt beholder, 55 en fuldt opvarmet. Uden for
                 # spændet klemmes der fast på yderpunktet.
                 share = min(1.0, max(0.0, (vvb_bottom - 40.0) / 15.0))
-                total += cold + (hot - cold) * share
+                vvb = cold + (hot - cold) * share
+        return vvb, (self.options.spa_kw if spa else None)
+
+    def _vessel_kw(
+        self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None
+    ) -> float | None:
+        """Hvad beholderen og spaen tilsammen trækker ud af tankene lige nu."""
+        vvb, spa_kw = self._vessel_split(dhw, spa, vvb_bottom)
+        total = (vvb or 0.0) + (spa_kw or 0.0)
         return total if total > 0 else None
 
     async def _publish_house_load(self, ha: HomeAssistant) -> None:
@@ -1609,6 +1656,56 @@ class Varmeopt:
                 ),
                 "afvigelse_mod_måler_kw": _round(self.house_load.bias_kw, 2),
                 "note": self.house_load.note,
+            },
+        )
+
+    async def _publish_usage(self, ha: HomeAssistant) -> None:
+        """Døgnets forbrug ud af lageret — tre sensorer og en sum.
+
+        ``total_increasing`` og ikke ``total``: tallet tæller op gennem døgnet
+        og falder til nul ved midnat, og det er præcis den form Home Assistant
+        bruger den klasse til. Med ``measurement`` ville der ingen
+        langtidsstatistik være, og med ``total`` ville nulstillingen blive
+        læst som et forbrug med omvendt fortegn.
+        """
+        today = self.usage.today
+        if today is None:
+            return
+
+        yesterday = self.usage.yesterday
+        names = {"varme": "rumvarme", "vvb": "varmt vand", "spa": "spa"}
+        for part, entity in SENSOR_USAGE.items():
+            await ha.set_state(
+                entity,
+                round(today.part(part), 2),
+                {
+                    "friendly_name": f"Varmeopt forbrug {names[part]}",
+                    "unit_of_measurement": "kWh",
+                    "device_class": "energy",
+                    "state_class": "total_increasing",
+                    "icon": "mdi:radiator",
+                    "dato": today.date,
+                    "i_går_kwh": (
+                        None if yesterday is None else round(yesterday.part(part), 2)
+                    ),
+                },
+            )
+
+        await ha.set_state(
+            SENSOR_USAGE_TOTAL,
+            round(today.total, 2),
+            {
+                "friendly_name": "Varmeopt forbrug i alt",
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+                "icon": "mdi:home-thermometer",
+                "dato": today.date,
+                "varme_kwh": round(today.varme, 2),
+                "vvb_kwh": round(today.vvb, 2),
+                "spa_kwh": round(today.spa, 2),
+                "i_går_kwh": None if yesterday is None else round(yesterday.total, 2),
+                "note": "varmen ud af lageret, ikke det varmepumpen lavede",
             },
         )
 
@@ -1679,6 +1776,7 @@ class Varmeopt:
             )
             self.store.save(STANDBY_FILE, self.standby.to_raw())
             self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
+            self.store.save(USAGE_FILE, self.usage.to_raw())
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
@@ -1770,6 +1868,7 @@ async def run() -> None:
         app.guard.restore(store.load(GUARD_FILE, {}))
         app.standby = StandbyTest.from_raw(store.load(STANDBY_FILE, {}))
         app.house_load = HouseLoad.from_raw(store.load(HOUSE_LOAD_FILE, {}))
+        app.usage = Usage.from_raw(store.load(USAGE_FILE, {}))
         app.charge_rate = ChargeRate.from_raw(
             store.load(CAPACITY_FILE, {}), options.hp_charge_kw
         )
@@ -1814,6 +1913,7 @@ async def run() -> None:
             charge_plan=lambda: app.charge_plan,
             on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,
+            usage=lambda: app.usage,
         )
         await web.start()
         log.info("web-UI lytter på port %d (ingress)", web.port)

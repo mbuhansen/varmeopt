@@ -286,9 +286,9 @@ class ChargeButtonTest(unittest.TestCase):
 
 
 class UsagePageTest(unittest.TestCase):
-    """Forbrugsfanen: hvad der er målt, og hvad kurven har lært."""
+    """Forbrugsfanen: hvad der er gået ud af lageret, og hvad huset trækker."""
 
-    def html(self, model, status=None):
+    def html(self, model, status=None, counter=None):
         import asyncio
 
         from varmeopt.web import WebUI
@@ -297,6 +297,7 @@ class UsagePageTest(unittest.TestCase):
             lambda: status or {},
             lambda: None,
             house_load=lambda: model,
+            usage=None if counter is None else (lambda: counter),
         )
         return asyncio.run(ui.usage(None)).text
 
@@ -313,12 +314,18 @@ class UsagePageTest(unittest.TestCase):
             load.curve.learn(float(outdoor), kw)
         return load
 
-    def test_both_charts_are_drawn(self):
+    def test_the_measured_chart_is_drawn(self):
         html = self.html(self.model(), {"house_load_kw": 2.4})
 
         self.assertIn("Målt over tid", html)
-        self.assertIn("Mod udetemperatur", html)
-        self.assertEqual(html.count("<svg"), 2)
+
+    def test_the_temperature_chart_is_gone(self):
+        # Kortet «forbrug mod udetemperatur» er taget af siden med vilje.
+        # Kurven bruges stadig - planlæggeren spørger den hvert minut - men
+        # den besvarede ikke det spørgsmål man står med på forbrugssiden.
+        html = self.html(self.model(), {"house_load_kw": 2.4})
+
+        self.assertNotIn("Mod udetemperatur", html)
 
     def test_a_modelled_window_is_drawn_open(self):
         # Et vindue hvor spaen kørte, skal kunne kendes fra et der er målt
@@ -333,7 +340,7 @@ class UsagePageTest(unittest.TestCase):
         html = self.html(HouseLoad())
 
         self.assertIn("For få målinger endnu", html)
-        self.assertIn("For få punkter", html)
+        self.assertIn("Ingen døgn talt op endnu", html)
 
 
 class BalanceCardTest(unittest.TestCase):
@@ -511,3 +518,90 @@ class ChargeCardTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageChartTest(unittest.TestCase):
+    """Dagskortet og savtakken over fire døgn."""
+
+    @staticmethod
+    def counter(days=4, until=1440):
+        from datetime import datetime, timedelta, timezone
+
+        from varmeopt.usage import Usage
+
+        tz = timezone(timedelta(hours=2))
+        u = Usage()
+        for day in range(17 - days, 17):
+            for minute in range(0, until if day == 16 else 1440, 5):
+                now = datetime(2026, 9, day, minute // 60, minute % 60,
+                               tzinfo=tz).timestamp()
+                hour = minute // 60
+                u.observe(
+                    now,
+                    1.2,
+                    7.5 if hour in (7, 20) else None,
+                    6.0 if 12 <= hour < 17 else None,
+                )
+        return u
+
+    def test_today_shows_the_three_and_yesterday_beside_them(self):
+        from varmeopt.web import _today_card
+
+        html = _today_card(self.counter())
+
+        for word in ("Rumvarme", "Varmt vand", "Spa", "i går"):
+            self.assertIn(word, html)
+
+    def test_yesterday_is_left_out_when_there_is_no_yesterday(self):
+        # Første døgn efter en ny installation. Et "i går 0.0" ville ligne en
+        # dag hvor der ikke blev brugt varme.
+        from varmeopt.web import _today_card
+
+        html = _today_card(self.counter(days=1))
+
+        self.assertNotIn("i går", html)
+
+    def test_the_chart_draws_one_band_per_day_with_three_layers(self):
+        from varmeopt.web import _usage_chart
+
+        html = _usage_chart(self.counter())
+
+        self.assertEqual(html.count("<polygon"), 12, "fire døgn a tre lag")
+        for label in ("13/9", "14/9", "15/9", "16/9"):
+            self.assertIn(label, html)
+
+    def test_the_curve_resets_at_midnight(self):
+        # Savtakken er hele pointen: hver dag begynder ved nul igen. Uden det
+        # er det en sum over fire døgn og ikke fire døgn ved siden af
+        # hinanden.
+        import re
+
+        from varmeopt.web import _usage_chart
+
+        html = _usage_chart(self.counter())
+        lines = re.findall(r'<polyline fill="none"[^>]*points="([^"]+)"', html)
+        starts = [float(line.split()[0].split(",")[1]) for line in lines]
+        ends = [float(line.split()[-1].split(",")[1]) for line in lines]
+
+        self.assertEqual(len(lines), 4)
+        # y vokser nedad i SVG: dagens start er lavt nede, slutningen højt oppe.
+        for first, last in zip(starts, ends):
+            self.assertGreater(first, last, "kurven skal stige gennem døgnet")
+        for first in starts[1:]:
+            self.assertAlmostEqual(first, starts[0], delta=1.0, msg="hver dag fra nul")
+
+    def test_a_day_without_measurements_is_left_out_not_drawn_as_zero(self):
+        from varmeopt.web import _usage_chart
+
+        html = _usage_chart(self.counter(days=2))
+
+        self.assertEqual(html.count("<polygon"), 6)
+        self.assertNotIn("13/9", html)
+
+    def test_nothing_counted_says_so_instead_of_drawing_an_empty_box(self):
+        from varmeopt.usage import Usage
+        from varmeopt.web import _today_card, _usage_chart
+
+        self.assertIn("ikke talt et helt døgn", _today_card(Usage()))
+        self.assertIn("Ingen døgn talt op", _usage_chart(Usage()))
+        self.assertIn("ikke talt et helt døgn", _today_card(None))

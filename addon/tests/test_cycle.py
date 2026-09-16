@@ -996,3 +996,91 @@ class Bt12TableFileTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageSensorTest(unittest.TestCase):
+    """Døgnets forbrug ud af lageret, som entiteter i Home Assistant.
+
+    De skal kunne tegnes en måned tilbage, og det kan en attribut ikke —
+    derfor tre sensorer og en sum, og derfor ``total_increasing``: tallet
+    tæller op gennem døgnet og falder til nul ved midnat.
+    """
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(), Store(tmp))
+        self.ha = FakeHa({})
+
+    def publish(self):
+        asyncio.run(self.app._publish_usage(self.ha))
+        return dict(self.ha.published)
+
+    def test_nothing_counted_publishes_nothing(self):
+        # Ellers ville der stå fire nuller i historikken fra den dag
+        # add-on'en blev installeret, og de er ikke målinger.
+        self.assertEqual(self.publish(), {})
+
+    def test_the_three_and_the_sum_are_published(self):
+        from datetime import datetime, timedelta, timezone
+
+        tz = timezone(timedelta(hours=2))
+        at = datetime(2026, 9, 16, 8, 0, tzinfo=tz).timestamp()
+        for step in range(61):
+            self.app.usage.observe(at + step * 60, 2.0, 6.0, 3.0)
+
+        published = self.publish()
+
+        self.assertAlmostEqual(published["sensor.varmeopt_forbrug_varme"], 2.0, places=1)
+        self.assertAlmostEqual(published["sensor.varmeopt_forbrug_vvb"], 6.0, places=1)
+        self.assertAlmostEqual(published["sensor.varmeopt_forbrug_spa"], 3.0, places=1)
+        self.assertAlmostEqual(published["sensor.varmeopt_forbrug_i_alt"], 11.0, places=1)
+
+    def test_they_are_energy_that_resets_at_midnight(self):
+        from datetime import datetime, timedelta, timezone
+
+        tz = timezone(timedelta(hours=2))
+        at = datetime(2026, 9, 16, 8, 0, tzinfo=tz).timestamp()
+        for step in range(11):
+            self.app.usage.observe(at + step * 60, 2.0, None, None)
+        self.publish()
+
+        for entity in (
+            "sensor.varmeopt_forbrug_varme",
+            "sensor.varmeopt_forbrug_i_alt",
+        ):
+            with self.subTest(entity=entity):
+                attributes = self.ha.attributes[entity]
+                self.assertEqual(attributes["device_class"], "energy")
+                self.assertEqual(attributes["state_class"], "total_increasing")
+                self.assertEqual(attributes["unit_of_measurement"], "kWh")
+
+    def test_yesterday_rides_along_as_an_attribute(self):
+        from datetime import datetime, timedelta, timezone
+
+        tz = timezone(timedelta(hours=2))
+        for day, kw in ((15, 3.0), (16, 2.0)):
+            at = datetime(2026, 9, day, 8, 0, tzinfo=tz).timestamp()
+            for step in range(61):
+                self.app.usage.observe(at + step * 60, kw, None, None)
+        self.publish()
+
+        i_alt = self.ha.attributes["sensor.varmeopt_forbrug_i_alt"]
+
+        self.assertEqual(i_alt["dato"], "2026-09-16")
+        self.assertAlmostEqual(i_alt["i_går_kwh"], 3.0, places=1)
+
+    def test_a_failed_write_does_not_take_the_cycle_with_it(self):
+        from datetime import datetime, timedelta, timezone
+
+        tz = timezone(timedelta(hours=2))
+        at = datetime(2026, 9, 16, 8, 0, tzinfo=tz).timestamp()
+        for step in range(11):
+            self.app.usage.observe(at + step * 60, 2.0, None, None)
+        self.ha.fail_on = "sensor.varmeopt_forbrug_vvb"
+
+        with self.assertRaises(HaError):
+            self.publish()
+
+        # Kaldet ligger bag ``_safely`` i cyklussen; her prøves kun at det
+        # er en HaError der slipper ud, så den kan fanges det rigtige sted.
+        self.assertIn("sensor.varmeopt_forbrug_varme", dict(self.ha.published))

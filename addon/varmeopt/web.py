@@ -26,6 +26,7 @@ from . import VERSION, selfupdate
 from .charge import slot_start
 from .cop import CopTable
 from .curve import HeatCurve
+from .usage import MINUTES_PER_DAY
 
 PORT = 8099
 
@@ -75,6 +76,7 @@ tbody th { left:0; z-index:1; }
           font-size:12px; margin:10px 0 0; flex-wrap:wrap; }
 .swatch { display:inline-block; width:13px; height:13px; border-radius:3px;
           vertical-align:-2px; margin-right:5px; border:1px solid #0002; }
+.was { color:var(--muted); font-size:12px; margin-left:8px; }
 code { font:12px/1.4 ui-monospace,SFMono-Regular,Consolas,monospace;
        background:#8881; padding:1px 5px; border-radius:4px; }
 .warn { color:var(--accent); }
@@ -137,6 +139,11 @@ _CURVE_INK = "#4a90c2"
 # Kilderne har hver sin farve hele vejen gennem UI'et, så en række
 # kan læses på farven alene.
 _SOURCE_INK = {"varmepumpe": "#1f7a4d", "pillefyr": "#b4530a"}
+
+# Forbrugets tre lag. Farverne er de samme som resten af siden bruger — grøn
+# til varmepumpens varme, blå til det interpolerede, orange til pillefyret —
+# så der ikke kommer tre nye farver ind i et hus der kun har tre i forvejen.
+_USAGE_INK = {"varme": "#1f7a4d", "vvb": "#2f6ea8", "spa": "#b4530a"}
 
 _SOURCE_LABEL = {
     "exact": ("Indlært", "#1f7a4d"),
@@ -206,6 +213,7 @@ class WebUI:
         standby: Callable[[], Any] | None = None,
         on_standby: Callable[[bool], str] | None = None,
         house_load: Callable[[], Any] | None = None,
+        usage: Callable[[], Any] | None = None,
         charge_plan: Callable[[], Any] | None = None,
         on_charge: Callable[[bool], str] | None = None,
     ) -> None:
@@ -220,6 +228,7 @@ class WebUI:
         self._standby = standby
         self._on_standby = on_standby
         self._house_load = house_load
+        self._usage = usage
         self._journal = journal
         self._options = options
         self._runner: web.AppRunner | None = None
@@ -543,9 +552,10 @@ class WebUI:
         )
 
     async def usage(self, _request: web.Request) -> web.Response:
-        """Husets forbrug: hvad der er målt, og hvad kurven har lært."""
+        """Forbruget: hvad der er gået ud af lageret i dag og de sidste døgn."""
         status = self._status()
         model = self._house_load() if self._house_load is not None else None
+        counter = self._usage() if self._usage is not None else None
 
         if model is None:
             return _page(
@@ -554,9 +564,8 @@ class WebUI:
                 "<h1>Forbrug</h1><p class='sub'>Ingen måling endnu.</p>",
             )
 
-        now_kw = status.get("house_load_kw")
         cards = [
-            ("Lige nu", _fmt(now_kw, "kW", 2)),
+            ("Lige nu", _fmt(status.get("house_load_kw"), "kW", 2)),
             ("Forbrugskurven", _fmt(status.get("house_load_curve_kw"), "kW", 2)),
             ("Kurvepunkter", f"{model.curve.point_count}"),
         ]
@@ -566,12 +575,14 @@ class WebUI:
 
         body = (
             "<h1>Forbrug</h1>"
-            '<p class="sub">Husets varmeforbrug læst af lagerets energiændring — '
-            "kilder ind minus det tankene tabte. Flowmåleren måler det samme "
-            "direkte, men først over 100 l/h.</p>"
-            f'<div class="card"><dl>{dl}</dl></div>'
+            '<p class="sub">Varmen <em>ud af lageret</em> — ikke den varmepumpen '
+            "lavede. Pumpen kan fylde tankene om formiddagen til en aften hvor "
+            "den står stille, og et regnskab på produktionen ville lægge "
+            "aftenens bad om formiddagen.</p>"
+            f"{_today_card(counter)}"
+            f"{_usage_chart(counter)}"
+            f'<h2>Husets træk</h2><div class="card"><dl>{dl}</dl></div>'
             f"{_history_chart(model.history)}"
-            f"{_load_curve_chart(model.curve)}"
             f'<p class="legend">{_esc(model.note)}</p>'
         )
         return _page("Forbrug", "usage", body)
@@ -1203,30 +1214,78 @@ def _history_chart(history: Any) -> str:
     )
 
 
-def _load_curve_chart(curve: Any) -> str:
-    """Forbruget mod udetemperaturen — husets egen kurve."""
-    temps = curve.outdoor_temps
-    if len(temps) < 2:
+def _today_card(counter: Any) -> str:
+    """Dagens forbrug, delt på de tre — med gårsdagens som skrift ved siden af.
+
+    Tallet tæller op gennem døgnet og nulstilles ved midnat. Uden i går ved
+    siden af siger det ingenting: 14 kWh er meget om sommeren og ingenting i
+    februar, og den eneste målestok man har ved hånden, er det samme hus i
+    forgårs.
+    """
+    today = counter.today if counter is not None else None
+    if today is None:
         return (
-            '<h2>Mod udetemperatur</h2><p class="legend">For få punkter til at '
-            "tegne en kurve endnu.</p>"
+            '<h2>I dag</h2><p class="legend">Der er ikke talt et helt døgn '
+            "endnu — tallene begynder ved næste midnat.</p>"
         )
 
-    lo, hi = temps[0], temps[-1]
-    values = [curve.point(u).kw for u in temps]
-    top = max(2.0, max(values)) * 1.15
+    yesterday = counter.yesterday if counter is not None else None
+    rows = []
+    for part, label in (("varme", "Rumvarme"), ("vvb", "Varmt vand"), ("spa", "Spa")):
+        before = (
+            ""
+            if yesterday is None
+            else f'<span class="was">i går {yesterday.part(part):.1f}</span>'
+        )
+        rows.append(
+            f'<dt><span class="swatch" style="background:{_USAGE_INK[part]}"></span>'
+            f"{label}</dt><dd>{today.part(part):.1f} kWh {before}</dd>"
+        )
 
-    width, height = 720, 240
+    total_before = (
+        ""
+        if yesterday is None
+        else f'<div class="sub" style="margin:0">i går {yesterday.total:.1f} kWh</div>'
+    )
+    return (
+        "<h2>I dag</h2>"
+        f'<div class="card"><div class="big">{today.total:.1f} kWh</div>'
+        f"{total_before}"
+        f'<dl style="margin-top:10px">{"".join(rows)}</dl></div>'
+    )
+
+
+def _usage_chart(counter: Any) -> str:
+    """Fire døgn, kumuleret. Kurven stiger gennem dagen og falder ved midnat.
+
+    Ét sammenhængende tidsforløb, ikke fire kurver oven på hinanden: savtakken
+    viser både hvor meget hver dag endte på, og hvornår på døgnet varmen gik.
+    De tre lag er stablede, så **overkanten er det samlede forbrug** og
+    afstanden mellem lagene er hvad hver af de tre tog.
+
+    Dage uden målinger springes over frem for at tegnes som nul. Et nul er en
+    påstand om at der ikke blev brugt varme; et hul er sandheden når add-on'en
+    stod stille.
+    """
+    days = [d for d in (counter.days if counter is not None else []) if d.samples]
+    if not days:
+        return (
+            '<h2>Fire døgn</h2><p class="legend">Ingen døgn talt op endnu.</p>'
+        )
+
+    top = max(2.0, max(day.total for day in days)) * 1.15
+    width, height = 720, 260
     left, right, upper, lower = 46, 14, 14, 34
+    band = (width - left - right) / len(days)
 
-    def sx(outdoor: float) -> float:
-        return left + (outdoor - lo) / max(1, hi - lo) * (width - left - right)
+    def sx(index: int, minute: int) -> float:
+        return left + band * (index + min(minute, MINUTES_PER_DAY) / MINUTES_PER_DAY)
 
-    def sy(kw: float) -> float:
-        return upper + (1 - kw / top) * (height - upper - lower)
+    def sy(kwh: float) -> float:
+        return upper + (1 - kwh / top) * (height - upper - lower)
 
     grid = []
-    step = 1 if top <= 6 else 2
+    step = max(1, int(top) // 5)
     for value in range(0, int(top) + 1, step):
         y = sy(value)
         grid.append(
@@ -1237,34 +1296,79 @@ def _load_curve_chart(curve: Any) -> str:
             f"{value}</text>"
         )
 
-    ticks = [
-        f'<text x="{sx(u):.1f}" y="{height - lower + 17}" text-anchor="middle" '
-        f'font-size="10" fill="currentColor" opacity=".55">{u}</text>'
-        for u in temps
-        if not u % 5
-    ]
-
-    line = " ".join(f"{sx(u):.1f},{sy(curve.point(u).kw):.1f}" for u in temps)
-    dots = []
-    for outdoor in temps:
-        point = curve.point(outdoor)
-        # Punkter med få målinger tegnes svagt, så tynde steder ses.
-        opacity = min(1.0, 0.3 + point.count / 20)
-        dots.append(
-            f'<circle cx="{sx(outdoor):.1f}" cy="{sy(point.kw):.1f}" r="3" '
-            f'fill="{_SOURCE_INK["varmepumpe"]}" opacity="{opacity:.2f}"/>'
+    bands, areas = [], []
+    for index, day in enumerate(days):
+        if index:
+            x = sx(index, 0)
+            bands.append(
+                f'<line x1="{x:.1f}" y1="{upper}" x2="{x:.1f}" '
+                f'y2="{height - lower}" stroke="currentColor" '
+                'stroke-opacity=".18"/>'
+            )
+        bands.append(
+            f'<text x="{sx(index, MINUTES_PER_DAY // 2):.1f}" '
+            f'y="{height - lower + 17}" text-anchor="middle" font-size="10" '
+            f'fill="currentColor" opacity=".55">{_esc(_day_label(day.date))}</text>'
         )
 
-    return (
-        "<h2>Mod udetemperatur</h2>"
-        f'<div class="card"><svg viewBox="0 0 {width} {height}" '
-        f'width="100%" role="img">{"".join(grid)}{"".join(ticks)}'
-        f'<polyline fill="none" stroke="{_SOURCE_INK["varmepumpe"]}" '
-        f'stroke-width="2" points="{line}"/>{"".join(dots)}</svg></div>'
-        '<p class="legend">Kilowatt mod grader ude. Svage punkter har få '
-        "målinger bag sig. Kun rene vinduer læres ind — et bad eller en spa "
-        "midt i en måling holder den ude.</p>"
+        # Stablet nedefra: rumvarme, så varmt vand, så spa. Hvert lag tegnes
+        # som et bånd mellem sin egen overkant og den forrige.
+        floor = [0.0] * len(day.samples)
+        for part, column in (("varme", 1), ("vvb", 2), ("spa", 3)):
+            upper_edge = [floor[i] + point[column] for i, point in enumerate(day.samples)]
+            top_line = " ".join(
+                f"{sx(index, point[0]):.1f},{sy(upper_edge[i]):.1f}"
+                for i, point in enumerate(day.samples)
+            )
+            bottom_line = " ".join(
+                f"{sx(index, point[0]):.1f},{sy(floor[i]):.1f}"
+                for i, point in reversed(list(enumerate(day.samples)))
+            )
+            areas.append(
+                f'<polygon fill="{_USAGE_INK[part]}" fill-opacity=".55" '
+                f'points="{top_line} {bottom_line}"/>'
+            )
+            floor = upper_edge
+        # Overkanten er det samlede forbrug, og den skal kunne følges.
+        total_line = " ".join(
+            f"{sx(index, point[0]):.1f},{sy(floor[i]):.1f}"
+            for i, point in enumerate(day.samples)
+        )
+        areas.append(
+            f'<polyline fill="none" stroke="{_USAGE_INK["varme"]}" '
+            f'stroke-width="1.5" points="{total_line}"/>'
+        )
+
+    keys = " ".join(
+        f'<span><span class="swatch" style="background:'
+        f'{_USAGE_INK[part]}"></span>{label}</span>'
+        for part, label in (
+            ("varme", "rumvarme"),
+            ("vvb", "varmt vand"),
+            ("spa", "spa"),
+        )
     )
+    return (
+        "<h2>Fire døgn</h2>"
+        f'<div class="card"><svg viewBox="0 0 {width} {height}" '
+        f'width="100%" role="img">{"".join(grid)}{"".join(bands)}'
+        f'{"".join(areas)}</svg>'
+        f'<p class="legend" style="margin-bottom:0">{keys}</p></div>'
+        '<p class="legend">Kilowatt-timer talt op siden midnat. Overkanten er '
+        "det samlede forbrug; lagene er hvad hver af de tre tog. Kurven "
+        "falder til nul ved hvert døgnskifte.</p>"
+    )
+
+
+def _day_label(date: str) -> str:
+    """«16/9» ud af «2026-09-16». En dato der ikke kan læses, står som den er."""
+    parts = date.split("-")
+    if len(parts) != 3:
+        return date
+    try:
+        return f"{int(parts[2])}/{int(parts[1])}"
+    except ValueError:
+        return date
 
 
 def _clock(minutes: float, now: float | None = None) -> str:

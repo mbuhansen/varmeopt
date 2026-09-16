@@ -28,6 +28,8 @@ HOUSE_LOAD_FILE = "house_load.json"
 CAPACITY_FILE = "capacity.json"
 CHARGE_FILE = "charge.json"
 GUARD_FILE = "guard.json"
+# Døgnets forbrug ud af lageret, fire døgn tilbage. Se ``usage``.
+USAGE_FILE = "usage.json"
 
 
 def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]:
