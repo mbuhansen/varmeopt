@@ -1142,6 +1142,90 @@ class StretchTopTest(unittest.TestCase):
         self.assertEqual(d.window_minutes, 6 * 30)
 
 
+class RisingEveningTest(unittest.TestCase):
+    """Et skifte i begrundelsen midt i en stigende aften er ikke to toppe.
+
+    Den 17. september kl. 09:30 stod der på plan-siden «spar 2,16 kr mod
+    kl. 16:00», og «hertil» sad på kl. 16. Men kl. 16 er hold charge til 1,07;
+    eksporten begynder kl. 19, og toppen ligger kl. 20 til 1,42.
+
+    Hold charge gør halvtimen til «net»: afladning er slået fra, og huset
+    køber. Fra kl. 17 er batteriet i stedet værdisat af den eksport der
+    kommer - «eksport» - og dér brød ``_peak_end`` toppen, uanset at prisen
+    springer 21 øre *opad* hen over skiftet. Låsen regnede blokken for brugt
+    kl. 17, før aftenen overhovedet var begyndt, og ``_stretch_top`` fik kun
+    kl. 16-16:30 at vælge imellem.
+
+    Bruddet på begrundelsen skal blive - se ``BatteryPlateauTest``, hvor en
+    eksport og et genkøb koster det samme - men det skal kun gælde når der
+    ikke ligger noget dyrere forude.
+    """
+
+    @staticmethod
+    def evening_plan():
+        rows = []
+
+        def add(count, state, import_rate, export_rate, soc):
+            for _ in range(count):
+                rows.append(
+                    {
+                        "state": state,
+                        "import_rate": import_rate,
+                        "export_rate": export_rate,
+                        "soc_percent": soc,
+                    }
+                )
+
+        add(5, "demand", 139, 73, 10)
+        add(8, "chrg", 50, 1, 60)
+        # Kl. 16: hold charge, og så er begrundelsen «net».
+        add(2, "holdchrg", 107, 47, 99)
+        # Kl. 17: eksporten forude værdisætter batteriet - «eksport» til 1,28.
+        add(4, "demand", 205, 98, 99)
+        # Kl. 19 og kl. 20: selve salget, og toppen.
+        add(2, "exp", 256, 139, 96)
+        add(2, "exp", 261, 142, 69)
+        # Kl. 21 falder det tilbage, og aftenen er forbi.
+        add(12, "demand", 107, 30, 20)
+        return Plan.from_predbat({"raw": {"rows": rows}})
+
+    def decide(self):
+        return planner(horizon_minutes=1440).decide(
+            self.evening_plan(),
+            cop_now=4.28,
+            cop_later=4.28,
+            headroom_kwh=30.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_the_reason_really_does_change_where_the_price_climbs(self):
+        # Forudsætningen. Skifter begrundelsen ikke kl. 17, siger de to
+        # næste ingenting.
+        p = self.evening_plan()
+        seksten = p.marginal(13 * 30)
+        sytten = p.marginal(15 * 30)
+        tyve = p.marginal(21 * 30)
+
+        self.assertEqual(seksten.reason, "net")
+        self.assertEqual(sytten.reason, "eksport")
+        self.assertGreater(sytten.kr_per_kwh, seksten.kr_per_kwh + 0.20)
+        self.assertGreater(tyve.kr_per_kwh, sytten.kr_per_kwh)
+
+    def test_the_top_is_the_evening_and_not_the_half_hour_before_it(self):
+        d = self.decide()
+
+        self.assertEqual(d.dear_starts_in, 13 * 30, "strækket begynder kl. 16")
+        self.assertEqual(d.window_minutes, 21 * 30, "men toppen ligger kl. 20")
+
+    def test_the_lock_covers_the_evening_it_was_charged_for(self):
+        # Låsen slutter når salget er forbi kl. 21 - ikke kl. 17, hvor
+        # aftenen knap er begyndt.
+        d = self.decide()
+
+        self.assertEqual(d.dear_ends_in, 23 * 30)
+
+
 class HalfHourFrameTest(unittest.TestCase):
     """Minutterne tæller fra halvtimens start, som planens rækker.
 

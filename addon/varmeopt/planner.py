@@ -1188,19 +1188,34 @@ class Planner:
         begivenheder, og de skal ikke lægges sammen til én top, selv om de
         tilfældigvis koster det samme.
 
-        Ligger resten af horisonten på et plateau med den samme begrundelse
-        og inden for hysteresen, rækker toppen til kanten. Det er ufarligt:
-        inden for plateauet er der intet at hente ved at lade op igen, og en
-        dal bagved afslutter det.
+        **Men kun når de tilfældigvis koster det samme.** Her brød
+        begrundelsen toppen uanset hvad der lå bagved, og det kostede den
+        17. september. Kl. 09:30 stod strækket fra kl. 16, hvor hold charge
+        gør halvtimen til «net» til 1,07, og fra kl. 17 værdisætter den
+        kommende eksport batteriet til «eksport». Det er et spring på 21 øre
+        strøm *opad* - og alligevel sluttede toppen kl. 17, før aftenen
+        begyndte. Låsen regnede blokken for brugt kl. 17, og overskriften
+        udnævnte kl. 16:00 til den dyreste time på en dag hvor eksporten
+        begynder kl. 19 og toppen ligger kl. 20 til 1,42.
+
+        Skiftet afslutter derfor kun toppen når der ikke ligger noget
+        dyrere forude: er der stadig en halvtime der stikker mere end
+        hysteresen op over det højeste vi har nået, er det én stigende top,
+        og den er ikke nået endnu. Det er den samme sondring som før, bare
+        stillet som et spørgsmål til priserne i stedet for til ordene.
+
+        Ligger resten af horisonten på et plateau inden for hysteresen,
+        rækker toppen til kanten. Det er ufarligt: inden for plateauet er der
+        intet at hente ved at lade op igen, og en dal bagved afslutter det.
         """
+        # Første gennemløb: halvtimerne frem til det første rigtige prisfald.
+        # Begrundelsen holdes udenfor her, for at spørge om den skal bryde,
+        # skal man kunne se hvad der ligger bagved skiftet.
+        rows: list[tuple[int, float, str]] = []
         top: float | None = None
-        last: int | None = None
-        reason: str | None = None
         for minutes in range(starts, self.horizon_minutes + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
-                break
-            if reason is not None and price.reason != reason:
                 break
             heat = self.cheapest_heat(
                 price.kr_per_kwh, self._cop_for(minutes, cop_now, cop_later)
@@ -1208,7 +1223,23 @@ class Planner:
             if top is not None and heat < top - self.hysteresis:
                 break
             top = heat if top is None else max(top, heat)
-            reason = price.reason
+            rows.append((minutes, heat, price.reason))
+
+        # Andet gennemløb: det er her begrundelsen får lov at afslutte
+        # toppen - men kun hvis resten ikke stiger over den.
+        top = None
+        last: int | None = None
+        reason: str | None = None
+        for index, (minutes, heat, why) in enumerate(rows):
+            if (
+                reason is not None
+                and why != reason
+                and top is not None
+                and max(h for _, h, _ in rows[index:]) <= top + self.hysteresis
+            ):
+                break
+            top = heat if top is None else max(top, heat)
+            reason = why
             last = minutes
         return None if last is None else last + SLOT_MINUTES
 
