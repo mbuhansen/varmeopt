@@ -559,6 +559,66 @@ class DeliveryTest(unittest.TestCase):
         self.assertFalse(self.charge.charging)
         self.assertIn("kørt", self.charge.note)
 
+    def test_the_counters_survive_a_restart(self):
+        """En genstart midt i en blok må ikke nulstille tællingen.
+
+        Det er den her der afgør om forlængelsen virker i praksis: add-on'en
+        genstarter ved hver opdatering, og blokken hentes fra disk. Mistede
+        den sin leverede mængde og sin frist, ville forlængelsen falde fra
+        hinanden præcis når den var mest brugt - og blokken køre på uret som
+        før, uden at nogen kunne se hvorfor.
+
+        Blokken fra den 17. september mistede dem, men kun fordi den var
+        skrevet af en udgave der ikke kendte felterne. Fra og med 0.72.0
+        gemmes de med.
+        """
+        sleep = 20
+        self.run_minutes(1, sleep, heat_kw=0.0)
+        før = self.charge.block
+
+        # Gem og hent, som add-on'en gør ved hver cyklus og hver genstart.
+        genstartet = ChargePlan.from_raw(self.charge.to_raw())
+        efter = genstartet.block
+
+        self.assertIsNotNone(efter)
+        self.assertEqual(efter.deadline, før.deadline)
+        self.assertAlmostEqual(efter.delivered_kwh, før.delivered_kwh, places=3)
+        self.assertAlmostEqual(efter.measured_seconds, før.measured_seconds, places=0)
+        self.assertGreater(efter.measured_seconds, 0, "der *er* målt noget")
+
+        # Og den forlænger sig stadig på den anden side af genstarten.
+        self.charge = genstartet
+        self.run_minutes(sleep + 1, self.length, heat_kw=self.rate)
+
+        self.assertTrue(self.charge.charging)
+        self.assertGreater(self.charge.block.ends_at, self.block.ends_at)
+
+    def test_a_block_from_before_the_counter_runs_on_the_clock(self):
+        """En blok gemt af en ældre udgave kører som den altid har gjort.
+
+        Den 17. september blev en blok lagt af 0.71.1 og hentet af 0.72.0.
+        Uden ``deadline`` ved den ikke hvor langt den må køre, og en
+        forlængelse ville være at køre i blinde ind i de dyre timer. Så den
+        lader være - det er den rigtige vej at fejle, og den gælder kun den
+        ene overgang.
+        """
+        self.run_minutes(1, 20, heat_kw=0.0)
+        gammel = self.charge.to_raw()
+        for felt in ("deadline", "delivered_kwh", "measured_seconds"):
+            gammel["block"].pop(felt)
+
+        self.charge = ChargePlan.from_raw(gammel)
+        self.assertEqual(self.charge.block.deadline, 0.0)
+        slut = self.charge.block.ends_at
+
+        note = self.run_until_stopped(21, self.length + 5, heat_kw=self.rate)
+
+        self.assertFalse(self.charge.charging)
+        self.assertEqual(slut, self.block.ends_at, "blokken blev ikke forlænget")
+        # Den siger stadig ærligt hvad der manglede. Dækningen henter sig
+        # ind efter genstarten - det er kun fristen der ikke kan genskabes.
+        self.assertIn("nåede ikke i lageret", note or "")
+
     def test_a_full_store_still_beats_a_missing_kwh(self):
         # Lageret kan ikke tage imod, og så er der ingen grund til at holde
         # kompressoren i gang efter en mængde der aldrig kommer ind.
