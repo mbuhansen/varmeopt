@@ -429,6 +429,150 @@ class OncePerStretchTest(unittest.TestCase):
         self.assertNotIn("allerede ladet op", self.charge.note)
 
 
+# Billigt nu og de næste to timer, dyrt fra slot 4. Blokken kan altså lægges
+# med det samme, og der er slæk mellem dens ende og fristen.
+DELIVERY_RATES = (35, 35, 35, 35, 155, 155, 155, 155)
+
+
+class DeliveryTest(unittest.TestCase):
+    """Blokken slutter på den mængde den blev lagt for, ikke på uret alene.
+
+    Den 17. september kl. 12 blev der lagt en blok på 20,8 kWh over 119
+    minutter, regnet af en *målt* ladehastighed på 10,5 kW. Men add-on'en var
+    lige genstartet på en ny udgave, og de første 25 minutter stod pumpen
+    stille: 0,07 kW el, 0,0 kW varme, «ignoreret: pumpen står stille». Uret
+    talte dem med alligevel, så blokken ville slutte 13:57 med omkring 16 af
+    de 20,8 kWh i lageret - og ``_finish`` markerede så hele strækket som
+    klaret frem til kl. 07:30 næste morgen.
+
+    Der var to timers slæk: blokken sluttede 13:57, og det dyre stræk
+    begyndte først kl. 16. Dem bruger den nu.
+    """
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        self.plan = plan(*DELIVERY_RATES)
+        self.charge = ChargePlan()
+        # Fristen er et *tidspunkt*. Planlæggeren giver den som minutter
+        # forude, regnet fra halvtimens start, og tallet tæller ned hver
+        # cyklus - så gør det her også. Uden nedtællingen skubbes fristen
+        # foran sig selv, og så kan ingen test nå den.
+        self.target = self.now + 120 * 60
+        self.step(0, heat_kw=0.0)
+        self.block = self.charge.block
+        self.length = int(round((self.block.ends_at - self.block.starts_at) / 60))
+        self.until = int(round((self.block.deadline - self.block.starts_at) / 60))
+        # Den hastighed der leverer mængden på blokkens egen tid.
+        self.rate = self.block.kwh / (self.length / 60)
+
+    def decision_at(self, at):
+        left = max(1, int(round((self.target - slot_start(at)) / 60)))
+        return FakeDecision(
+            planned_kwh=12.0,
+            window_starts_in=left,
+            window_minutes=left,
+            dear_starts_in=left,
+            dear_span_minutes=120,
+        )
+
+    def step(self, minute, heat_kw=None, full=False):
+        at = self.now + minute * 60
+        return self.charge.update(
+            at,
+            self.decision_at(at),
+            self.plan,
+            16.0,
+            full=full,
+            heat_kw=heat_kw,
+        )
+
+    def run_minutes(self, first, last, heat_kw, full=False):
+        """Kør cyklusser ét minut ad gangen, som add-on'en selv gør."""
+        for minute in range(first, last + 1):
+            self.step(minute, heat_kw=heat_kw, full=full)
+
+    def run_until_stopped(self, first, last, heat_kw, full=False):
+        """Kør til blokken slutter, og giv noten fra det minut.
+
+        Noten skal læses *når* den sættes. Cyklussen efter en afsluttet blok
+        skriver «allerede ladet op mod det her dyre stræk» oven i den - helt
+        korrekt, men så er grunden til at den sluttede, væk.
+        """
+        for minute in range(first, last + 1):
+            self.step(minute, heat_kw=heat_kw, full=full)
+            if not self.charge.charging and self.charge.block is None:
+                return self.charge.note
+        return None
+
+    def test_the_block_starts_now_and_has_room_to_grow(self):
+        # Forudsætningen for resten. Uden slæk mellem enden og fristen siger
+        # de næste tests ingenting.
+        self.assertEqual(self.block.starts_at, self.now)
+        self.assertGreater(self.block.deadline, self.block.ends_at)
+
+    def test_a_block_that_delivered_its_kwh_still_ends_on_time(self):
+        # Modtesten først. Leverer pumpen rigeligt, må forlængelsen ikke røre
+        # noget - ellers er den bare blevet til «kør altid til fristen».
+        self.run_minutes(1, self.length, heat_kw=self.rate * 1.5)
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("kørt", self.charge.note)
+        self.assertIsNone(self.charge.block)
+
+    def test_a_block_the_pump_slept_through_runs_on(self):
+        sleep = 20
+        self.run_minutes(1, sleep, heat_kw=0.0)
+        self.run_minutes(sleep + 1, self.length, heat_kw=self.rate)
+
+        self.assertTrue(self.charge.charging, "blokken skal køre videre")
+        self.assertGreater(self.charge.block.ends_at, self.block.ends_at)
+        # Og den strækker sig ikke længere end den tid der gik tabt.
+        self.assertLessEqual(
+            self.charge.block.ends_at, self.block.ends_at + (sleep + 1) * 60
+        )
+
+    def test_and_it_stops_once_the_kwh_are_in(self):
+        sleep = 20
+        self.run_minutes(1, sleep, heat_kw=0.0)
+        note = self.run_until_stopped(
+            sleep + 1, self.length + sleep + 5, heat_kw=self.rate
+        )
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("kørt", note or "")
+
+    def test_the_deadline_is_a_hard_ceiling(self):
+        # En blok må aldrig løbe ind i det dyre stræk - det er hele dens
+        # formål. Leverer pumpen ingenting, stopper den ved fristen.
+        note = self.run_until_stopped(1, self.until + 2, heat_kw=0.0)
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("nåede ikke i lageret", note or "")
+
+    def test_without_a_heat_reading_the_clock_still_rules(self):
+        # Har anlægget ingen varmeydelsesføler, ved vi ikke hvad der gik ind.
+        # Så kører blokken på uret som den altid har gjort - der findes ikke
+        # en dårligere grund til at holde kompressoren i gang end at man ikke
+        # kan måle.
+        self.run_minutes(1, self.length, heat_kw=None)
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("kørt", self.charge.note)
+
+    def test_a_full_store_still_beats_a_missing_kwh(self):
+        # Lageret kan ikke tage imod, og så er der ingen grund til at holde
+        # kompressoren i gang efter en mængde der aldrig kommer ind.
+        self.run_minutes(1, self.length, heat_kw=0.0)
+        self.assertTrue(self.charge.charging, "forlænget, så der er noget at afbryde")
+
+        note = self.run_until_stopped(
+            self.length + 1, self.length + 8, heat_kw=0.0, full=True
+        )
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("fuldt", note or "")
+
+
 class FallbackLockTest(unittest.TestCase):
     """Den 15. september: et relativt stræk må ikke låse hele horisonten.
 

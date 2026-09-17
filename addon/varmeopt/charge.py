@@ -48,6 +48,32 @@ SLOT_SECONDS = 1800.0
 # ville være et rigtigt overskud og et højtryk.
 FULL_HOLD_SECONDS = 180.0
 
+# Hvor tæt på sin mængde en blok skal være for at regnes for leveret.
+#
+# Varmeydelsen integreres minut for minut, så der samler sig en smule
+# afrunding; og de sidste par hundrede watt-timer er ikke værd at holde
+# kompressoren i gang for. Grænsen er den samme størrelsesorden som
+# følerstøjen på lagerets otte termometre.
+DELIVERED_TOLERANCE_KWH = 0.2
+
+# Længste spring mellem to cyklusser der tælles med i den leverede varme.
+#
+# Add-on'en kører hvert minut. Er der gået længere, har den været nede - og
+# så ved vi ikke hvad pumpen lavede imens. At lade være med at tælle er den
+# konservative vej: blokken tror den har leveret mindre end den måske har,
+# og forlænger derfor lidt for meget. Fristen er loftet der fanger det.
+MAX_INTEGRATION_GAP_SECONDS = 300.0
+
+# Hvor stor en del af den kørte blok der skal være målt, før den leverede
+# mængde må forlænge den.
+#
+# Uden den her forlængede en blok sig blindt på ethvert anlæg uden
+# varmeydelsesføler: ``delivered_kwh`` ville stå på nul, og nul er jo mindre
+# end mængden. Der findes ikke en dårligere grund til at holde kompressoren
+# i gang end at man ikke kan måle. Kan vi ikke se hvad der gik ind, kører
+# blokken på uret som den altid har gjort.
+MIN_MEASURED_SHARE = 0.5
+
 # Noten når der ikke er noget at sige. Den står som en konstant, så loggen kan
 # tie i netop det tilfælde uden at gætte på ordlyden - og sige noget i alle
 # de andre, hvor noten er det eneste sted der står hvorfor flaget er slukket.
@@ -93,6 +119,22 @@ class Block:
     starts_at: float
     ends_at: float
     kwh: float
+    # Den yderste grænse blokken må forlænges til: der hvor det dyre stræk
+    # begynder. En blok der løber ind i det dyre, modarbejder sit eget
+    # formål, så fristen er et hårdt loft og ikke et ønske.
+    deadline: float = 0.0
+    # Hvor meget varme pumpen faktisk har leveret siden blokken begyndte.
+    #
+    # Blokkens længde regnes af en *målt* ladehastighed, men hastigheden er
+    # et gennemsnit, og et minut hvor pumpen står stille - en afrimning, en
+    # genstart, vagtens indkøring - er et minut uret bruger alligevel. Den
+    # 17. september stod pumpen stille de første 25 minutter af en blok på
+    # 119, og de 20,8 kWh ville være landet på ca. 16. Derfor tælles der med.
+    delivered_kwh: float = 0.0
+    # Hvor mange sekunder af blokken vi rent faktisk har haft en måling for.
+    # En ydelse på nul er en måling - pumpen stod stille - mens en føler der
+    # er væk, ikke er det. Forskellen afgør om ``delivered_kwh`` må bruges.
+    measured_seconds: float = 0.0
     # Hvornår kompressoren faktisk starter. ``starts_at`` står på halvtimen,
     # så planens rækker kan tegne blokken; lægges den kl. :20 og starter med
     # det samme, er den første halvtime :00 - men den er ikke tyve minutter
@@ -124,6 +166,9 @@ class Block:
             "starts_at": round(self.starts_at, 1),
             "ends_at": round(self.ends_at, 1),
             "kwh": round(self.kwh, 3),
+            "deadline": round(self.deadline, 1),
+            "delivered_kwh": round(self.delivered_kwh, 3),
+            "measured_seconds": round(self.measured_seconds, 1),
             "began_at": None if self.began_at is None else round(self.began_at, 1),
             "manual": self.manual,
         }
@@ -139,6 +184,12 @@ class Block:
                 starts_at=float(raw["starts_at"]),
                 ends_at=float(raw["ends_at"]),
                 kwh=float(raw["kwh"]),
+                # Fra en ældre udgave mangler de to. Uden en frist kan
+                # blokken ikke forlænges - den kører som den altid har
+                # gjort, og det er den rigtige vej at fejle.
+                deadline=float(raw.get("deadline") or 0.0),
+                delivered_kwh=float(raw.get("delivered_kwh") or 0.0),
+                measured_seconds=float(raw.get("measured_seconds") or 0.0),
                 # Fra en ældre udgave mangler den; så gælder halvtimen.
                 began_at=(
                     float(raw["began_at"]) if raw.get("began_at") is not None else None
@@ -172,6 +223,9 @@ class ChargePlan:
     note: str = NO_PLAN
     # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
+    # Hvornår vi sidst så varmeydelsen. Integrationen har brug for et
+    # mellemrum, ikke et øjebliksbillede.
+    _last_seen: float | None = None
 
     # ---------------------------------------------------------------- opslag
 
@@ -213,6 +267,7 @@ class ChargePlan:
             starts_at=start,
             ends_at=ends,
             kwh=rate_kw * minutes / 60,
+            deadline=ends,
             began_at=now,
             manual=True,
         )
@@ -235,6 +290,74 @@ class ChargePlan:
 
     # -------------------------------------------------------------- skridtet
 
+    def _track(self, now: float, heat_kw: float | None) -> None:
+        """Tæl den varme pumpen har leveret siden sidste cyklus.
+
+        Kun mens blokken kører. Varmen inden den begyndte, hører til huset;
+        varmen efter hører til den næste blok.
+
+        Føleren er UVR'ens egen på varmepumpens kreds - den samme
+        ``charge_rate`` allerede måler hastigheden med. Er den væk, tælles
+        der ikke: et gæt ville enten forlænge en blok der var færdig, eller
+        afslutte en der ikke var.
+        """
+        seen, self._last_seen = self._last_seen, now
+        block = self.block
+        if block is None or block.manual:
+            return
+        if not (block.began <= now and now < block.ends_at):
+            return
+        if seen is None or heat_kw is None or not _finite(heat_kw):
+            return
+        gap = now - seen
+        if gap <= 0 or gap > MAX_INTEGRATION_GAP_SECONDS:
+            # Add-on'en har været nede. Vi ved ikke hvad pumpen lavede.
+            return
+        # En ydelse på nul tælles med i *begge* tal: der kom ingen varme, og
+        # vi ved det. Det er netop de minutter forlængelsen findes for.
+        self.block = replace(
+            block,
+            delivered_kwh=block.delivered_kwh + max(0.0, heat_kw) * gap / 3600,
+            measured_seconds=block.measured_seconds + gap,
+        )
+
+    def _extend(self, now: float, rate_kw: float) -> None:
+        """Lad blokken køre videre hvis den ikke nåede sin mængde.
+
+        Blokkens længde regnes af en målt ladehastighed, og den hastighed er
+        et gennemsnit over døgn. Et minut hvor pumpen ikke leverer, er
+        stadig et minut uret bruger: den 17. september stod pumpen stille de
+        første 25 minutter af en blok på 119 - add-on'en var lige genstartet
+        - og de 20,8 kWh ville være landet på ca. 16. Bagefter markerede
+        ``_finish`` strækket som klaret, så der kom ingen ny blok.
+
+        Fristen er et hårdt loft. En blok der løber ind i det dyre stræk,
+        modarbejder sit eget formål: pointen er at lageret er fyldt *inden*
+        prisen stiger. Når fristen er nået, slutter blokken - også med en
+        mængde der mangler. Det står allerede på siden som «dækker ikke
+        vinduet».
+
+        En manuel blok forlænges ikke. Den er en ordre på så mange minutter,
+        ikke på så mange kilowatt-timer.
+        """
+        block = self.block
+        if block is None or block.manual or rate_kw <= 0:
+            return
+        if now < block.ends_at or block.deadline <= block.ends_at:
+            return
+        # Uden måling af en rimelig del af blokken ved vi ikke hvad der gik
+        # ind, og så er uret det bedste vi har.
+        ran = now - block.began
+        if ran <= 0 or block.measured_seconds < MIN_MEASURED_SHARE * ran:
+            return
+        missing = block.kwh - block.delivered_kwh
+        if missing <= DELIVERED_TOLERANCE_KWH:
+            return
+        ends = min(block.deadline, now + missing / rate_kw * 3600)
+        if ends <= now:
+            return
+        self.block = replace(block, ends_at=ends)
+
     def update(
         self,
         now: float,
@@ -244,6 +367,7 @@ class ChargePlan:
         full: bool = False,
         source: str | None = None,
         min_runtime_minutes: float = 0.0,
+        heat_kw: float | None = None,
     ) -> bool:
         """Ét skridt. Returnerer om der skal lades lige nu.
 
@@ -251,8 +375,29 @@ class ChargePlan:
         den læste vi planlæggerens rå svar, og så kunne ét minuts udsving
         i COP eller pris afslutte en opladning som vagten samtidig holdt på
         varmepumpen. Er den ukendt, spørges beslutningen som før.
+
+        ``heat_kw`` er varmepumpens ydelse lige nu, målt. Den tælles op i
+        blokkens ``delivered_kwh``, så blokken kan slutte på den mængde den
+        blev lagt for og ikke bare på uret - se ``_extend``. Uden den
+        opfører blokken sig som før.
         """
         chosen = source if source is not None else getattr(decision, "source", None)
+
+        # 0. Lad blokken strække sig hvis den ikke nåede sin mængde, og tæl
+        #    så den leverede varme op. Det skal ske *før* alt andet: er
+        #    blokken forlænget, er den stadig i gang, og så gælder alle de
+        #    regler der holder en kørende blok - også dem der afbryder den.
+        #
+        #    **Rækkefølgen er ikke til forhandling.** ``_track`` tæller kun
+        #    mens blokken kører, og præcis i det minut hvor uret løber ud,
+        #    gør den ikke. Talte vi først, ville det minut falde på gulvet:
+        #    ``_extend`` så en mængde der manglede, forlængede med nøjagtig
+        #    det ene minut den manglede - og landede på kanten igen. Målt i
+        #    testen blev det til en blok der voksede et minut ad gangen uden
+        #    nogensinde at blive færdig. Strækker vi først, er blokken i gang
+        #    når minuttet tælles, og det lander hvor det hører hjemme.
+        self._extend(now, rate_kw)
+        self._track(now, heat_kw)
 
         # 1. Kører en blok, er den bundet. Kun to ting bryder den.
         if self.block is not None and self.block.running(now):
@@ -274,9 +419,16 @@ class ChargePlan:
             if chosen == "pillefyr" and not young and not self.block.manual:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
+            # Den leverede mængde står med, for det er den der afgør
+            # hvornår blokken er færdig - ikke minutterne alene.
+            leveret = (
+                ""
+                if self.block.manual
+                else f" ({self.block.delivered_kwh:.1f} leveret)"
+            )
             self.note = (
                 f"{'manuel opladning' if self.block.manual else 'lader'} "
-                f"{self.block.kwh:.1f} kWh, "
+                f"{self.block.kwh:.1f} kWh{leveret}, "
                 f"{self.block.minutes_left(now):.0f} min tilbage"
             )
             return True
@@ -288,6 +440,19 @@ class ChargePlan:
         #    formål - så når strækkets ende er passeret, er blokkens ende
         #    passeret for længst, og den her linje har allerede taget den.
         if self.block is not None and now >= self.block.ends_at:
+            # ``_extend`` har allerede haft chancen. Kommer vi hertil med en
+            # mængde der mangler, er det fristen der lukkede blokken - og så
+            # skal det stå der, i stedet for et «kørt» der lyder som om alt
+            # kom i lageret.
+            ran = now - self.block.began
+            measured = (
+                ran > 0 and self.block.measured_seconds >= MIN_MEASURED_SHARE * ran
+            )
+            missing = self.block.kwh - self.block.delivered_kwh
+            if not self.block.manual and measured and missing > DELIVERED_TOLERANCE_KWH:
+                return self._finish(
+                    now, f"tiden løb ud — {missing:.1f} kWh nåede ikke i lageret"
+                )
             return self._finish(now, "kørt")
 
         self._running = False
@@ -396,8 +561,18 @@ class ChargePlan:
             minutes = (ends - max(starts, now)) / 60
             want = min(float(want), rate_kw * minutes / 60)
         self.block = Block(
-            dear_from, dear_until, starts, ends, float(want), began_at=max(starts, now)
+            dear_from,
+            dear_until,
+            starts,
+            ends,
+            float(want),
+            deadline=deadline,
+            began_at=max(starts, now),
         )
+        # En ny blok har ikke leveret noget, og den forrige cyklus hører til
+        # den gamle. Uden nulstillingen ville det første mellemrum blive
+        # talt med i en blok der ikke var begyndt.
+        self._last_seen = now
         if self.block.running(now):
             self._running = True
             self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
