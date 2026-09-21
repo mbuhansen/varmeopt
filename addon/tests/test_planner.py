@@ -1411,6 +1411,81 @@ class RelativeStretchTest(unittest.TestCase):
         self.assertEqual(d.dear_ends_in, 12 * 30, "og låsen slutter ved faldet")
 
 
+class LockedPricesTest(unittest.TestCase):
+    """En prognose må sætte fristen, men ikke toppen, besparelsen eller låsen.
+
+    Nord Pools dag-i-morgen offentliggøres omkring kl. 13. Den 17. september
+    kl. 12:02 lå toppen kl. 22:00 på et genkøbsplateau til 1,955 - et tal der
+    alene kom af en prognosebund kl. 07:30 næste morgen. Da priserne blev
+    låst kl. 13:26, var kl. 22 i stedet 1,224, toppen flyttede til kl. 20:00
+    (1,423), låsen fra kl. 07:30 til kl. 02:00, og den lovede besparelse faldt
+    fra 6,26 til 3,59 kr.
+
+    At der *kommer* et salg, er planstruktur og ligger nogenlunde fast. Hvad
+    halvtimen koster, gør ikke. Derfor beskæres kun de tre.
+    """
+
+    # En billig nutid, og så ét sammenhængende dyrt stræk fra række 6 der
+    # stiger til sit højeste i række 14-15 - ude i prognosen.
+    RATES = (40,) * 6 + (150,) * 8 + (190,) * 2
+
+    def decide(self, locked=None):
+        return planner(horizon_minutes=1440).decide(
+            plan(*self.RATES),
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+            locked_minutes=locked,
+        )
+
+    def test_without_the_sensor_everything_counts_as_locked(self):
+        # Opførslen fra før, og svaret når sensoren ikke kan læses.
+        d = self.decide(locked=None)
+
+        self.assertEqual(d.window_minutes, 14 * 30, "prognosens top vinder")
+
+    def test_a_forecast_peak_cannot_be_named(self):
+        # Låst til og med række 13. Så er det de 150 der er toppen, ikke de
+        # 190 der endnu ikke er endelige.
+        d = self.decide(locked=13 * 30)
+
+        self.assertEqual(d.window_minutes, 6 * 30)
+        self.assertIn("om 180 min", d.reason)
+
+    def test_the_saving_is_counted_at_the_locked_top(self):
+        låst = self.decide(locked=13 * 30)
+        alt = self.decide(locked=None)
+
+        self.assertIsNotNone(låst.saving_kr)
+        self.assertLess(låst.saving_kr, alt.saving_kr, "ingen prognose-gevinst")
+
+    def test_the_lock_does_not_reach_into_the_forecast(self):
+        # Låsen rækker til og med den sidste låste halvtime, ikke videre.
+        låst = self.decide(locked=13 * 30)
+        alt = self.decide(locked=None)
+
+        self.assertEqual(låst.dear_ends_in, 14 * 30)
+        self.assertLess(låst.dear_ends_in, alt.dear_ends_in)
+
+    def test_the_deadline_still_knows_the_stretch(self):
+        # Fristen er et *tidspunkt*, og den må gerne komme fra prognosen.
+        # Ellers ville planlæggeren glemme at der kommer noget dyrt.
+        d = self.decide(locked=13 * 30)
+
+        self.assertEqual(d.dear_starts_in, 6 * 30)
+
+    def test_nothing_dear_inside_the_lock_means_no_charge(self):
+        # Konsekvensen, sagt lige ud: ligger alt det dyre bag låsen, lades
+        # der ikke op. Det er det rigtige svar - der er mange timer til, og
+        # prisen er ikke kendt endnu.
+        d = self.decide(locked=4 * 30)
+
+        self.assertFalse(d.charge)
+        self.assertIn("ingen dyrere timer forude", d.charge_state)
+
+
 class HalfHourFrameTest(unittest.TestCase):
     """Minutterne tæller fra halvtimens start, som planens rækker.
 

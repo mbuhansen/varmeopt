@@ -681,6 +681,71 @@ class CycleTest(unittest.TestCase):
         self.assertIn("sensor.varmeopt_beslutning", dict(self.ha.published))
 
 
+class LockedPricesSensorTest(unittest.TestCase):
+    """Aflæsningen af «er morgendagens priser endelige?».
+
+    Sensoren er brugerens egen,
+    ``binary_sensor.stromligning_energifyn_tomorrow_available_vat``, og den
+    står «Available» når Nord Pool har offentliggjort i morgen - typisk
+    omkring kl. 13. Indtil da er resten af horisonten en prognose.
+
+    Det farlige svar er ikke et forkert antal minutter; det er at svare
+    «intet er låst» på et anlæg der bare mangler entiteten. Så ville
+    planlæggeren holde op med at lade op. Derfor er ``None`` - «regn alt for
+    låst» - svaret på alt hvad vi ikke forstår.
+    """
+
+    LÅS = "binary_sensor.priser_i_morgen"
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
+        self.app = Varmeopt(options(entity_prices_locked=self.LÅS), Store(tmp))
+        self.ha = FakeHa({})
+
+    def read(self, value=None):
+        if value is not None:
+            self.ha._states[self.LÅS] = State(self.LÅS, value, {}, None)
+        return asyncio.run(self.app._locked_minutes(self.ha))
+
+    def test_no_entity_configured_means_everything_is_locked(self):
+        app = Varmeopt(options(entity_prices_locked=""), self.app.store)
+
+        self.assertIsNone(asyncio.run(app._locked_minutes(self.ha)))
+
+    def test_a_missing_entity_means_everything_is_locked(self):
+        # Entiteten findes ikke. Add-on'en må ikke reagere ved at holde op
+        # med at lade op.
+        self.assertIsNone(self.read())
+
+    def test_an_unavailable_sensor_means_everything_is_locked(self):
+        for word in ("unknown", "unavailable", "none", ""):
+            with self.subTest(word=word):
+                self.assertIsNone(self.read(word))
+
+    def test_tomorrow_available_reaches_past_midnight(self):
+        i_dag = self.read("off")
+        i_morgen = self.read("Available")
+
+        self.assertIsNotNone(i_dag)
+        self.assertIsNotNone(i_morgen)
+        # Nøjagtig et døgn længere, uanset hvornår på dagen testen kører.
+        self.assertEqual(i_morgen - i_dag, 24 * 60)
+
+    def test_the_vocabulary_is_read_both_ways(self):
+        # Sensoren siger «Available», Home Assistants egne binary_sensors
+        # siger «on». Begge skal forstås, og store bogstaver må ikke tælle.
+        låst = self.read("off")
+        for word in ("available", "AVAILABLE", "on", "true", "yes"):
+            with self.subTest(word=word):
+                self.assertEqual(self.read(word) - låst, 24 * 60)
+
+    def test_it_never_answers_with_a_past(self):
+        # Minutterne tæller fra halvtimens start og frem til midnat. De kan
+        # ikke være negative, uanset hvornår på døgnet der spørges.
+        self.assertGreater(self.read("off"), 0)
+
+
+
 class ForecastTest(unittest.TestCase):
     """Vejrudsigten: hver time i planen får sin egen COP."""
 

@@ -352,6 +352,7 @@ class Varmeopt:
 
         await self._refresh_forecast(ha)
         prices = await self._read_prices(ha, lookup)
+        locked_minutes = await self._locked_minutes(ha)
 
         # Planlæggeren binder pris, COP, lager og sol sammen. Den svarer
         # også uden en plan - så er det bare kildevalget.
@@ -410,6 +411,9 @@ class Varmeopt:
             # Planens minutter tæller fra halvtimens start. Det her er hvor
             # langt inde i den vi er - se ``Planner.decide``.
             elapsed_minutes=_elapsed_minutes(time.time()),
+            # Så langt frem priserne er endelige. Toppen, besparelsen og
+            # låsen må ikke hvile på en prognose - se ``Planner.decide``.
+            locked_minutes=locked_minutes,
         )
         # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
         # det. Siger den nej, står beslutningen der stadig, men flaget
@@ -958,6 +962,46 @@ class Varmeopt:
         }
 
     # ------------------------------------------------------------ vejrudsigt
+
+    async def _locked_minutes(self, ha: HomeAssistant) -> int | None:
+        """Hvor mange minutter frem elpriserne er endelige.
+
+        Nord Pools dag-i-morgen offentliggøres omkring kl. 13. Indtil da er
+        dagen i dag endelig og resten af horisonten en prognose; bagefter
+        rækker de endelige priser dagen i morgen ud.
+
+        Sensoren er den brugeren allerede har -
+        ``binary_sensor.stromligning_energifyn_tomorrow_available_vat`` - og
+        den står «Available» når morgendagen er låst. Ordforrådet er ikke
+        Home Assistants eget «on»/«off», så begge dele læses.
+
+        ``None`` betyder «regn alt for låst», altså opførslen fra før. Det er
+        svaret både når indstillingen er tom, og når sensoren ikke kan læses:
+        et anlæg uden den må ikke holde op med at lade op, fordi en entitet
+        er væk.
+
+        Minutterne tæller fra halvtimens start, som planens rækker.
+        """
+        entity = self.options.entity_prices_locked
+        if not entity:
+            return None
+        state = await self._state(ha, entity)
+        if state is None:
+            return None
+        word = str(state.state).strip().lower()
+        if word in ("unknown", "unavailable", "none", ""):
+            log.debug("%s står «%s» - regner alle priser for låste", entity, word)
+            return None
+        tomorrow = word in ("available", "on", "true", "yes")
+
+        # Midnat efter den sidste låste dag. Anlæggets egen tidszone, for
+        # det er den elpriserne følger.
+        now = datetime.now().astimezone()
+        midnight = (now + timedelta(days=2 if tomorrow else 1)).replace(
+            hour=0, minute=0, second=0, microsecond=0
+        )
+        base = datetime.fromtimestamp(slot_start(time.time())).astimezone()
+        return max(0, int((midnight - base).total_seconds() // 60))
 
     async def _refresh_forecast(self, ha: HomeAssistant | None) -> None:
         """Hent udsigten, men ikke hvert minut — den ændrer sig i timer."""

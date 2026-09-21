@@ -373,6 +373,7 @@ class Planner:
         demand_kw_at: Any = None,
         deadline_minutes: float | None = None,
         elapsed_minutes: float = 0.0,
+        locked_minutes: int | None = None,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
@@ -401,6 +402,31 @@ class Planner:
         56 grader fremløb - derfor kan varmen bagefter også bruges til bad -
         og det er en anden virkningsgrad end den rumvarmen køres på. Se
         ``_charge_cop``.
+
+        ``locked_minutes`` er hvor langt frem priserne er **endelige**.
+        Nord Pools dag-i-morgen offentliggøres omkring kl. 13, og indtil da er
+        resten af horisonten en prognose. Forskellen er ikke akademisk: den
+        17. september lå toppen kl. 22 på et genkøbsplateau til 1,955, der
+        alene kom af en prognosebund kl. 07:30 næste morgen. Med låste priser
+        blev toppen kl. 20:00 til 1,423, låsen gik fra kl. 07:30 til kl.
+        02:00, og den lovede besparelse faldt 43 %.
+
+        **En ulåst halvtime må sætte fristen, men ikke toppen, besparelsen
+        eller låsen.** At der kommer et salg kl. 07 i morgen, er Predbats
+        planstruktur og ligger nogenlunde fast; hvad den halvtime *koster*,
+        gør ikke. Derfor beskæres kun de tre: ``window_minutes``,
+        ``saving_kr`` og ``dear_ends_in``. ``dear_starts_in`` står som den er,
+        så fristen og spærren stadig kender salget.
+
+        Konsekvensen skal siges lige ud: ligger alt det dyre bag låsen -
+        typisk mellem kl. 09 og kl. 13, hvor dagens eget salg er forbi og
+        morgendagens endnu ikke er endeligt - svarer planlæggeren «ingen
+        dyrere timer forude» og lader ikke op. Det er det rigtige svar: der
+        er mange timer til salget, og prisen er ikke kendt endnu.
+
+        ``None`` betyder at alt regnes for låst, altså opførslen som før.
+        **Det er også svaret når sensoren ikke kan læses** - et anlæg uden
+        den må ikke holde op med at lade op.
 
         ``grid`` er den fysiske strømretning. Den gælder kun indeværende
         halvtime, og den *skal* med: uden den falder prissætningen af nu-timen
@@ -431,9 +457,15 @@ class Planner:
         # Nu-benet er opladningens egen pris, ikke rumvarmens. Marginen er
         # forskellen mellem at *fylde lageret nu* og at lave varmen når den
         # skal bruges - to forskellige temperaturer, to forskellige COP'er.
+        # Så langt priserne er endelige. Alt hvad der navngives, prissættes
+        # eller låses, holder sig inden for den - se docstringen.
+        locked = self.horizon_minutes
+        if locked_minutes is not None and _finite(locked_minutes):
+            locked = max(0, min(self.horizon_minutes, int(locked_minutes)))
+
         best_gap = 0.0
         best_when = None
-        for minutes in range(SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES):
+        for minutes in range(SLOT_MINUTES, locked + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break
@@ -464,7 +496,7 @@ class Planner:
         # opladningens, kunne en top med 12 øre at hente ligge under snittet:
         # intet stræk, intet fortrængt, «intet at lade op til».
         starts, span, ends = self._dear_stretch(
-            plan, vp_charge, cop_now, cop_later
+            plan, vp_charge, cop_now, cop_later, locked
         )
         stretch: dict[str, Any] = (
             {"dear_starts_in": starts, "dear_span_minutes": span, "dear_ends_in": ends}
@@ -481,7 +513,12 @@ class Planner:
         # egen top der skal nævnes - se ``_stretch_top``.
         top_gap = None
         if span > 0:
-            top = self._stretch_top(plan, starts, ends, cop_now, cop_later)
+            # Toppen skal være en pris vi kan stole på. Rækker strækket ind
+            # i prognosen, er det kun den låste del der kan navngives - og
+            # ligger hele strækket derude, er der ingen top at nævne.
+            top = self._stretch_top(
+                plan, starts, min(ends, locked), cop_now, cop_later
+            )
             if top is not None:
                 best_when, top_heat = top
                 top_gap = top_heat - vp_charge
@@ -1170,6 +1207,7 @@ class Planner:
         vp_now: float,
         cop_now: Any,
         cop_later: Any,
+        locked: int | None = None,
     ) -> tuple[int, int, int]:
         """Strækket der lades op imod.
 
@@ -1214,7 +1252,7 @@ class Planner:
         if span <= 0:
             return 0, 0, 0
         ends = starts + span
-        peak = self._peak_end(plan, starts, cop_now, cop_later)
+        peak = self._peak_end(plan, starts, cop_now, cop_later, locked)
         if peak is not None and starts < peak < ends:
             ends = peak
         return starts, span, ends
@@ -1225,8 +1263,12 @@ class Planner:
         starts: int,
         cop_now: Any,
         cop_later: Any,
+        locked: int | None = None,
     ) -> int | None:
         """Minutter til den første top i strækket er forbi.
+
+        ``locked`` er så langt priserne er endelige. Låsen må ikke hvile på en
+        prognose - se ``decide``.
 
         Fra strækkets start og frem: toppen fortsætter så længe varmen ligger
         inden for hysteresen af det højeste den har nået, og slutter ved det
@@ -1277,7 +1319,12 @@ class Planner:
         # skal man kunne se hvad der ligger bagved skiftet.
         rows: list[tuple[int, float, str]] = []
         top: float | None = None
-        for minutes in range(starts, self.horizon_minutes + 1, SLOT_MINUTES):
+        limit = (
+            self.horizon_minutes
+            if locked is None
+            else min(self.horizon_minutes, locked)
+        )
+        for minutes in range(starts, limit + 1, SLOT_MINUTES):
             price = plan.marginal(minutes)
             if price is None:
                 break

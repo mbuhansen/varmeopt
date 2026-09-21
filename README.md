@@ -282,6 +282,7 @@ siges i loggen ved opstart.
 | `hp_charge_temp` | 56 | Fremløbstemperaturen en blokopladning kører ved. Højere end rumvarmens setpunkt med vilje: varmen skal bagefter også kunne lave et bad. Ikke det samme som `dhw_setpoint`, som er hvad beholderen *kalder* med |
 | `planner_horizon_hours` | 24 | Hvor langt frem det giver mening at gemme varme. Et døgn dækker altid næste aften, uanset hvornår på dagen der spørges |
 | `store_full_by_hour` | 17 | Klokkeslættet lageret skal være fyldt til. En frist på uret, ikke et prisargument: der bades om aftenen, og huset kører på restvarmen natten igennem. Et tal uden for døgnet slår fristen fra |
+| `entity_prices_locked` | tom | Sensoren der siger om **morgendagens** elpriser er endelige — på anlægget her `binary_sensor.stromligning_energifyn_tomorrow_available_vat`, der står `Available` når Nord Pool har offentliggjort, typisk omkring kl. 13. Toppen, besparelsen og låsen må ikke hvile på en prognose; fristen må gerne, for *at* der kommer et salg, ligger fastere end hvad det koster. Tom eller ulæselig betyder «regn alt for låst» — et anlæg uden sensoren må ikke holde op med at lade op |
 | `entity_weather` | `weather.hjem` | Home Assistants egen vejrudsigt. Uden den arver hver time i planen den COP vi har nu |
 | `forecast_refresh_minutes` | 30 | Udsigten ændrer sig i timer, ikke i minutter |
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |

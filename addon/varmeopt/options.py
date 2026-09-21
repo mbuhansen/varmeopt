@@ -77,6 +77,14 @@ _DEFAULTS: dict[str, object] = {
     # pr. halvtime, så den her er den eneste måde at se hvad anlæggets
     # egen Predbat faktisk skriver - uden at gætte på dokumentationen.
     "entity_predbat_status": "predbat.status",
+    # Er morgendagens elpriser endelige? Nord Pools dag-i-morgen
+    # offentliggøres omkring kl. 13; indtil da er resten af horisonten en
+    # prognose. Sensoren står «Available» når de er låst.
+    #
+    # Tom som standard, og det er med vilje: uden den regnes alt for låst,
+    # altså opførslen fra før 0.74.0. Et anlæg uden sensoren må ikke holde
+    # op med at lade op.
+    "entity_prices_locked": "",
     # Grænsen Predbat lige nu har skrevet til inverteren: den ladetilstand
     # der lades op til, eller - under hold charge - den der må aflades ned
     # til. Uden den ser et hold ud som en total låsning, og de point ned til
@@ -295,6 +303,7 @@ class Options:
     forecast_refresh_minutes: float
     entity_predbat_plan: str
     entity_predbat_status: str
+    entity_prices_locked: str
     entity_predbat_charge_limit: str
     battery_empty_percent: float
     plan_max_age_minutes: float
