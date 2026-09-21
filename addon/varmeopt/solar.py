@@ -72,10 +72,21 @@ _DIFFUSE_SWING = 0.165
 # Hvor meget jorden kaster tilbage. Sne ville give mere, men det er få dage.
 _GROUND_ALBEDO = 0.2
 
-# Skalafaktoren måles mod geometrien, så den betyder kun noget så længe
-# geometrien er den samme. Version 2 tog diffus stråling med; et tal lært
-# under version 1 er malt med en anden malestok og kastes væk.
-MODEL_VERSION = 2
+# Skalafaktoren måles mod geometrien og mod hvordan døgnets udbytte gøres
+# op, så den betyder kun noget så længe begge dele står fast. Et tal lært
+# under en ældre version er målt med en anden målestok og kastes væk.
+#
+# Version 2 tog diffus stråling med.
+#
+# Version 3 læser dagstælleren som døgnets *højeste* aflæsning i stedet for
+# den sidste. Anlæggets tæller står på nul ved midnat, hvor døgnet blev gjort
+# op, så fire døgn i træk blev lært som nøjagtig 0,000 og skalafaktoren faldt
+# 0,049 til 0,026 - 0,85 pr. døgn, som udglatningen gør når den fodres med
+# nul. De lærte døgn er altså regnet af et input der ikke betyder det samme
+# mere, og de skal derfor kastes væk som ethvert andet skift af målestok.
+# Modellen seedes så igen af kalibreringsdagen, som med den her geometri
+# giver 0,476 - og brugerens egen måling den 20. september giver 0,433.
+MODEL_VERSION = 3
 
 
 def diffuse_fraction(day_of_year: int) -> float:

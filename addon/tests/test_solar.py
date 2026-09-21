@@ -321,6 +321,47 @@ class CounterResetsBeforeMidnightTest(unittest.TestCase):
         self.assertEqual(done[0], 2.6)
 
 
+class ScaleIsDiscardedWithTheOldCounterTest(unittest.TestCase):
+    """Det der blev lært af den sidste aflæsning, må ikke bæres med over.
+
+    De atten døgn modellen havde lært pr. 21. september, var regnet af
+    dagstællerens *sidste* aflæsning - og den står på nul ved midnat. Fire af
+    dem var nøjagtig 0,000, og skalafaktoren stod på 0,026 mod de 0,476
+    kalibreringen giver.
+
+    Udbyttet gøres nu op som døgnets højeste, og det er en anden målestok.
+    ``MODEL_VERSION`` findes til præcis det: et tal lært under en ældre
+    version kastes væk, og modellen seedes igen. Det koster ét døgn at lære
+    forfra og er billigere end fjorten dages forkerte forudsigelser, mens
+    udglatningen langsomt kravler tilbage.
+    """
+
+    def test_a_model_learned_with_the_old_counter_is_dropped(self):
+        gammel = {"model": 2, "scale": 0.0256, "days": 18.0}
+
+        m = SolarModel.from_raw(gammel, FYN)
+
+        self.assertIsNone(m.scale, "den ødelagte skalafaktor må ikke overleve")
+        self.assertEqual(m.days, 0.0)
+
+    def test_and_the_seed_is_close_to_what_the_plant_actually_did(self):
+        # Kalibreringsdagen giver 0,476 for den her geometri. Brugerens egen
+        # måling den 20. september - 16,4 kWh solvarme ved 35 kWh sol - giver
+        # 0,433. Seeden er altså et brugbart sted at begynde forfra.
+        målt = 16.4 / (35.0 * FYN.ratio(263))
+
+        self.assertAlmostEqual(seed_scale(FYN), 0.476, places=3)
+        self.assertLess(abs(seed_scale(FYN) - målt), 0.05)
+
+    def test_a_model_learned_with_the_new_counter_survives(self):
+        m = model(scale=0.45, days=6.0)
+
+        igen = SolarModel.from_raw(m.to_raw(), FYN)
+
+        self.assertAlmostEqual(igen.scale, 0.45, places=9)
+        self.assertEqual(igen.days, 6.0)
+
+
 class SuspiciousDayTest(unittest.TestCase):
     """En dag der ikke ligner modellen, skal råbes op i loggen.
 
