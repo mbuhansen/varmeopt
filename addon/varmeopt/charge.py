@@ -74,6 +74,21 @@ MAX_INTEGRATION_GAP_SECONDS = 300.0
 # blokken på uret som den altid har gjort.
 MIN_MEASURED_SHARE = 0.5
 
+# Hvor stor en del af blokkens egen længde der holdes fri mellem dens ende og
+# fristen.
+#
+# Blokken lægges så sent som muligt i det billige - varme der er lavet for
+# tidligt, står og taber sig, og imens kører huset af lageret i stedet for af
+# en varmepumpe ved rumvarmens setpunkt. Men presses den helt op mod fristen,
+# slutter den *præcis* der, og så kan ``_extend`` aldrig fyre: den kræver
+# plads mellem enden og fristen. De to ønsker trækker mod hinanden, og det
+# her er prisen for at beholde begge - et stykke slæk, betalt i lidt mere
+# ståtab, så minutter pumpen taber, stadig kan hentes ind.
+#
+# Gulvet er ét minimumstræk. Kortere end det kan kompressoren alligevel ikke
+# hente noget i.
+CHARGE_RESERVE_SHARE = 0.3
+
 # Noten når der ikke er noget at sige. Den står som en konstant, så loggen kan
 # tie i netop det tilfælde uden at gætte på ordlyden - og sige noget i alle
 # de andre, hvor noten er det eneste sted der står hvorfor flaget er slukket.
@@ -534,7 +549,17 @@ class ChargePlan:
         # ikke plads til 91. Målt over 200.000 kombinationer af ladehastighed
         # og vindue skete det i 9,4 % af tilfældene.
         needed = min(int(math.ceil(minutes)), max(1, int(window)))
-        found = plan.cheapest_window(needed, int(window), grid=grid)
+        # Blokken søges i et vindue der slutter før fristen, så der er noget
+        # at strække sig ud i. Kan den ikke være der, er en sen blok uden
+        # reserve stadig bedre end ingen blok - så søges der forfra i hele
+        # vinduet.
+        reserve = max(float(min_runtime_minutes), CHARGE_RESERVE_SHARE * minutes)
+        found = None
+        room = int(window - reserve)
+        if room >= needed:
+            found = plan.cheapest_window(needed, room, grid=grid)
+        if found is None:
+            found = plan.cheapest_window(needed, int(window), grid=grid)
         if found is None:
             # Ingen plads er ikke det samme som «drop det der allerede er
             # lagt». En blok der venter, er lagt på priser vi har set efter;

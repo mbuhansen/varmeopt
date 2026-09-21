@@ -1052,6 +1052,8 @@ class Plan:
         opslag en blokplan er bygget på: «hvornår ligger de billigste 45
         minutter mellem nu og klokken 18?»
 
+        Er flere vinduer lige billige, vinder det **seneste** - se løkken.
+
         ``grid`` gælder række 0, præcis som i ``marginal``. Den stod her ikke,
         og det satte planlæggeren og blokken op mod hinanden på den samme
         halvtime. Natten til den 21. september kl. 03:00 lå batteriet på 75 %
@@ -1070,8 +1072,26 @@ class Plan:
         if needed > limit:
             return None
 
+        # Bagfra, og det er hele forskellen. Uafgjort skal gå til det
+        # **seneste** vindue, ikke det første.
+        #
+        # Natten til den 20. september var strømmen billig hele vejen, og
+        # blokken landede kl. 22 - ni timer før det dyre kl. 07. Ikke fordi
+        # kl. 22 var bedre, men fordi den var først: løkken gik forfra og
+        # krævede *strengt* billigere for at flytte sig.
+        #
+        # To ting koster ved at lade for tidligt. Varmen står og taber sig
+        # natten igennem. Og imens kører huset af lageret i stedet for af en
+        # varmepumpe ved rumvarmens setpunkt, hvor COP'en er markant bedre
+        # end ved de 56 grader en blok kører ved. Begge dele vokser med hver
+        # time blokken ligger for tidligt.
+        #
+        # Der er ingen modsatrettet grund: er prisen den samme, er sent
+        # altid mindst lige så godt. En tidligere halvtime skal derfor være
+        # strengt billigere for at vinde, og det er den med scanningen vendt
+        # om - uden en tærskel nogen skal vedligeholde.
         best: tuple[int, float] | None = None
-        for start in range(limit - needed + 1):
+        for start in range(limit - needed, -1, -1):
             prices = [
                 self.marginal(s * SLOT_MINUTES, grid=grid if s == 0 else None)
                 for s in range(start, start + needed)

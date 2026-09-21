@@ -52,15 +52,30 @@ class BlockTest(unittest.TestCase):
             full=full,
         )
 
-    def test_it_waits_for_the_cheapest_window(self):
-        # De billige halvtimer begynder 120 minutter frem - regnet fra den
-        # halvtime vi står i, ikke fra det her sekund. Toleransen var før
-        # ét minut, og den skjulte præcis den drift.
+    def test_it_waits_for_the_latest_of_the_cheap_windows(self):
+        """De billige halvtimer er 120-240 min frem, og blokken tager de sidste.
+
+        Her stod 120 - det *første* billige vindue. Løkken i
+        ``cheapest_window`` gik forfra og krævede strengt billigere for at
+        flytte sig, så uafgjort gik altid til det tidligste. Natten til den
+        20. september var strømmen billig hele vejen, og blokken landede
+        derfor kl. 22, ni timer før det dyre kl. 07: varmen stod og tabte
+        sig, mens huset kørte af lageret i stedet for af en varmepumpe ved
+        rumvarmens setpunkt, hvor COP'en er bedre.
+
+        Ikke helt op mod fristen, dog. ``CHARGE_RESERVE_SHARE`` holder et
+        stykke fri, så forlængelsen har noget at strække sig ud i - her et
+        kvarter, som er ét minimumstræk. Uden det ville blokken slutte
+        præcis ved fristen, og ``_extend`` kunne aldrig fyre.
+        """
         self.assertFalse(self.step())
 
         starts, ends = self.charge.slots()
-        self.assertEqual(starts, slot_start(self.now) + 120 * 60)
+        deadline = slot_start(self.now) + 240 * 60
+
+        self.assertEqual(starts, slot_start(self.now) + 150 * 60)
         self.assertAlmostEqual((ends - starts) / 60, 45, delta=1)
+        self.assertGreater(deadline, ends, "der skal være plads til forlængelsen")
 
     def test_a_pending_block_does_not_drift_between_cycles(self):
         # Blokkens start lå før på ``now + offset``, hvor ``offset`` er
@@ -387,10 +402,17 @@ class OncePerStretchTest(unittest.TestCase):
         )
 
     def run_block(self):
-        for minute in (0, 15, 30, 31):
-            self.charge.update(
-                self.now + minute * 60, self.at(minute, 300), self.plan, 16.0
-            )
+        """Læg blokken, kør den, og lad den slutte.
+
+        Minutterne kan ikke stå fast: blokken lægges nu så sent i det billige
+        som reserven tillader, så den skal følges derhen hvor den faktisk
+        ligger.
+        """
+        self.charge.update(self.now, self.at(0, 300), self.plan, 16.0)
+        starts, ends = self.charge.slots()
+        for at in (starts, starts + 60, ends, ends + 60):
+            minute = int(round((at - self.now) / 60))
+            self.charge.update(at, self.at(minute, 300), self.plan, 16.0)
 
     def test_a_wandering_dearest_half_hour_does_not_open_a_new_block(self):
         self.run_block()
@@ -429,9 +451,10 @@ class OncePerStretchTest(unittest.TestCase):
         self.assertNotIn("allerede ladet op", self.charge.note)
 
 
-# Billigt nu og de næste to timer, dyrt fra slot 4. Blokken kan altså lægges
-# med det samme, og der er slæk mellem dens ende og fristen.
-DELIVERY_RATES = (35, 35, 35, 35, 155, 155, 155, 155)
+# Billigt nu og den næste halve time, dyrt derefter. Blokken kan altså kun
+# ligge ét sted - de her tests handler om forlængelsen, ikke om placeringen -
+# og der er slæk mellem dens ende og fristen.
+DELIVERY_RATES = (35, 35, 120, 120, 155, 155, 155, 155)
 
 
 class DeliveryTest(unittest.TestCase):

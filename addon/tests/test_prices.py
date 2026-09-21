@@ -955,9 +955,12 @@ class WindowTest(unittest.TestCase):
         self.assertLess(p.marginal(0).kr_per_kwh, 0.40)
         self.assertGreater(p.marginal(0, grid=gulv).kr_per_kwh, 0.90)
 
+        # Uden målingen er nu det billigste, og en halvtime kan ikke ligge
+        # senere end sig selv. Med målingen falder nu ud, og tilbage står to
+        # lige billige halvtimer - hvoraf den seneste vinder.
         self.assertEqual(p.cheapest_window(30, 120)[0], 0, "uden målingen: nu")
         self.assertEqual(
-            p.cheapest_window(30, 120, grid=gulv)[0], 30, "med målingen: bagefter"
+            p.cheapest_window(30, 120, grid=gulv)[0], 60, "med målingen: bagefter"
         )
 
     def test_the_meter_direction_cannot_move_the_cheapest_window(self):
