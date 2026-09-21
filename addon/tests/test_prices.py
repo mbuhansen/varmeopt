@@ -834,9 +834,13 @@ class MarginalTest(unittest.TestCase):
     def test_the_direction_of_the_meter_changes_nothing(self):
         """Den ene test der holder fejlen fra den 10. september ude.
 
-        Samme halvtime, fem forskellige strømretninger - og ``None``, for
-        ``cheapest_window`` prissætter uden måling overhovedet. Et eneste
-        tal må ikke afhænge af hvilken vej tråden gik i det øjeblik.
+        Samme halvtime, syv forskellige strømretninger. Et eneste tal må
+        ikke afhænge af hvilken vej tråden gik i det øjeblik.
+
+        Her stod at ``cheapest_window`` prissatte uden måling overhovedet.
+        Det gør den ikke længere - og det er netop den her test der gør
+        ændringen ufarlig: af hele ``Grid`` er det kun ``discharge_floor``
+        der afgør en pris, og den er Predbats gulv, ikke en måler.
         """
         p = plan(row(import_rate=210, export_rate=120), row(state="exp", export_rate=380))
         expected = p.marginal(0)
@@ -919,6 +923,59 @@ class WindowTest(unittest.TestCase):
         start, _ = p.cheapest_window(30, before_minutes=60)
 
         self.assertEqual(start, 30)
+
+    def test_hold_charge_over_the_floor_is_not_a_cheap_hour(self):
+        """Række 0 skal prissættes med målingen, ligesom beslutningen gør.
+
+        Natten til den 21. september kl. 03:00 stod batteriet på 75 % med
+        hold charge ned til 48 %. Det *måtte* altså stadig aflade, og den
+        næste kilowatt-time var derfor batteriets - værdisat mod salget
+        forude til 0,94. Men ``cheapest_window`` spurgte uden målingen, så
+        den så en låst halvtime der købes fra nettet til 0,39, og svarede
+        «nu er det billigste vindue». Planlæggeren sagde i samme cyklus
+        «venter, nu er dyrt», og blokken blev alligevel lagt oven på netop
+        den halvtime.
+
+        Det er ikke i strid med at strømretningen ikke må flytte en pris -
+        se ``test_the_direction_of_the_meter_changes_nothing``. Det eneste i
+        ``Grid`` der afgør noget her, er ``discharge_floor``, og den er ikke
+        en måling: den er det gulv Predbat har skrevet til inverteren.
+        """
+        rows = (
+            row(state="holdchrg", import_rate=39, export_rate=12, soc=75),
+            row(state="holdchrg", import_rate=42, export_rate=12, soc=70),
+            row(state="holdchrg", import_rate=42, export_rate=12, soc=70),
+            row(state="exp", import_rate=110, export_rate=103, soc=60),
+            row(state="exp", import_rate=110, export_rate=103, soc=55),
+        )
+        p = plan(*rows)
+        gulv = Grid(discharge_floor=48.0)
+
+        # Forudsætningen: den samme halvtime har to priser.
+        self.assertLess(p.marginal(0).kr_per_kwh, 0.40)
+        self.assertGreater(p.marginal(0, grid=gulv).kr_per_kwh, 0.90)
+
+        self.assertEqual(p.cheapest_window(30, 120)[0], 0, "uden målingen: nu")
+        self.assertEqual(
+            p.cheapest_window(30, 120, grid=gulv)[0], 30, "med målingen: bagefter"
+        )
+
+    def test_the_meter_direction_cannot_move_the_cheapest_window(self):
+        # Og målingen må stadig ikke kunne flytte noget på egen hånd. Går
+        # tråden den ene eller den anden vej, er svaret det samme - det er
+        # kun gulvet fra planen der tæller.
+        p = plan(
+            row(state="holdchrg", import_rate=300),
+            row(state="holdchrg", import_rate=100),
+            row(state="holdchrg", import_rate=90),
+        )
+        expected = p.cheapest_window(60)
+
+        for power in (-9000, -300, 0, 300, 9000):
+            with self.subTest(grid_power=power):
+                self.assertEqual(
+                    p.cheapest_window(60, grid=Grid(grid_power=power)), expected
+                )
 
     def test_a_window_longer_than_the_horizon_has_no_answer(self):
         p = plan(row(state="holdchrg"), row(state="holdchrg"))

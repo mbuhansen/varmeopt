@@ -1041,13 +1041,27 @@ class Plan:
     # -------------------------------------------------------------- planlæg
 
     def cheapest_window(
-        self, duration_minutes: int, before_minutes: int | None = None
+        self,
+        duration_minutes: int,
+        before_minutes: int | None = None,
+        grid: Grid | None = None,
     ) -> tuple[int, float] | None:
         """Find det billigste sammenhængende vindue.
 
         Returnerer (minutter frem til start, gennemsnitspris). Det er dette
         opslag en blokplan er bygget på: «hvornår ligger de billigste 45
         minutter mellem nu og klokken 18?»
+
+        ``grid`` gælder række 0, præcis som i ``marginal``. Den stod her ikke,
+        og det satte planlæggeren og blokken op mod hinanden på den samme
+        halvtime. Natten til den 21. september kl. 03:00 lå batteriet på 75 %
+        med hold charge ned til 48 %, så det *måtte* stadig aflade: med
+        målingen koster den næste kilowatt-time 0,94 - eksporten kl. 08 den
+        ellers ville være blevet solgt til - og uden den 0,39, fordi en låst
+        halvtime købes fra nettet. Planlæggeren sagde «venter, nu er dyrt»,
+        mens det her opslag svarede «nu er det billigste vindue», og blokken
+        blev lagt oven på netop den halvtime. To priser for det samme
+        kvarter, to modsatte svar, i den samme cyklus.
         """
         needed = max(1, math.ceil(duration_minutes / SLOT_MINUTES))
         limit = len(self.slots)
@@ -1058,7 +1072,10 @@ class Plan:
 
         best: tuple[int, float] | None = None
         for start in range(limit - needed + 1):
-            prices = [self.marginal(s * SLOT_MINUTES) for s in range(start, start + needed)]
+            prices = [
+                self.marginal(s * SLOT_MINUTES, grid=grid if s == 0 else None)
+                for s in range(start, start + needed)
+            ]
             if any(p is None for p in prices):
                 continue
             average = sum(p.kr_per_kwh for p in prices) / needed  # type: ignore[union-attr]

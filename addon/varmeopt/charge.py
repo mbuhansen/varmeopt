@@ -368,6 +368,7 @@ class ChargePlan:
         source: str | None = None,
         min_runtime_minutes: float = 0.0,
         heat_kw: float | None = None,
+        grid: Any = None,
     ) -> bool:
         """Ét skridt. Returnerer om der skal lades lige nu.
 
@@ -375,6 +376,11 @@ class ChargePlan:
         den læste vi planlæggerens rå svar, og så kunne ét minuts udsving
         i COP eller pris afslutte en opladning som vagten samtidig holdt på
         varmepumpen. Er den ukendt, spørges beslutningen som før.
+
+        ``grid`` er den fysiske strømretning, og den gælder kun den halvtime
+        vi står i - men den *skal* med. Uden den prissætter ``cheapest_window``
+        række 0 som om batteriet var låst, og så kan blokken lægges oven på
+        en halvtime planlæggeren i samme cyklus har kaldt for dyr.
 
         ``heat_kw`` er varmepumpens ydelse lige nu, målt. Den tælles op i
         blokkens ``delivered_kwh``, så blokken kan slutte på den mængde den
@@ -528,7 +534,7 @@ class ChargePlan:
         # ikke plads til 91. Målt over 200.000 kombinationer af ladehastighed
         # og vindue skete det i 9,4 % af tilfældene.
         needed = min(int(math.ceil(minutes)), max(1, int(window)))
-        found = plan.cheapest_window(needed, int(window))
+        found = plan.cheapest_window(needed, int(window), grid=grid)
         if found is None:
             # Ingen plads er ikke det samme som «drop det der allerede er
             # lagt». En blok der venter, er lagt på priser vi har set efter;

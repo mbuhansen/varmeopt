@@ -1115,6 +1115,55 @@ class Planner:
             return 0, 0
         return first, last - first + SLOT_MINUTES
 
+    def _export_stretch(self, plan: Any) -> tuple[int, int]:
+        """Den næste blok hvor planen faktisk sælger.
+
+        Returnerer (minutter til den begynder, længden).
+
+        **Det er her pengene tjenes, og derfor er det her der regnes imod.**
+        Hver kilowatt-time varmepumpen bruger mens der eksporteres, er en
+        kilowatt-time der ikke blev solgt - og tabet er hele eksportprisen,
+        ikke en forskel op til pillefyret. Hele opladningen findes for at
+        holde pumpen ude af det vindue; så skal vinduet også være det den
+        sigter mod.
+
+        Uden den her var strækket «alt hvad der er dyrere end lige nu», og
+        det gjorde det til en egenskab ved *hvornår man spørger*. Natten til
+        den 21. september kl. 03:00 var nu-prisen selv en eksportpris -
+        batteriet lå på 75 % med hold charge ned til 48 %, så den næste
+        kilowatt-time blev værdisat mod salget kl. 08. Morgeneksporten kl.
+        07-09 kostede 0,367 i varme mod nuets 0,344: 2,3 øre, under
+        hysteresen. Så faldt morgenen ud af strækket, som hoppede til kl. 15,
+        og spærren sagde med rette «det er et nyt stræk» og lagde en blok
+        mere - midt om natten, før den eksport den lige havde ladet op til.
+
+        En frossen eksport tæller ikke. «frzexp» sælger ikke batteriet, så
+        der er ingen indtægt at give afkald på - samme regel som
+        ``_next_sale`` og prissætningen følger.
+
+        Hultolerancen er den samme som i de to andre stræk: huset trækker
+        videre af lageret i en enkelt halvtime uden salg, og et eksportvindue
+        delt af en halv time er stadig ét vindue.
+        """
+        first = last = None
+        gap = 0
+        for minutes in range(SLOT_MINUTES, self.horizon_minutes + 1, SLOT_MINUTES):
+            slot = plan.at(minutes)
+            if slot is None:
+                break
+            if slot.exporting and not slot.frozen:
+                if first is None:
+                    first = minutes
+                last = minutes
+                gap = 0
+            elif first is not None:
+                gap += SLOT_MINUTES
+                if gap > MAX_GAP_IN_WINDOW:
+                    break
+        if first is None or last is None:
+            return 0, 0
+        return first, last - first + SLOT_MINUTES
+
     def _dear_stretch(
         self,
         plan: Any,
@@ -1122,14 +1171,26 @@ class Planner:
         cop_now: Any,
         cop_later: Any,
     ) -> tuple[int, int, int]:
-        """Strækket der lades op imod. Absolut når der findes et.
+        """Strækket der lades op imod.
 
         Returnerer (minutter til det begynder, længden, minutter til spærren
         regner det for dækket).
 
-        Findes der timer hvor pumpen taber til pillefyret, er *de* timer
-        strækket, og det slutter hvor de slutter. Findes der ingen, falder vi
-        tilbage på den relative: hvad der er dyrere end nu.
+        Tre kilder, i den rækkefølge:
+
+        1. **Ligger der en eksport forude, er det den.** Det er der pengene
+           tjenes - se ``_export_stretch``.
+        2. Ellers de timer hvor pumpen taber til pillefyret. *De* timer er
+           strækket, og det slutter hvor de slutter.
+        3. Ellers det relative: hvad der er dyrere end nu.
+
+        Rækkefølgen mellem 1 og 2 er brugerens valg, truffet den 21.
+        september: under en eksport er tabet hele salgsprisen, mens det i en
+        pilletime kun er forskellen op til pillefyret. Ligger en pilletime
+        *før* eksporten, bliver den ikke dækket af det her - og det er ikke
+        set på anlægget endnu, fordi ingen time i horisonten når pillefyrets
+        pris. Sker det, er svaret at lade strækket begynde ved den tidligste
+        af de to, ikke at bytte om på rækkefølgen.
 
         Her stod at tilbagefaldet var ufarligt, fordi den dyreste halvtime
         er entydig når ingen rammer pilleloftet. Det holdt for toppen, men
@@ -1143,6 +1204,9 @@ class Planner:
         den første top i strækket - se ``_peak_end``. Er toppen forbi, er det
         den blokken blev lagt imod, der er forbi.
         """
+        starts, span = self._export_stretch(plan)
+        if span > 0:
+            return starts, span, starts + span
         starts, span = self._dear_period(plan, cop_now, cop_later)
         if span > 0:
             return starts, span, starts + span

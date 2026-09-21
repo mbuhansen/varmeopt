@@ -1069,11 +1069,16 @@ class BatteryPlateauTest(unittest.TestCase):
         # bruddet på begrundelsen rakte den til kl. 09:30 - hele natten på
         # én blok - fordi de ti flade timer ligger inden for hysteresen af
         # hinanden og af aftenen.
+        #
+        # Siden 21. september når den slet ikke dertil: ligger der en
+        # eksport forude, *er* den strækket, og plateauet kan slet ikke komme
+        # med. Samme svar, ad en kortere vej - og ``_peak_end`` bevogtes nu
+        # af ``RelativeStretchTest``, hvor der ingen eksport er.
         d = self.decide()
 
-        self.assertEqual(d.dear_starts_in, 450)
-        self.assertEqual(d.dear_ends_in, 570)
-        self.assertGreater(d.dear_starts_in + d.dear_span_minutes, d.dear_ends_in)
+        self.assertEqual(d.dear_starts_in, 450, "eksporten begynder kl. 19")
+        self.assertEqual(d.dear_ends_in, 570, "og slutter kl. 21")
+        self.assertEqual(d.dear_span_minutes, 120, "strækket *er* de to timer")
 
     def test_the_peak_named_is_the_one_being_charged_for(self):
         # Her stod plateauets sidste halvtime - den koldeste, ikke den
@@ -1156,9 +1161,12 @@ class RisingEveningTest(unittest.TestCase):
     kl. 17, før aftenen overhovedet var begyndt, og ``_stretch_top`` fik kun
     kl. 16-16:30 at vælge imellem.
 
-    Bruddet på begrundelsen skal blive - se ``BatteryPlateauTest``, hvor en
-    eksport og et genkøb koster det samme - men det skal kun gælde når der
-    ikke ligger noget dyrere forude.
+    Bruddet på begrundelsen skal blive - se ``RelativeStretchTest`` - men det
+    skal kun gælde når der ikke ligger noget dyrere forude.
+
+    Siden 21. september er svaret her to gange rigtigt: eksporten kl. 19-21
+    *er* strækket, så kl. 16 kan slet ikke blive toppen, og inde i eksporten
+    er kl. 20 den dyreste halvtime.
     """
 
     @staticmethod
@@ -1215,8 +1223,8 @@ class RisingEveningTest(unittest.TestCase):
     def test_the_top_is_the_evening_and_not_the_half_hour_before_it(self):
         d = self.decide()
 
-        self.assertEqual(d.dear_starts_in, 13 * 30, "strækket begynder kl. 16")
-        self.assertEqual(d.window_minutes, 21 * 30, "men toppen ligger kl. 20")
+        self.assertEqual(d.dear_starts_in, 19 * 30, "strækket er eksporten kl. 19")
+        self.assertEqual(d.window_minutes, 21 * 30, "og toppen i den ligger kl. 20")
 
     def test_the_lock_covers_the_evening_it_was_charged_for(self):
         # Låsen slutter når salget er forbi kl. 21 - ikke kl. 17, hvor
@@ -1224,6 +1232,183 @@ class RisingEveningTest(unittest.TestCase):
         d = self.decide()
 
         self.assertEqual(d.dear_ends_in, 23 * 30)
+
+
+class ExportStretchTest(unittest.TestCase):
+    """Ligger der en eksport forude, er det den der regnes imod.
+
+    Det er der pengene tjenes: hver kilowatt-time varmepumpen bruger mens der
+    eksporteres, er en kilowatt-time der ikke blev solgt, og tabet er hele
+    eksportprisen - ikke en forskel op til pillefyret.
+
+    Natten til den 21. september kl. 03:00 viste hvad alternativet koster.
+    Batteriet lå på 75 % med hold charge ned til 48 %, så det måtte stadig
+    aflade, og nu-prisen blev derfor *selv* en eksportpris: batteriet blev
+    værdisat mod salget kl. 08. Morgeneksporten lå kun et par øre over den -
+    under hysteresen - så med «dyrt = dyrere end lige nu» faldt morgenen helt
+    ud af strækket, der i stedet hoppede frem til eftermiddagen. Spærren så
+    med rette et nyt stræk og lagde en blok mere kl. 03:10, midt om natten,
+    til den eksport den lige havde ladet op til.
+
+    Planen her har samme form: nu er værdisat mod salget, salget ligger i
+    række 7-10, og der ligger en dyrere ikke-eksport-strækning bagefter.
+    """
+
+    @staticmethod
+    def plan_rows(export_state="exp"):
+        rows = []
+
+        def add(count, state, import_rate, export_rate, soc):
+            for _ in range(count):
+                rows.append(
+                    {
+                        "state": state,
+                        "import_rate": import_rate,
+                        "export_rate": export_rate,
+                        "soc_percent": soc,
+                    }
+                )
+
+        # Nu: batteriet leverer, og det værdisættes mod salget forude.
+        add(1, "demand", 94, 39, 75)
+        # Natten er billig net-strøm under hold charge.
+        add(6, "holdchrg", 40, 12, 70)
+        # Kl. 07-09: salget. Det er her pengene er.
+        add(4, export_state, 103, 103, 60)
+        # Og bagefter en dyrere strækning der *ikke* er et salg.
+        add(10, "holdchrg", 160, 60, 40)
+        add(12, "holdchrg", 40, 12, 40)
+        return rows
+
+    def plan(self, export_state="exp"):
+        return Plan.from_predbat({"raw": {"rows": self.plan_rows(export_state)}})
+
+    def decide(self, export_state="exp"):
+        return planner(horizon_minutes=1440).decide(
+            self.plan(export_state),
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_the_sale_is_barely_dearer_than_now(self):
+        # Forudsætningen, og hele grunden til at det gik galt: nu er selv
+        # værdisat mod salget, så de to ligger tæt. Er springet stort, siger
+        # testen nedenfor ingenting - så ville enhver regel finde salget.
+        p = planner()
+        plan = self.plan()
+        nu = p.cheapest_heat(plan.marginal(0).kr_per_kwh, 4.4)
+        salg = p.cheapest_heat(plan.marginal(7 * 30).kr_per_kwh, 4.4)
+        senere = p.cheapest_heat(plan.marginal(11 * 30).kr_per_kwh, 4.4)
+
+        self.assertEqual(plan.marginal(0).reason, "eksport")
+        self.assertLess(salg - nu, p.hysteresis, "salget er ikke «dyrere end nu»")
+        self.assertGreater(senere - nu, p.hysteresis, "men den senere top er")
+
+    def test_the_export_is_the_stretch_and_not_the_later_peak(self):
+        d = self.decide()
+
+        self.assertEqual(d.dear_starts_in, 7 * 30, "salget begynder i række 7")
+        self.assertEqual(d.dear_span_minutes, 4 * 30, "og varer fire halvtimer")
+        self.assertEqual(d.dear_ends_in, 11 * 30, "spærren dækker hele salget")
+
+    def test_a_frozen_export_is_not_a_sale(self):
+        # «frzexp» tømmer ikke batteriet ud på nettet, så der er ingen
+        # indtægt at give afkald på. Samme regel som prissætningen følger.
+        d = self.decide(export_state="frzexp")
+
+        self.assertNotEqual(d.dear_starts_in, 7 * 30)
+
+    def test_the_store_must_be_full_before_the_sale_begins(self):
+        # Og når der *er* noget at hente ved at lade op - her er nu billig
+        # net-strøm i stedet - er fristen salgets begyndelse.
+        rows = self.plan_rows()
+        rows[0] = {
+            "state": "holdchrg",
+            "import_rate": 40,
+            "export_rate": 12,
+            "soc_percent": 75,
+        }
+        d = planner(horizon_minutes=1440).decide(
+            Plan.from_predbat({"raw": {"rows": rows}}),
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+        self.assertEqual(d.dear_starts_in, 7 * 30)
+        self.assertEqual(d.window_starts_in, 7 * 30, "fyldt inden der sælges")
+
+
+class RelativeStretchTest(unittest.TestCase):
+    """Uden en eksport gælder det relative stræk - og ``_peak_end`` med det.
+
+    Toppen må ikke brydes hvor prisens begrundelse skifter, hvis prisen
+    stadig stiger bagved. Her går planen fra «net, lader op» til «net» midt i
+    en stigning: hold charge afløser ladningen, og ordet skifter, mens prisen
+    går 1,07 -> 1,28 -> 1,42.
+
+    Det er formen fra den 17. september, hvor 0.70.1 svarede med den
+    halvtime *før* stigningen. Dengang lå der en eksport i planen, og siden
+    den 21. september ville den derfor blive taget af eksportreglen i stedet
+    - så reglen her skal bevogtes et sted hvor der ingen eksport er, eller
+    den er ikke bevogtet.
+    """
+
+    @staticmethod
+    def rising_plan():
+        rows = []
+
+        def add(count, state, rate):
+            for _ in range(count):
+                rows.append(
+                    {"state": state, "import_rate": rate, "export_rate": rate - 30}
+                )
+
+        add(4, "chrg", 40)
+        add(2, "chrg", 107)
+        add(4, "holdchrg", 128)
+        add(2, "holdchrg", 142)
+        add(12, "holdchrg", 40)
+        return Plan.from_predbat({"raw": {"rows": rows}})
+
+    def decide(self):
+        return planner(horizon_minutes=1440).decide(
+            self.rising_plan(),
+            cop_now=4.28,
+            cop_later=4.28,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_there_is_no_export_to_take_it(self):
+        # Forudsætningen. Ligger der et salg i planen, siger de næste
+        # ingenting - så er det eksportreglen der svarer.
+        plan = self.rising_plan()
+        self.assertFalse(
+            any(s.exporting and not s.frozen for s in plan.slots),
+            "planen må ikke indeholde et salg",
+        )
+
+    def test_the_reason_changes_where_the_price_climbs(self):
+        plan = self.rising_plan()
+
+        self.assertEqual(plan.marginal(5 * 30).reason, "net, lader op")
+        self.assertEqual(plan.marginal(6 * 30).reason, "net")
+        self.assertGreater(
+            plan.marginal(6 * 30).kr_per_kwh, plan.marginal(5 * 30).kr_per_kwh + 0.20
+        )
+
+    def test_the_top_is_the_climb_and_not_the_word(self):
+        d = self.decide()
+
+        self.assertEqual(d.window_minutes, 10 * 30, "toppen er de 1,42")
+        self.assertEqual(d.dear_ends_in, 12 * 30, "og låsen slutter ved faldet")
 
 
 class HalfHourFrameTest(unittest.TestCase):

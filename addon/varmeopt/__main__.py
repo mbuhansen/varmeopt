@@ -449,6 +449,9 @@ class Varmeopt:
             # blev lagt for og ikke bare på uret. Samme føler som
             # ``charge_rate`` måler hastigheden med.
             heat_kw=balance.heatpump_kw if balance is not None else None,
+            # Samme måling som beslutningen bruger. Uden den ser blokken en
+            # anden pris på nu-halvtimen end planlæggeren gør.
+            grid=prices.get("grid"),
         )
         decision = replace(decision, charge=charging)
         projection = self.planner.project(
