@@ -1,6 +1,15 @@
 import unittest
 
-from varmeopt.solar import DayTracker, Geometry, Plane, SolarModel, daily_irradiance, diffuse_fraction, seed_scale
+from varmeopt.solar import (
+    SUSPICIOUS,
+    DayTracker,
+    Geometry,
+    Plane,
+    SolarModel,
+    daily_irradiance,
+    diffuse_fraction,
+    seed_scale,
+)
 
 # Anlægget på Fyn: fire solfangere i syd med 45°, mod 6,4 kW syd/20° og
 # 4 kW vest/15° solceller.
@@ -254,6 +263,117 @@ class DayTrackerTest(unittest.TestCase):
 
     def test_garbage_gives_a_fresh_tracker(self):
         self.assertIsNone(DayTracker.from_raw("ikke en dag").date)
+
+
+class CounterResetsBeforeMidnightTest(unittest.TestCase):
+    """Dagstælleren står på nul når døgnet gøres op - og det kostede modellen.
+
+    Anlæggets ``sensor.solvarme_produktion_idag`` tæller op gennem dagen: den
+    17. september 0,3 kWh kl. 09:55 og 2,6 kl. 13:26. Men kl. 23:59 stod den
+    på nul, og det er dér døgnet bliver gjort op. Loggen natten til den 20.:
+
+        solvarme, døgnet 2026-09-19: skalafaktor 0.030 (dag 17, i dag 0.000)
+
+    Fire døgn i træk blev lært som nøjagtig nul, og skalafaktoren faldt
+    0,049 → 0,041 → 0,035 → 0,030 → 0,026 - nøjagtig 0,85 pr. døgn, som
+    udglatningen gør når den fodres med nul. Modellen lovede så 1,3 kWh
+    solvarme af 46 kWh solcelleprognose, dagen efter at anlægget havde lavet
+    16,4.
+
+    Svaret er ikke at læse tælleren på et bestemt klokkeslæt før midnat - vi
+    ved ikke hvornår den springer tilbage. Det er at huske døgnets **højeste**
+    aflæsning. En dagstæller går kun opad.
+    """
+
+    def setUp(self):
+        self.t = DayTracker()
+
+    def test_a_counter_that_resets_in_the_evening_still_gives_the_day(self):
+        self.t.observe("2026-09-19", 0, 35.0, 0.0)
+        self.t.observe("2026-09-19", 10, 20.0, 4.2)
+        self.t.observe("2026-09-19", 14, 8.0, 16.4)
+        # Og så står den på nul resten af aftenen.
+        self.t.observe("2026-09-19", 20, 0.0, 0.0)
+        self.t.observe("2026-09-19", 23, 0.0, 0.0)
+
+        done = self.t.observe("2026-09-20", 0, 40.0, 0.0)
+
+        self.assertEqual(done[0], 16.4, "døgnets højeste, ikke den sidste aflæsning")
+
+    def test_a_sensor_that_drops_out_does_not_set_the_day_back(self):
+        self.t.observe("2026-09-19", 0, 35.0, 0.0)
+        self.t.observe("2026-09-19", 14, 8.0, 16.4)
+        self.t.observe("2026-09-19", 23, 0.0, None)
+
+        done = self.t.observe("2026-09-20", 0, 40.0, 0.0)
+
+        self.assertEqual(done[0], 16.4)
+
+    def test_the_new_day_starts_over(self):
+        # Det højeste må ikke bæres med over i næste døgn.
+        self.t.observe("2026-09-19", 0, 35.0, 0.0)
+        self.t.observe("2026-09-19", 14, 8.0, 16.4)
+        self.t.observe("2026-09-20", 0, 40.0, 0.0)
+        self.t.observe("2026-09-20", 14, 9.0, 2.6)
+
+        done = self.t.observe("2026-09-21", 0, 46.0, 0.0)
+
+        self.assertEqual(done[0], 2.6)
+
+
+class SuspiciousDayTest(unittest.TestCase):
+    """En dag der ikke ligner modellen, skal råbes op i loggen.
+
+    Grænsen kan være stram fordi skalafaktoren netop *ikke* afhænger af
+    vejret: observationen er udbytte divideret med solcelleprognosen, og en
+    overskyet dag trækker begge dele ned. Ligger et døgn pludselig en faktor
+    fire fra resten, er det ikke en grå dag - det er et input der svigter.
+
+    Den filtrerer ikke. Fire nul-døgn i træk blev lært, og ikke én linje
+    sagde at noget var galt. Det er hele forskellen mellem en fejl der
+    opdages på dag 15 og en der opdages på dag 19.
+    """
+
+    def test_a_day_that_yields_nothing_is_called_out(self):
+        m = model(scale=0.049, days=14.0)
+
+        note = m.learn(0.0, 35.0, 262)
+
+        self.assertTrue(note.startswith(SUSPICIOUS), note)
+        self.assertIn("0.049", note, "modellens eget tal skal med")
+
+    def test_but_it_is_still_learned(self):
+        # Advarslen filtrerer ikke. Modellen kan ikke afgøre hvad der er
+        # rigtigt - den siger bare til.
+        m = model(scale=0.049, days=14.0)
+
+        m.learn(0.0, 35.0, 262)
+
+        self.assertEqual(m.days, 15.0)
+        self.assertAlmostEqual(m.scale, 0.049 * 0.85, places=6)
+
+    def test_an_ordinary_day_says_nothing(self):
+        m = model(scale=0.45, days=14.0)
+        ratio = FYN.ratio(262)
+
+        note = m.learn(0.43 * 35.0 * ratio, 35.0, 262)
+
+        self.assertFalse(note.startswith(SUSPICIOUS), note)
+
+    def test_an_overcast_day_says_nothing_either(self):
+        # Halvt så meget sol: både udbytte og prognose falder, og forholdet
+        # står stille. Det er derfor grænsen kan være så stram.
+        m = model(scale=0.45, days=14.0)
+        ratio = FYN.ratio(262)
+
+        note = m.learn(0.45 * 8.0 * ratio, 8.0, 262)
+
+        self.assertFalse(note.startswith(SUSPICIOUS), note)
+
+    def test_the_first_day_cannot_deviate_from_anything(self):
+        note = model().learn(16.4, 35.0, 262)
+
+        self.assertFalse(note.startswith(SUSPICIOUS), note)
 
 
 class StorageTest(unittest.TestCase):

@@ -47,6 +47,19 @@ from typing import Any
 # skulle have været filtreret fra, ikke udglattet.
 _ALPHA = 0.15
 
+# Hvor langt en dags observation må ligge fra modellen, før den råbes op i
+# loggen. Faktor fire hver vej.
+#
+# Grænsen kan være så stram fordi skalafaktoren netop *ikke* afhænger af
+# vejret: observationen er udbytte divideret med solcelleprognosen, og en
+# overskyet dag trækker begge dele ned. Et tal der pludselig ligger en faktor
+# fire fra resten, er derfor ikke en grå dag - det er et input der svigter.
+#
+# Den filtrerer ikke. En grå dag skal stadig læres, og modellen kan ikke
+# afgøre hvad der er rigtigt. Den siger bare til.
+_SUSPICIOUS_FACTOR = 4.0
+SUSPICIOUS = "afviger kraftigt"
+
 _STEPS_PER_DAY = 288  # 5-minutters skridt
 
 # Diffusandelen af den globale stråling på disse breddegrader, glattet over
@@ -200,6 +213,8 @@ class DayTracker:
     date: str | None = None
     forecast_kwh: float | None = None
     forecast_hour: int | None = None
+    # Døgnets **højeste** aflæsning, ikke den sidste. En dagstæller går kun
+    # opad, så det højeste er dagens udbytte - se ``observe``.
     thermal_kwh: float | None = None
     saturated: bool = False
 
@@ -216,6 +231,21 @@ class DayTracker:
         ``store_full`` skal aflæses *undervejs*, ikke ved døgnskiftet — ved
         midnat er tankene kølet af, og en dag hvor solen stod og bankede mod
         et fuldt lager ville se helt normal ud.
+
+        **Og udbyttet er døgnets højeste aflæsning, ikke den sidste.** Her
+        stod den sidste, og det kostede hele modellen. Anlæggets
+        ``sensor.solvarme_produktion_idag`` tæller op gennem dagen - den 17.
+        september 0,3 kWh kl. 09:55 og 2,6 kl. 13:26 - men står på nul igen
+        ved midnat, hvor døgnet gøres op. Fra den 16. til den 20. blev fire
+        døgn i træk derfor lært som nøjagtig 0,000, og skalafaktoren faldt
+        0,049 → 0,041 → 0,035 → 0,030 → 0,026: nøjagtig 0,85 pr. døgn, som
+        udglatningen gør når den fodres med nul. Modellen lovede 1,3 kWh
+        solvarme af 46 kWh solcelleprognose, hvor anlægget dagen før havde
+        lavet 16,4.
+
+        En dagstæller går kun opad, så det højeste er dagens udbytte. Det er
+        også robust over for at føleren falder ud undervejs, og over for
+        *hvornår* den nulstiller - vi behøver ikke vide det.
         """
         finished = None
 
@@ -235,8 +265,14 @@ class DayTracker:
             self.thermal_kwh = None
             self.saturated = False
 
-        if thermal_today is not None:
-            self.thermal_kwh = thermal_today
+        if _is_number(thermal_today):
+            # Døgnets højeste. En nulstilling om aftenen må ikke slette
+            # dagen, og et udfald undervejs må ikke sætte den tilbage.
+            self.thermal_kwh = (
+                thermal_today
+                if self.thermal_kwh is None
+                else max(self.thermal_kwh, thermal_today)
+            )
         if store_full:
             self.saturated = True
 
@@ -350,9 +386,26 @@ class SolarModel:
             self.days = 1.0
             return f"første dag: skalafaktor {observed:.3f}"
 
+        # Sig til hvis dagen ikke ligner modellen. Den 16.-20. september
+        # blev fire døgn i træk lært som nøjagtig 0,000, fordi dagstælleren
+        # stod på nul da døgnet blev gjort op - og skalafaktoren faldt 0,85
+        # pr. døgn, fra 0,049 til 0,026, uden at én linje i loggen sagde at
+        # noget var galt. Den her linje er hele forskellen mellem en fejl
+        # der opdages på dag 15 og en der opdages på dag 19.
+        afviger = (
+            observed < self.scale / _SUSPICIOUS_FACTOR
+            or observed > self.scale * _SUSPICIOUS_FACTOR
+        )
+        før = self.scale
         self.days += 1
         self.scale = self.scale * (1 - _ALPHA) + observed * _ALPHA
-        return f"skalafaktor {self.scale:.3f} (dag {self.days:.0f}, i dag {observed:.3f})"
+        note = f"skalafaktor {self.scale:.3f} (dag {self.days:.0f}, i dag {observed:.3f})"
+        if afviger:
+            return (
+                f"{SUSPICIOUS}: i dag {observed:.3f} mod modellens {før:.3f} "
+                f"— {note}"
+            )
+        return note
 
     # ------------------------------------------------------------------ lager
 

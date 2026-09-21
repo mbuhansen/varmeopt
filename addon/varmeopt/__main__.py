@@ -60,7 +60,7 @@ from .prices import (
     Plan,
     round_trip,
 )
-from .solar import DayTracker, SolarModel
+from .solar import SUSPICIOUS, DayTracker, SolarModel
 from .store import Store
 from .standby import StandbyTest
 from .tank import Buffer, Tank
@@ -1473,7 +1473,9 @@ class Varmeopt:
             thermal, forecast, date, saturated = finished
             day_of_year = datetime.strptime(date, "%Y-%m-%d").timetuple().tm_yday
             note = self.solar.learn(thermal, forecast, day_of_year, store_was_full=saturated)
-            log.info("solvarme, døgnet %s: %s", date, note)
+            # En dag der ikke ligner modellen, skal råbes op. Se ``learn``.
+            skriv = log.warning if note.startswith(SUSPICIOUS) else log.info
+            skriv("solvarme, døgnet %s: %s", date, note)
             self._dirty = True
 
         day_of_year = now.timetuple().tm_yday
