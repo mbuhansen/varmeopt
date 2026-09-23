@@ -20,7 +20,15 @@ log = logging.getLogger(__name__)
 # læres ikke mere og skrives aldrig igen - den er fald for BT12-tabellen.
 COP_TABLE_FILE = "cop_table.json"
 # Tabellen på varmepumpens eget fremløb, BT12. Den læres fra 14. september.
-COP_TABLE_BT12_FILE = "cop_table_bt12.json"
+#
+# Fra den 23. september i en ny fil. Den første BT12-tabel lærte også de
+# første minutter efter hver start, hvor fremløbet fejer fra ~41 til ~57 grader
+# og COP'en ikke har sat sig: 48 celler og 106 målinger, heriblandt en ny celle
+# F53 = 1,92 og fire celler på ti minutter ved fremløb pumpen aldrig kører
+# stabilt ved. Den er målt med en anden målestok end den der gælder nu, og
+# kasseres som solvarmemodellen blev det i 0.76.1. Den gamle fil bliver liggende
+# urørt; setpunkt-tabellen er fald, indtil den nye har lært sig selv.
+COP_TABLE_BT12_FILE = "cop_table_bt12_v2.json"
 CURVE_FILE = "heat_curve.json"
 SOLAR_FILE = "solar.json"
 STANDBY_FILE = "standby.json"

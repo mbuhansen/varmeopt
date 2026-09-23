@@ -137,6 +137,9 @@ MANUAL_CHARGE_MAX_MINUTES = 180.0
 # attrap uden ``last_changed``, og det lukker vinduet hver cyklus.
 _NO_WINDOW = object()
 
+# Over det trækker kompressoren strøm. I ro står pumpens elektronik på ~0,07 kW.
+HP_RUNNING_KW = 0.2
+
 
 class Varmeopt:
     def __init__(self, options: Options, store: Store) -> None:
@@ -207,6 +210,11 @@ class Varmeopt:
         self._bt12_count = 0
         self._bt12_stamp: object = _NO_WINDOW
         self._bt12_note = "—"
+        # Hvornår vinduet åbnede - se ``_learn_window``.
+        self._bt12_opened_at: float | None = None
+        # Hvornår kompressoren sidst startede. None når den står stille.
+        self._pump_started_at: float | None = None
+        self._pump_was_running = False
 
     # ------------------------------------------------------------------ cyklus
 
@@ -327,6 +335,21 @@ class Varmeopt:
             curve_note = self.curve.learn(outdoor_temp, flow_temp, is_dhw)
             if not curve_note.startswith("ignoreret"):
                 self._dirty = True
+
+        # Hvornår startede kompressoren? Elforbruget springer med det samme;
+        # COP-føleren melder først et vindue senere. Kendes elforbruget ikke,
+        # er COP-føleren det bedste vi har.
+        hp_power = balance.hp_power_kw if balance is not None else None
+        running_now = (
+            hp_power > HP_RUNNING_KW
+            if hp_power is not None and math.isfinite(hp_power)
+            else _running(measured_cop)
+        )
+        if running_now and not self._pump_was_running:
+            self._pump_started_at = time.time()
+        if not running_now:
+            self._pump_started_at = None
+        self._pump_was_running = running_now
 
         # Kun mens pumpen kører: står den stille, er BT12 bare vandet i røret,
         # og de minutter må ikke trække den næste målings fremløb ned.
@@ -456,6 +479,10 @@ class Varmeopt:
             # Samme måling som beslutningen bruger. Uden den ser blokken en
             # anden pris på nu-halvtimen end planlæggeren gør.
             grid=prices.get("grid"),
+            # Predbat regner cirka hvert femte minut, vi hvert minut. Et ønske
+            # skal overleve en ny Predbat-beregning, før det bliver en blok.
+            plan_stamp=prices.get("plan_stamp"),
+            confirm_plans=self.options.charge_confirm_plans,
         )
         decision = replace(decision, charge=charging)
         projection = self.planner.project(
@@ -793,26 +820,52 @@ class Varmeopt:
         Mangler BT12, læres der ikke. Setpunktet er ikke en reserve - det er
         netop den forurening der skal ud af tabellen.
         """
+        now = time.time()
         if self._bt12_stamp is _NO_WINDOW:
             # Første cyklus efter en start. Målingen der står på føleren, er
             # fra før genstarten og blev lært dengang - lærte vi den nu, kom den
             # med to gange, og på det BT12 der står *nu*, ikke det den blev
             # målt ved. Vinduet åbnes bare; dets første punkt er allerede talt.
             self._bt12_stamp = stamp
+            self._bt12_opened_at = now
             self._bt12_note = "venter på første måling efter start"
             return self._bt12_note
         if stamp is not None and stamp == self._bt12_stamp:
             return self._bt12_note
 
         flow = self._bt12_sum / self._bt12_count if self._bt12_count else None
+        opened = self._bt12_opened_at
         self._bt12_sum, self._bt12_count = 0.0, 0
+        self._bt12_opened_at = now
         self._bt12_stamp = stamp
+
+        # Har pumpen kørt længe nok, da vinduet åbnede? De første minutter efter
+        # en start fejer fremløbet fra ~41 til ~57 grader, og hver måling lander
+        # i en ny celle med en COP der ikke har sat sig. Natten til den 20.
+        # september: ny celle F53 = 1,92 kl. 21:10, mens BT12 sprang 43,9 ->
+        # 53,3 i vinduet; fire nye celler (F44, F45, F49, F52) på ti minutter
+        # kl. 01:32. Stabilt omkring BT12 57 og COP 4,3 efter ~10 minutter.
+        #
+        # Spærren er på tid og ikke på hvor meget BT12 flytter sig i vinduet.
+        # En glidende opladning kravler også op, og den *skal* læres på
+        # vinduets gennemsnit - det var hele pointen med BT12-aksen den 14.
+        # september. Det der skiller en opstart fra en glidende opladning, er
+        # ikke bevægelsen, men at COP'en ikke har sat sig endnu.
+        warmup = self.options.cop_learn_warmup_minutes * 60
+        started = self._pump_started_at
+        warm = started is not None and opened is not None and opened - started >= warmup
 
         if flow is None:
             note = (
                 "ignoreret: mangler BT12"
                 if _running(measured_cop)
                 else "ignoreret: pumpen står stille"
+            )
+        elif not warm:
+            ran = (now - started) / 60 if started is not None else 0.0
+            note = (
+                f"ignoreret: pumpen har kørt {ran:.0f} min - COP'en har ikke sat "
+                f"sig før {self.options.cop_learn_warmup_minutes:.0f}"
             )
         else:
             note = self._learn(flow, outdoor_temp, measured_cop, stamp)
@@ -1183,6 +1236,9 @@ class Varmeopt:
 
         return {
             "plan": plan,
+            # Hvornår Predbat sidst regnede. Den flytter sig hver gang, og det
+            # er den takt en blok skal lægges i - se ``ChargePlan.update``.
+            "plan_stamp": state.last_updated or state.last_changed,
             "price_now": now,
             "grid": grid,
             "predbat_status": status.state if status is not None else None,
@@ -1273,7 +1329,13 @@ class Varmeopt:
                 attributes[f"om_{hours}t"] = round(ahead.kr_per_kwh, 3)
                 attributes[f"om_{hours}t_hvorfor"] = ahead.reason
 
-        window = plan.cheapest_window(int(self.options.hp_min_runtime_minutes))
+        # Samme opslag som blokken lægges efter - med målingen og kun fra
+        # nettet - så siden ikke viser et vindue blokken ikke må bruge.
+        window = plan.cheapest_window(
+            int(self.options.hp_min_runtime_minutes),
+            grid=prices.get("grid"),
+            grid_only=True,
+        )
         if window is not None:
             start, average = window
             attributes["billigste_vindue_om_min"] = _round(self._from_now(start), 0)

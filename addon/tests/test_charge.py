@@ -852,3 +852,105 @@ class StorageTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def mixed_plan(states_rates):
+    """En plan af (tilstand, importpris, eksportpris)."""
+    rows = [
+        {"state": s, "import_rate": i, "export_rate": e, "soc_percent": 60}
+        for s, i, e in states_rates
+    ]
+    return Plan.from_predbat({"raw": {"rows": rows}})
+
+
+class GridOnlyBlockTest(unittest.TestCase):
+    """Blokken lægges kun hvor Predbat selv tager strømmen fra nettet."""
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        self.charge = ChargePlan()
+
+    def test_no_block_when_only_the_battery_is_before_the_deadline(self):
+        battery = mixed_plan([("exp", 90, 10)] * 8 + [("holdchrg", 155, 50)] * 4)
+
+        charging = self.charge.update(self.now, FakeDecision(), battery, 16.0)
+
+        self.assertFalse(charging)
+        self.assertIsNone(self.charge.block)
+        self.assertIn("fra nettet", self.charge.note)
+
+    def test_a_waiting_block_is_dropped_when_predbat_moves_to_the_battery(self):
+        # Lagt på net-halvtimer ...
+        first = mixed_plan(
+            [("exp", 90, 10)] * 4 + [("holdchrg", 35, 10)] * 4 + [("exp", 155, 50)] * 4
+        )
+        self.charge.update(self.now, FakeDecision(), first, 16.0)
+        self.assertIsNotNone(self.charge.block)
+
+        # ... og så lægger Predbat om, så de samme halvtimer tager af batteriet.
+        later = mixed_plan([("exp", 90, 10)] * 12)
+        self.charge.update(self.now + 60, FakeDecision(), later, 16.0)
+
+        self.assertIsNone(self.charge.block)
+        self.assertIn("batteriet", self.charge.note)
+
+
+class PredbatCadenceTest(unittest.TestCase):
+    """Et ønske skal overleve en ny Predbat-beregning, før det bliver en blok.
+
+    Add-on'en regner hvert minut, Predbat cirka hvert femte. Den 23. september
+    kl. 08:11 skiftede nu-timen fra «eksport» til «batteri» midt i én og samme
+    Predbat-plan, og ét minuts svar blev bundet som en blok på 24,5 kWh.
+    """
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        self.plan = plan(*RATES)
+        self.charge = ChargePlan()
+
+    def step(self, minute, stamp, confirm=2, rates=None):
+        return self.charge.update(
+            self.now + minute * 60,
+            FakeDecision(),
+            plan(*rates) if rates else self.plan,
+            16.0,
+            plan_stamp=stamp,
+            confirm_plans=confirm,
+        )
+
+    def test_one_plan_lays_no_block_however_many_minutes(self):
+        for minute in range(5):
+            self.step(minute, "predbat-1")
+
+        self.assertIsNone(self.charge.block)
+        self.assertIn("Predbat", self.charge.note)
+
+    def test_the_second_plan_lays_it(self):
+        self.step(0, "predbat-1")
+        self.step(5, "predbat-2")
+
+        self.assertIsNotNone(self.charge.block)
+
+    def test_a_waiting_block_does_not_move_within_one_plan(self):
+        self.step(0, "predbat-1", confirm=1)
+        laid = self.charge.block.starts_at
+
+        # Samme Predbat-plan, men priserne ser anderledes ud: den må ikke flytte
+        # sig, for der er ingen ny beregning at flytte den på.
+        self.step(1, "predbat-1", confirm=1, rates=(35,) * 4 + (90,) * 4 + (155,) * 4)
+
+        self.assertEqual(self.charge.block.starts_at, laid)
+
+    def test_the_wish_survives_a_restart(self):
+        self.step(0, "predbat-1")
+
+        self.charge = ChargePlan.from_raw(self.charge.to_raw())
+        self.step(5, "predbat-2")
+
+        self.assertIsNotNone(self.charge.block)
+
+    def test_without_a_stamp_the_block_is_laid_at_once(self):
+        # Ældre opførsel, og det et HA uden tidsstempel får.
+        self.step(0, None)
+
+        self.assertIsNotNone(self.charge.block)

@@ -408,7 +408,12 @@ class ChargeFlagTest(unittest.TestCase):
         # med fristen kl. 17 afhang de af hvornår suiten blev kørt: i det
         # sidste kvarter før sytten er der ikke tid til et minimumstræk, og
         # så var flaget med rette slukket.
-        self.app = Varmeopt(options(store_full_by_hour=-1), Store(tmp))
+        # Og uden bekræftelse på en ny Predbat-beregning. Den kræver at
+        # planens stempel flytter sig mellem cyklusser, og det gør det ikke i
+        # en attrap med ét fast stempel.
+        self.app = Varmeopt(
+            options(store_full_by_hour=-1, charge_confirm_plans=1), Store(tmp)
+        )
         self.app.table.learn(31, 17, 4.4)
         self.ha = FakeHa(
             {

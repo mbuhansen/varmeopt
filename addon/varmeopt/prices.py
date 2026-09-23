@@ -1045,6 +1045,7 @@ class Plan:
         duration_minutes: int,
         before_minutes: int | None = None,
         grid: Grid | None = None,
+        grid_only: bool = False,
     ) -> tuple[int, float] | None:
         """Find det billigste sammenhængende vindue.
 
@@ -1053,6 +1054,22 @@ class Plan:
         minutter mellem nu og klokken 18?»
 
         Er flere vinduer lige billige, vinder det **seneste** - se løkken.
+
+        ``grid_only`` udelukker ethvert vindue hvor bare én halvtime tager
+        strømmen fra batteriet. Den 23. september blev en blok lagt kl. 08:11
+        i en halvtime prissat som «batteri» til 1,55 - genkøbsprisen for en
+        kilowatt-time Predbat fylder på igen senere. Men batteriet var næsten
+        tomt, og en blok trækker omkring 5 kW el i to timer: strømmen kom fra
+        nettet til ~2,55, og varmen kostede mere end pillefyrets.
+
+        Og selv når batteriet *har* energien, er den Predbats at disponere. En
+        kilowatt-time taget derfra skal lades ind igen og trækkes ud med tab
+        begge veje; en kilowatt-time fra nettet i Predbats egne
+        ladehalvtimer betales én gang. Brugerens regel: skal der lades op,
+        skal det ske fra nettet når Predbat selv lader.
+
+        Sol er tilladt, men findes kun i række 0 - længere fremme er en
+        solhalvtime en eksport eller et «demand», og det er batteriets.
 
         ``grid`` gælder række 0, præcis som i ``marginal``. Den stod her ikke,
         og det satte planlæggeren og blokken op mod hinanden på den samme
@@ -1097,6 +1114,8 @@ class Plan:
                 for s in range(start, start + needed)
             ]
             if any(p is None for p in prices):
+                continue
+            if grid_only and any(p.source == BATTERY for p in prices):  # type: ignore[union-attr]
                 continue
             average = sum(p.kr_per_kwh for p in prices) / needed  # type: ignore[union-attr]
             if best is None or average < best[1]:

@@ -69,7 +69,10 @@ class FakeHa:
 class CycleTest(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
-        self.app = Varmeopt(options(), Store(tmp))
+        # Uden opvarmningstid: testene her handler om hvad der læres og
+        # hvornår en måling er ny, ikke om hvor længe pumpen har kørt. Den har
+        # sin egen klasse, ``CopWarmupTest``.
+        self.app = Varmeopt(options(cop_learn_warmup_minutes=0), Store(tmp))
         # Én belagt celle, så vi kan se præcis hvor meget en cyklus lægger til.
         self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
         # Varmepumpens eget fremløb står her lig setpunktet, så cellen
@@ -744,6 +747,54 @@ class LockedPricesSensorTest(unittest.TestCase):
         # ikke være negative, uanset hvornår på døgnet der spørges.
         self.assertGreater(self.read("off"), 0)
 
+
+
+class CopWarmupTest(unittest.TestCase):
+    """COP'en kan først regnes med ti minutter efter en start.
+
+    De første minutter fejer fremløbet fra ~41 til ~57 grader, og hver måling
+    lander i en ny celle med en COP der ikke har sat sig. Natten til den 20.
+    september kl. 21:10: ny celle F53 = 1,92, mens BT12 sprang 43,9 -> 53,3.
+    """
+
+    def setUp(self):
+        tmp = Path(tempfile.mkdtemp(prefix="varmeopt-cop-"))
+        self.app = Varmeopt(options(cop_learn_warmup_minutes=10), Store(tmp))
+        self.app.table = CopTable()
+        self.bt12 = self.app.options.entity_hp_flow
+        self.ha = FakeHa(
+            {
+                FLOW: State(FLOW, "31.0", {}, "flow"),
+                COP: State(COP, "0", {}, "stille"),
+                OUT: State(OUT, "16.0", {}, "ude"),
+            }
+        )
+        self.t0 = 1_758_400_000.0
+
+    def at(self, minutes, cop, stamp, bt12):
+        self.ha._states[COP] = State(COP, str(cop), {}, stamp)
+        self.ha._states[self.bt12] = State(self.bt12, str(bt12), {}, f"b{minutes}")
+        with mock.patch("time.time", return_value=self.t0 + minutes * 60):
+            asyncio.run(self.app.cycle(self.ha))
+
+    def test_the_first_ten_minutes_are_not_learned(self):
+        # Pumpen står stille, og så starter den kl. 1. Hver tredje minut en ny
+        # måling, mens fremløbet kravler op som den gjorde den nat.
+        self.at(0, 0, "stille", 30.0)
+        for minute, cop, bt12 in ((1, 3.4, 42.5), (4, 1.92, 53.3), (7, 4.1, 56.0)):
+            self.at(minute, cop, f"m{minute}", bt12)
+
+        self.assertEqual(self.app.table.cell_count, 0, "ingen passagepunkter")
+        self.assertIn("har kørt", self.app.status["learn_note"])
+
+    def test_a_steady_measurement_after_warmup_is_learned(self):
+        self.at(0, 0, "stille", 30.0)
+        minute = 1
+        while minute <= 25:
+            self.at(minute, 4.3, f"m{minute}", 57.0)
+            minute += 3
+
+        self.assertEqual(self.app.table.flow_temps, [57])
 
 
 class ForecastTest(unittest.TestCase):

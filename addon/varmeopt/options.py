@@ -271,6 +271,17 @@ _DEFAULTS: dict[str, object] = {
     "control_confirm_minutes": 3,
     # Efter opstart: lad tabellerne komme på plads før der styres.
     "control_warmup_minutes": 5,
+    # Hvor mange Predbat-beregninger et ønske om at lade skal holde på, før
+    # det bliver til en blok. Add-on'en regner hvert minut, Predbat cirka hvert
+    # femte; to betyder at ønsket skal overleve én ny beregning. Den 23.
+    # september bandt ét minuts prisskift en blok på 24,5 kWh.
+    "charge_confirm_plans": 2,
+    # Hvor længe varmepumpen skal have kørt, før dens COP læres. De første
+    # minutter efter en start fejer fremløbet fra ~41 til ~57 grader, og hver
+    # måling lander i en ny celle med en COP der ikke har sat sig - den 20.
+    # september blev en ny celle F53 sået med 1,92. Brugerens erfaring: COP'en
+    # kan først regnes med ti minutter efter start.
+    "cop_learn_warmup_minutes": 10,
     "auto_update": False,
 }
 
@@ -397,6 +408,8 @@ class Options:
     control_min_dwell_minutes: float
     control_confirm_minutes: float
     control_warmup_minutes: float
+    charge_confirm_plans: int
+    cop_learn_warmup_minutes: float
     tank_liters: int
     tank_reference_temp: float
     tank_max_temp: float
@@ -458,6 +471,7 @@ class Options:
         return cls(
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
+            charge_confirm_plans=int(values["charge_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
@@ -481,6 +495,7 @@ class Options:
                     "control_min_dwell_minutes",
                     "control_confirm_minutes",
                     "control_warmup_minutes",
+                    "cop_learn_warmup_minutes",
                     "forecast_refresh_minutes",
                     "plan_max_age_minutes",
                     "ch_flow_meter_floor",

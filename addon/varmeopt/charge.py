@@ -35,7 +35,7 @@ blevet billigere. Alt andet venter.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 SLOT_SECONDS = 1800.0
@@ -238,6 +238,17 @@ class ChargePlan:
     note: str = NO_PLAN
     # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
+    # De Predbat-planer ønsket om at lade har holdt på, som deres stempler.
+    #
+    # Add-on'en regner hvert minut; Predbat cirka hvert femte. Den 23.
+    # september kl. 08:11 skiftede nu-timen fra «eksport» til «batteri» midt
+    # i én og samme Predbat-plan, og ét minuts svar blev bundet som en blok på
+    # 24,5 kWh. Et ønske skal overleve en ny Predbat-beregning, før det bliver
+    # til en blok.
+    _wanted_stamps: list[str] = field(default_factory=list)
+    # Stemplet på den plan en ventende blok senest blev lagt efter. Mellem to
+    # Predbat-planer står den stille; der er ingen nye priser at flytte den på.
+    _placed_stamp: str | None = None
     # Hvornår vi sidst så varmeydelsen. Integrationen har brug for et
     # mellemrum, ikke et øjebliksbillede.
     _last_seen: float | None = None
@@ -288,6 +299,7 @@ class ChargePlan:
         )
         self._running = True
         self._full_since = None
+        self._forget_wish()
         self.note = f"manuel opladning, {minutes:.0f} min"
         return f"opladning startet — {self.block.kwh:.1f} kWh over {minutes:.0f} min"
 
@@ -384,6 +396,8 @@ class ChargePlan:
         min_runtime_minutes: float = 0.0,
         heat_kw: float | None = None,
         grid: Any = None,
+        plan_stamp: str | None = None,
+        confirm_plans: int = 1,
     ) -> bool:
         """Ét skridt. Returnerer om der skal lades lige nu.
 
@@ -396,6 +410,11 @@ class ChargePlan:
         vi står i - men den *skal* med. Uden den prissætter ``cheapest_window``
         række 0 som om batteriet var låst, og så kan blokken lægges oven på
         en halvtime planlæggeren i samme cyklus har kaldt for dyr.
+
+        ``plan_stamp`` er Predbat-planens ``last_updated`` - den flytter sig
+        hver gang Predbat regner. En blok lægges først når ønsket har holdt på
+        ``confirm_plans`` forskellige stempler, og en ventende blok flyttes kun
+        når stemplet er nyt. Uden stempel lægges blokken straks, som før.
 
         ``heat_kw`` er varmepumpens ydelse lige nu, målt. Den tælles op i
         blokkens ``delivered_kwh``, så blokken kan slutte på den mængde den
@@ -482,6 +501,7 @@ class ChargePlan:
         #    kører.
         if self.block is not None and (full or chosen == "pillefyr"):
             self.block = None
+            self._forget_wish()
             self.note = "opladning droppet — " + (
                 "lageret er fuldt" if full else "pillefyret vinder"
             )
@@ -496,6 +516,7 @@ class ChargePlan:
         want = getattr(decision, "planned_kwh", None) if decision else None
         window = getattr(decision, "window_starts_in", None) if decision else None
         if not _finite(want) or want <= 0 or not window or plan is None:
+            self._wanted_stamps = []
             if self.block is not None:
                 self.note = (
                     f"venter — lader {self.block.kwh:.1f} kWh om "
@@ -533,8 +554,45 @@ class ChargePlan:
             # samtidig pillefyr, for det er derfor strækket er et stræk.
             # Alle tre veje er billigere end den undtagelse der udgik.
             self.block = None
+            self._forget_wish()
             self.note = "allerede ladet op mod det her dyre stræk"
             return False
+
+        # 4b. En ventende blok der nu ligger på batteriet, droppes.
+        #
+        #     Normalt står en ventende blok ved magt, også når der ikke kan
+        #     lægges en ny - se «Ingen plads» nedenfor. Den her er en
+        #     undtagelse, og den er bevidst: siden 23. september må en blok
+        #     kun ligge hvor strømmen kommer fra nettet. Har Predbat siden
+        #     lagt om, så en af dens halvtimer nu tager af batteriet, er den
+        #     ikke længere en blok vi må køre.
+        if (
+            self.block is not None
+            and not self.block.manual
+            and not self.block.running(now)
+            and self._on_battery(self.block, plan, now)
+        ):
+            self.block = None
+            self._placed_stamp = None
+            self.note = "opladning droppet — Predbat tager nu strømmen af batteriet"
+            return False
+
+        # 4c. Blokken følger Predbats takt, ikke add-on'ens minut.
+        if plan_stamp is not None:
+            if self.block is not None and plan_stamp == self._placed_stamp:
+                # Samme Predbat-plan som da den blev lagt: ingen nye priser at
+                # flytte den på.
+                self.note = (
+                    f"venter — lader {self.block.kwh:.1f} kWh om "
+                    f"{self.block.minutes_until(now):.0f} min"
+                )
+                return False
+            if self.block is None:
+                if plan_stamp not in self._wanted_stamps:
+                    self._wanted_stamps = (self._wanted_stamps + [plan_stamp])[-8:]
+                if len(self._wanted_stamps) < max(1, int(confirm_plans)):
+                    self.note = "afventer næste Predbat-beregning"
+                    return False
 
         # 5. Læg blokken - eller flyt den, hvis priserne har rykket sig.
         if rate_kw <= 0:
@@ -556,17 +614,23 @@ class ChargePlan:
         reserve = max(float(min_runtime_minutes), CHARGE_RESERVE_SHARE * minutes)
         found = None
         room = int(window - reserve)
+        # Og kun hvor strømmen kommer fra nettet - i begge søgninger, ellers
+        # smutter en blok ind ad bagdøren gennem den uden reserve.
         if room >= needed:
-            found = plan.cheapest_window(needed, room, grid=grid)
+            found = plan.cheapest_window(needed, room, grid=grid, grid_only=True)
         if found is None:
-            found = plan.cheapest_window(needed, int(window), grid=grid)
+            found = plan.cheapest_window(
+                needed, int(window), grid=grid, grid_only=True
+            )
         if found is None:
             # Ingen plads er ikke det samme som «drop det der allerede er
             # lagt». En blok der venter, er lagt på priser vi har set efter;
             # at der ikke kan lægges en *ny* i det her minut, siger ingenting
             # om den. Før stod her ``self.block = None``, og så slettede en
             # forbigående trangt vindue en opladning der var klar.
-            self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
+            self.note = (
+                f"ingen {minutes:.0f} min fra nettet inden prisen stiger"
+            )
             return False
 
         offset, _price = found
@@ -604,6 +668,7 @@ class ChargePlan:
         # den gamle. Uden nulstillingen ville det første mellemrum blive
         # talt med i en blok der ikke var begyndt.
         self._last_seen = now
+        self._placed_stamp = plan_stamp
         if self.block.running(now):
             self._running = True
             self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
@@ -652,12 +717,31 @@ class ChargePlan:
         top = slot_start(base + (decision.window_minutes or window) * 60)
         return top, top + SLOT_SECONDS
 
+    def _forget_wish(self) -> None:
+        self._wanted_stamps = []
+        self._placed_stamp = None
+
+    @staticmethod
+    def _on_battery(block: Block, plan: Any, now: float) -> bool:
+        """Tager en af blokkens halvtimer nu strømmen af batteriet?"""
+        from .prices import BATTERY
+
+        base = slot_start(now)
+        first = int((slot_start(block.starts_at) - base) // SLOT_SECONDS)
+        last = int(math.ceil((block.ends_at - base) / SLOT_SECONDS))
+        for index in range(max(0, first), max(0, last)):
+            price = plan.marginal(index * 30)
+            if price is not None and price.source == BATTERY:
+                return True
+        return False
+
     def _finish(self, now: float, why: str) -> bool:
         if self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
         self.block = None
         self._running = False
         self._full_since = None
+        self._forget_wish()
         self.note = f"opladning slut — {why}"
         return False
 
@@ -671,6 +755,11 @@ class ChargePlan:
         return {
             "block": None if self.block is None else self.block.to_raw(),
             "done_until": self.done_until,
+            # Stemplerne overlever en genstart. Ellers ville hver opdatering
+            # nulstille bekræftelsen - og et ønske der har holdt på én plan,
+            # skal ikke begynde forfra fordi add-on'en blev genstartet.
+            "wanted_stamps": list(self._wanted_stamps),
+            "placed_stamp": self._placed_stamp,
         }
 
     @classmethod
@@ -686,6 +775,11 @@ class ChargePlan:
         until = raw.get("done_until")
         if _finite(until):
             plan.done_until = float(until)
+        stamps = raw.get("wanted_stamps")
+        if isinstance(stamps, list):
+            plan._wanted_stamps = [s for s in stamps if isinstance(s, str)][-8:]
+        placed = raw.get("placed_stamp")
+        plan._placed_stamp = placed if isinstance(placed, str) else None
         if plan.block is not None:
             plan.note = "genoptager planlagt opladning"
         return plan

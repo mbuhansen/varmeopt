@@ -287,6 +287,8 @@ siges i loggen ved opstart.
 | `forecast_refresh_minutes` | 30 | Udsigten ændrer sig i timer, ikke i minutter |
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |
 | `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen. Gælder også `sensor.varmeopt_beslutning`, ikke kun styringen |
+| `charge_confirm_plans` | 2 | Hvor mange Predbat-beregninger et ønske om at lade op skal holde på, før det bliver til en blok. Add-on'en regner hvert minut, Predbat cirka hvert femte — med 2 skal ønsket overleve én ny beregning, så et enkelt minuts prisskift ikke binder en to-timers opladning. 1 lægger blokken straks |
+| `cop_learn_warmup_minutes` | 10 | Hvor længe varmepumpen skal have kørt, før dens COP læres. Lige efter en start fejer fremløbet op gennem tabellen med en COP der ikke har sat sig. |
 | `control_confirm_minutes` | 3 | Hvor længe en ny kilde skal holde før den tæller. Uden den gør hviletiden et ét-minuts udsving til et kvarters fejl |
 | `control_warmup_minutes` | 5 | Efter opstart: lad tabellerne komme på plads før der styres |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |

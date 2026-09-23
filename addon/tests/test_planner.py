@@ -758,11 +758,12 @@ class DeadlineTest(unittest.TestCase):
         self.assertTrue(d.charge)
 
 
-    def test_the_bath_is_counted_from_the_deadline_and_not_from_the_peak(self):
-        # Badet ligger kl. 19 uanset hvornår strømmen er dyrest. Har uret
-        # sat fristen, skal døgnprofilen derfor læses fra fristen og frem -
-        # ellers skal lageret kun kunne lave badevand fra det tidspunkt
-        # prisen tilfældigvis topper, og så står man med kolde tanke kl. 19.
+    def test_the_bath_is_counted_over_the_stretch_even_with_a_deadline(self):
+        # Fristen siger hvornår lageret skal være klart, ikke hvor meget der
+        # skal i det. Her stod det modsatte fra den 9. september: har uret
+        # sat fristen, læses profilen fra fristen. Den 23. september gav det
+        # en blok kl. 16 til 0,53 for at dække timer mellem fristen og
+        # strækket, som pumpen kunne klare efter behov til 0,48.
         asked = []
 
         def profile(start_min, hours):
@@ -775,8 +776,8 @@ class DeadlineTest(unittest.TestCase):
             dhw_kwh_over=profile, deadline_minutes=90,
         )
 
-        # Vinduet er dyrt fra 120; fristen er 90. Profilen skal læses fra 90.
-        self.assertEqual(asked[0][0], 90)
+        # Vinduet er dyrt fra 120; fristen er 90. Profilen læses fra 120.
+        self.assertEqual(asked[0][0], 120)
 
     def test_without_a_deadline_the_bath_is_counted_over_the_dear_window(self):
         asked = []
@@ -1086,7 +1087,10 @@ class BatteryPlateauTest(unittest.TestCase):
         d = self.decide()
 
         self.assertEqual(d.window_minutes, 450)
-        self.assertIn("toppen om 450 min", d.reason)
+        self.assertIn("om 450 min", d.reason)
+        # Og siden 23. september lades der ikke af batteriet: nu-timen er
+        # «demand», så planen venter på Predbats egen ladning fra nettet.
+        self.assertIn("fra nettet", d.reason)
 
 
 class StretchTopTest(unittest.TestCase):
@@ -1484,6 +1488,92 @@ class LockedPricesTest(unittest.TestCase):
 
         self.assertFalse(d.charge)
         self.assertIn("ingen dyrere timer forude", d.charge_state)
+
+
+class ChargeFromTheGridTest(unittest.TestCase):
+    """Planlæggeren lader kun fra nettet - og siger det samme som blokken."""
+
+    @staticmethod
+    def rows(*spec):
+        return Plan.from_predbat(
+            {
+                "raw": {
+                    "rows": [
+                        {"state": s, "import_rate": i, "export_rate": e, "soc_percent": 60}
+                        for s, i, e in spec
+                    ]
+                }
+            }
+        )
+
+    def decide(self, p, **over):
+        values = dict(
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+        values.update(over)
+        return planner(horizon_minutes=1440).decide(p, **values)
+
+    def test_a_battery_hour_now_waits_for_the_grid(self):
+        # Nu leverer batteriet («demand»), og Predbat lader fra nettet om en
+        # time. Kl. 08:11 den 23. september blev der ladet i sådan en halvtime.
+        p = self.rows(
+            *[("demand", 90, 10)] * 2,
+            *[("chrg", 40, 10)] * 4,
+            *[("holdchrg", 200, 60)] * 8,
+        )
+
+        d = self.decide(p)
+
+        self.assertFalse(d.charge)
+        self.assertIn("fra nettet", d.reason)
+        self.assertEqual(d.planned_kwh is not None, True, "blokken skal kunne lægges")
+
+    def test_no_grid_before_the_deadline_is_no_charge(self):
+        p = self.rows(*[("exp", 150, 150)] * 6, *[("holdchrg", 250, 60)] * 8)
+
+        d = self.decide(p)
+
+        self.assertFalse(d.charge)
+        self.assertIsNone(d.planned_kwh)
+        self.assertIn("ingen halvtime fra nettet", d.charge_state)
+
+    def test_the_gain_is_counted_where_it_is_charged(self):
+        # Nu ser billigt ud - men det er batteriets pris. Net-halvtimerne før
+        # salget koster næsten det samme som salget selv, så der er intet at
+        # hente ved at lade. Målt mod nu-timen ville gevinsten se stor ud.
+        p = self.rows(
+            ("exp", 40, 40),
+            *[("holdchrg", 195, 60)] * 3,
+            *[("exp", 210, 210)] * 4,
+            *[("holdchrg", 100, 60)] * 6,
+        )
+
+        d = self.decide(p, demand_kw=3.0)
+
+        self.assertFalse(d.charge)
+        self.assertIsNone(d.planned_kwh)
+        self.assertIn("fra nettet", d.reason)
+        self.assertIn("for tæt", d.reason)
+
+    def test_a_clock_driven_charge_says_what_it_saves(self):
+        # Ellers er en opladning der intet sparer, usynlig.
+        d = planner().decide(
+            plan(40, 40, 40, 40, 180, 180, 180, 180),
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+            deadline_minutes=60,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertIn("lageret skal være fyldt", d.reason)
+        self.assertIn("spar", d.reason)
 
 
 class HalfHourFrameTest(unittest.TestCase):

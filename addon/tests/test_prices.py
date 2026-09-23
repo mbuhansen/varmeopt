@@ -991,6 +991,57 @@ class WindowTest(unittest.TestCase):
         self.assertIsNone(p.cheapest_window(60, before_minutes=30))
 
 
+class GridOnlyWindowTest(unittest.TestCase):
+    """En blok må kun ligge hvor strømmen kommer fra nettet.
+
+    Den 23. september blev en blok lagt kl. 08:11 i en halvtime prissat som
+    batteri. Batteriet var næsten tomt, og strømmen kom fra nettet til ~2,55.
+    Og selv når batteriet har energien, er den Predbats: en kilowatt-time
+    taget derfra skal lades ind igen og trækkes ud med tab begge veje.
+    """
+
+    # En eksport til 0,10 er billig på papiret - men det er batteriets strøm.
+    ROWS = (
+        row(state="holdchrg", import_rate=90),
+        row(state="exp", import_rate=90, export_rate=10),
+        row(state="exp", import_rate=90, export_rate=10),
+        row(state="holdchrg", import_rate=50),
+        row(state="holdchrg", import_rate=50),
+    )
+
+    def test_without_the_rule_the_battery_is_the_cheapest(self):
+        # Forudsætningen: uden reglen vælges batteriets halvtimer.
+        self.assertEqual(plan(*self.ROWS).cheapest_window(60)[0], 30)
+
+    def test_the_battery_half_hours_are_skipped(self):
+        start, average = plan(*self.ROWS).cheapest_window(60, grid_only=True)
+
+        self.assertEqual(start, 90)
+        self.assertAlmostEqual(average, 0.50, places=9)
+
+    def test_no_grid_window_is_no_window(self):
+        p = plan(
+            row(state="exp", export_rate=10),
+            row(state="exp", export_rate=10),
+            row(state="demand", soc=60),
+        )
+
+        self.assertIsNone(p.cheapest_window(30, grid_only=True))
+
+    def test_the_grid_half_hours_must_follow_each_other(self):
+        # Net-halvtimer der kommer enkeltvis, giver ikke plads til en blok
+        # på en time. Sådan så dagen den 23. september ud.
+        p = plan(
+            row(state="holdchrg", import_rate=50),
+            row(state="exp", export_rate=10),
+            row(state="holdchrg", import_rate=50),
+            row(state="exp", export_rate=10),
+        )
+
+        self.assertIsNone(p.cheapest_window(60, grid_only=True))
+        self.assertIsNotNone(p.cheapest_window(30, grid_only=True))
+
+
 class ReasonVocabularyTest(unittest.TestCase):
     """Begrundelsen er ét ord, og der er kun seks af dem.
 

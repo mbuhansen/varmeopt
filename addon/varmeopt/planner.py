@@ -30,7 +30,7 @@ from dataclasses import replace
 from dataclasses import dataclass
 from typing import Any
 
-from .prices import SUN
+from .prices import BATTERY, SUN
 
 # Hvor langt frem det giver mening at gemme varme.
 #
@@ -633,13 +633,28 @@ class Planner:
             # 11 mod en eksport kl. 18-20, er det de to timers varmtvand der
             # skal dækkes - ikke de næste to timers.
             #
-            # Har uret sat fristen, læses den fra fristen og frem: der bades
-            # kl. 19, uanset om den halvtime tilfældigvis er den dyreste, og
-            # et lager der først skal kunne lave badevand fra kl. 21, kan
-            # ikke lave det bad. Rumvarmen tæller stadig kun i det dyre -
-            # den kan laves billigt lige inden, og den venter gerne.
-            first = frist if on_the_clock and frist < starts else starts
-            dhw_kwh = dhw_kwh_over(first, (starts + span - first) / 60)
+            # Og kun over *strækket*, ligesom rumvarmen - også når uret har
+            # sat fristen. Fristen siger hvornår lageret skal være klart, ikke
+            # hvor meget der skal i det.
+            #
+            # Her stod fra den 9. september at profilen skulle læses fra
+            # fristen og frem, fordi «der bades kl. 19, og et lager der først
+            # skal kunne lave badevand fra kl. 21, kan ikke lave det bad».
+            # Præmissen var at badet skal komme fra lageret. Det skal det ikke:
+            # timerne mellem fristen og strækket er billige - ellers var de en
+            # del af strækket - og pumpen laver badet på stedet, ved den bedre
+            # COP der hører til når den kører efter behov. Den 23. september
+            # regnede reglen varmtvand over kl. 17-21:30, hvor kun 19:30-21:30
+            # var dyrt, og lagde en blok kl. 16 i eksporthalvtimer til 0,53 for
+            # at dække timer der kostede 0,48 at klare efter behov.
+            #
+            # Risikoen skal stå her: beholderen lades af lagerets varme lag. Et
+            # bad før strækket kan tømme det, og UVR'en genopvarmer ved
+            # rumvarmens setpunkt, ikke ved 56 grader. Varmtvandet *inde i*
+            # strækket tælles stadig, så lageret bliver dimensioneret til det
+            # - men ser man strækket begynde uden varme over 55, er det her
+            # man skal kigge.
+            dhw_kwh = dhw_kwh_over(starts, span / 60)
 
         # Og kun den del af den varme der ikke allerede står i tankene. Den
         # varme er lavet og betalt, og den bliver brugt først.
@@ -721,6 +736,91 @@ class Planner:
         # svar.
         want = room if need is None else min(room, need)
 
+        # Spørgsmål 3a: hvor kan der lades fra nettet - og kan det betale sig?
+        #
+        # Skal der lades op, skal det ske fra nettet i de halvtimer hvor
+        # Predbat selv køber. Batteriets energi er Predbats at disponere; en
+        # kilowatt-time taget derfra skal lades ind igen og trækkes ud med tab
+        # begge veje, og ligger batteriet tæt på bunden, kommer den slet ikke
+        # derfra men fra nettet til fuld pris.
+        #
+        # Den 23. september blev en blok lagt kl. 08:11, fordi nu-timen stod
+        # prissat som «batteri» til 1,55 - genkøbsprisen. Batteriet var
+        # næsten tomt, strømmen kom fra nettet til ~2,55, og varmen kostede
+        # ~0,74 - over pillefyrets. Der fandtes net-halvtimer senere samme
+        # dag; de blev aldrig spurgt.
+        #
+        # Og gevinsten regnes mod *den* halvtime der faktisk lades i, ikke mod
+        # nu-timens pris. Er nu-timen en batteripris, siger den ingenting om
+        # hvad opladningen kommer til at koste.
+        grid_window = self._grid_window(
+            plan, want, window, grid, cop_now, cop_later, charge_cop_at
+        )
+        short_fields = dict(
+            dhw_short_kwh=None if short is None else short.dhw_kwh,
+            space_short_kwh=None if short is None else short.space_kwh,
+            dhw_need_kwh=None if short is None else short.dhw_need,
+            dhw_have_kwh=None if short is None else short.dhw_have,
+            space_need_kwh=None if short is None else short.space_need,
+            space_have_kwh=None if short is None else short.space_have,
+        )
+        if grid_window is None:
+            return _with(
+                decision,
+                **stretch,
+                window_minutes=best_when,
+                charge_state="ingen halvtime fra nettet inden fristen",
+                **short_fields,
+                reason=(
+                    f"{why}; ingen halvtime fra nettet inden "
+                    f"{self._when(frist)} — lader ikke af batteriet"
+                ),
+            )
+        grid_when, grid_heat = grid_window
+        target_heat = vp_charge + (
+            top_gap if top_gap is not None and top_gap > 0 else margin
+        )
+        grid_gain = target_heat - grid_heat
+        if grid_gain <= self.hysteresis:
+            return _with(
+                decision,
+                **stretch,
+                window_minutes=best_when,
+                charge_state=(
+                    f"forskellen er for lille - kun {grid_gain:.2f} kr/kWh at "
+                    "hente ved at lade fra nettet"
+                ),
+                **short_fields,
+                reason=(
+                    f"{why}; fra nettet {self._when(grid_when)} kun "
+                    f"{grid_gain:.2f} kr/kWh at hente {self._when(best_when)} "
+                    "— for tæt til at flytte varme på"
+                ),
+            )
+        # Kommer nu-timen selv fra nettet eller solen, bliver spørgsmålet om
+        # *hvornår* stående hos 3b nedenfor, som før. Kun når nu-timen er en
+        # batteritime, kan der slet ikke lades nu - så venter planlæggeren på
+        # nettet, og siger det samme som blokken der lægges der.
+        now_from_grid = price_now is not None and price_now.source != BATTERY
+        if grid_when > 0 and not now_from_grid:
+            return _with(
+                decision,
+                **stretch,
+                planned_kwh=want,
+                window_minutes=best_when,
+                window_starts_in=frist,
+                deadline_on_the_clock=on_the_clock,
+                charge_state=(
+                    f"venter - {self._when(grid_when)} kan der lades fra nettet"
+                ),
+                **short_fields,
+                reason=(
+                    f"{why}; venter - {self._when(grid_when)} lades der fra "
+                    f"nettet til {grid_heat:.2f} mod {target_heat:.2f} "
+                    f"{self._when(best_when)}"
+                ),
+            )
+
         # Spørgsmål 3b: er *nu* overhovedet det rigtige tidspunkt?
         #
         # Her stod intet, og det var en dyr tavshed. Løkken ovenfor finder
@@ -785,7 +885,10 @@ class Planner:
         # sted i døgnet. Er der intet at hente på strækkets top - det kan et
         # absolut stræk have, hvor grænsen er pillefyrets og ikke vores egen
         # pris - står marginen tilbage som før.
-        gain = margin if top_gap is None or top_gap <= 0 else top_gap
+        #
+        # Og siden 23. september regnes den mod det net-vindue der faktisk
+        # lades i - se spørgsmål 3a.
+        gain = grid_gain
         saving = gain * (want if need is None else min(want, need))
 
         # Rækker det ikke hele vejen, skal det stå der. Her blev mængden
@@ -815,8 +918,8 @@ class Planner:
             space_need_kwh=None if short is None else short.space_need,
             space_have_kwh=None if short is None else short.space_have,
             reason=(
-                f"{why}; lad {want:.1f} kWh{driver} nu — lageret skal være "
-                f"fyldt {self._when(frist)}{shortfall}"
+                f"{why}; lad {want:.1f} kWh{driver} nu og spar {saving:.2f} kr "
+                f"— lageret skal være fyldt {self._when(frist)}{shortfall}"
                 if on_the_clock
                 else (
                     f"{why}; lad {want:.1f} kWh{driver} nu og spar "
@@ -869,6 +972,46 @@ class Planner:
         fallback = self.heat_price(electricity, self._cop_for(minutes, cop_now, cop_later))
         return fallback if fallback is not None else 0.0
 
+    def _grid_window(
+        self,
+        plan: Any,
+        want: float,
+        window: int,
+        grid: Any,
+        cop_now: Any,
+        cop_later: Any,
+        charge_cop_at: Any = None,
+    ) -> tuple[int, float] | None:
+        """Hvor en blok kan lades fra nettet, og hvad varmen koster der.
+
+        Returnerer (minutter frem til vinduet, opladningens varmepris i det)
+        eller ``None`` hvis der ingen sammenhængende net-halvtimer er inden
+        fristen. Det er det samme opslag ``charge.py`` lægger blokken efter,
+        så planlæggeren og blokken kan ikke sige hver sit.
+        """
+        if self.charge_kw <= 0 or not _finite(want) or want <= 0:
+            return None
+        minutes = want / self.charge_kw * 60
+        needed = min(int(math.ceil(minutes)), max(1, int(window)))
+        found = plan.cheapest_window(needed, int(window), grid=grid, grid_only=True)
+        if found is None:
+            return None
+        offset = found[0]
+        heats: list[float] = []
+        for index in range(max(1, math.ceil(needed / SLOT_MINUTES))):
+            at = offset + index * SLOT_MINUTES
+            price = plan.marginal(at, grid=grid if at == 0 else None)
+            if price is None:
+                break
+            heats.append(
+                self._charge_price(
+                    at, price.kr_per_kwh, cop_now, cop_later, charge_cop_at
+                )
+            )
+        if not heats:
+            return None
+        return offset, sum(heats) / len(heats)
+
     def _cheaper_moment_before(
         self,
         plan: Any,
@@ -893,6 +1036,11 @@ class Planner:
             price = plan.marginal(minutes)
             if price is None:
                 break
+            # Kun halvtimer der lades fra nettet. En batteripris siger hvad en
+            # kilowatt-time af Predbats lager er værd - ikke hvad en blok
+            # kommer til at koste. Se spørgsmål 3a i ``decide``.
+            if price.source == BATTERY:
+                continue
             heat = self.heat_price(
                 price.kr_per_kwh,
                 self._charge_cop(minutes, cop_now, cop_later, charge_cop_at),
