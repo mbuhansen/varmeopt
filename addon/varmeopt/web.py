@@ -165,6 +165,7 @@ def _page(title: str, active: str, body: str) -> web.Response:
             ("now", "./", "Nu"),
             ("tank", "./tank", "Lager"),
             ("plan", "./plan", "Plan"),
+            ("ledger", "./ledger", "Regnskab"),
             ("usage", "./usage", "Forbrug"),
             ("curve", "./curve", "Varmekurve"),
             ("cop", "./cop", "COP-tabel"),
@@ -215,9 +216,11 @@ class WebUI:
         house_load: Callable[[], Any] | None = None,
         usage: Callable[[], Any] | None = None,
         charge_plan: Callable[[], Any] | None = None,
+        ledger: Callable[[], Any] | None = None,
         on_charge: Callable[[bool], str] | None = None,
     ) -> None:
         self._charge_plan = charge_plan
+        self._ledger = ledger
         self._on_charge = on_charge
         self._status = status
         self._table = table
@@ -246,6 +249,7 @@ class WebUI:
         app.router.add_post("/plan", self.plan)
         app.router.add_get("/curve", self.curve)
         app.router.add_get("/usage", self.usage)
+        app.router.add_get("/ledger", self.ledger)
         app.router.add_get("/system", self.system)
         app.router.add_get("/debug.json", self.debug)
         app.router.add_post("/system", self.system)
@@ -586,6 +590,11 @@ class WebUI:
             f'<p class="legend">{_esc(model.note)}</p>'
         )
         return _page("Forbrug", "usage", body)
+
+    async def ledger(self, _request: web.Request) -> web.Response:
+        """Regnskabet: hvad opladningerne kostede, og hvad de sparede."""
+        ledger = self._ledger() if self._ledger is not None else None
+        return _page("Regnskab", "ledger", _ledger_body(ledger, time.time()))
 
     async def curve(self, _request: web.Request) -> web.Response:
         curve = self._curve() if self._curve is not None else None
@@ -1695,3 +1704,106 @@ def _fmt(value: Any, unit: str = "", digits: int = 2) -> str:
     if isinstance(value, float):
         return f"{value:.{digits}f}{' ' + unit if unit else ''}"
     return f"{_esc(value)}{' ' + unit if unit else ''}"
+
+
+def _when(at: float) -> str:
+    return datetime.fromtimestamp(at).astimezone().strftime("%d/%m %H:%M")
+
+
+def _hhmm(at: float) -> str:
+    return datetime.fromtimestamp(at).astimezone().strftime("%H:%M")
+
+
+def _kr(value: float | None, digits: int = 2) -> str:
+    return "—" if value is None else f"{value:.{digits}f}"
+
+
+def _ledger_body(ledger: Any, now: float) -> str:
+    """Siden bag fanen «Regnskab».
+
+    Tallene er bagefter-tal: strømmen pumpen faktisk trak, til den pris den
+    havde i minuttet, mod den varmepris der faktisk var i det dyre stræk. Se
+    ``ledger.py`` for hvad der er regnet med, og hvad der ikke er.
+    """
+    intro = (
+        "<h1>Regnskab</h1>"
+        '<p class="sub">Kunne opladningerne svare sig? For hver opladning: '
+        "hvad varmen kostede at lade, mod hvad den samme varme ville have "
+        "kostet i det dyre stræk den blev lagt imod — lavet af den billigste "
+        "af varmepumpen og pillefyret, målt mens strækket stod på.</p>"
+    )
+    if ledger is None or not ledger.entries:
+        return intro + (
+            '<p class="sub">Ingen opladninger talt endnu. Regnskabet begynder '
+            "med den første opladning efter opdateringen.</p>"
+        )
+
+    total = ledger.totals(now)
+    month = ledger.totals(now, since=now - 30 * 86400)
+    paid = total["paid_kr"] / total["heat_kwh"] if total["heat_kwh"] > 0 else None
+    alt = total["alt_kr"] / total["heat_kwh"] if total["heat_kwh"] > 0 else None
+    colour = "#1f7a4d" if total["saving_kr"] >= 0 else "#b4530a"
+    rows = [
+        ("Sidste 30 dage", f"{month['saving_kr']:.2f} kr over {month['count']:.0f} opladninger"),
+        ("Varme ladet", f"{total['heat_kwh']:.1f} kWh"),
+        ("Betalt pr. kWh varme", f"{_kr(paid)} kr"),
+        ("Ellers pr. kWh varme", f"{_kr(alt)} kr"),
+        ("Planlæggeren lovede", f"{total['expected_kr']:.2f} kr"),
+    ]
+    dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
+    summary = (
+        "<h2>Afregnet</h2>"
+        f'<div class="card"><div class="big" style="color:{colour}">'
+        f"{total['saving_kr']:.2f} kr</div>"
+        f'<div class="sub" style="margin:0">sparet på {total["count"]:.0f} '
+        "opladninger hvis stræk er forbi</div>"
+        f'<dl style="margin-top:10px">{dl}</dl></div>'
+    )
+
+    body_rows = []
+    for entry in reversed(ledger.entries):
+        kind = "manuel" if entry.manual else ("efter" if entry.top_up else "auto")
+        span = _when(entry.started) + (
+            f"–{_hhmm(entry.ended)}" if entry.ended is not None else "–"
+        )
+        if entry.ended is None:
+            state = "lader nu"
+        elif entry.stretch_until is None:
+            state = "intet stræk at regne mod"
+        elif entry.settled(now):
+            state = "afregnet"
+        else:
+            state = (
+                f"venter på strækket {_hhmm(entry.stretch_from)}"
+                f"–{_hhmm(entry.stretch_until)}"
+            )
+        saving = entry.saving_kr
+        saving_txt = _kr(saving)
+        if saving is not None and not entry.settled(now):
+            saving_txt = f'<span style="color:var(--muted)">{saving_txt}*</span>'
+        cop = f" ({entry.cop:.1f})" if entry.cop is not None else ""
+        body_rows.append(
+            f"<tr><td class=clock>{_esc(span)}</td><td>{kind}</td>"
+            f"<td>{entry.heat_kwh:.1f}</td><td>{entry.el_kwh:.1f}{cop}</td>"
+            f"<td>{_kr(entry.paid_per_kwh)}</td><td>{_kr(entry.alt_per_kwh)}</td>"
+            f"<td>{saving_txt}</td><td>{_kr(entry.expected_kr)}</td>"
+            f'<td class="why">{_esc(state)}</td></tr>'
+        )
+    table = (
+        "<h2>Opladningerne</h2>"
+        '<div class="scroll"><table class="plan"><thead><tr>'
+        "<th>Tid</th><th>Slags</th><th>Varme kWh</th><th>El kWh (COP)</th>"
+        "<th>Betalt kr/kWh</th><th>Ellers kr/kWh</th><th>Sparet kr</th>"
+        "<th>Lovet kr</th><th>Status</th></tr></thead>"
+        f"<tbody>{''.join(body_rows)}</tbody></table></div>"
+    )
+    legend = (
+        '<p class="legend">«Betalt» er varmepumpens målte strøm til '
+        "minuttets marginalpris — batteriets værdi når strømmen kom derfra — "
+        "plus slitagen, delt med den leverede varme. «Ellers» er den billigste "
+        "varme der kunne laves på stedet i strækket. * betyder foreløbig: "
+        "strækket er ikke forbi. <b>Ikke trukket fra:</b> ståtabet mens "
+        "varmen venter, og at noget af den måske først bruges efter "
+        "strækket. Tallet er derfor lidt for pænt.</p>"
+    )
+    return intro + summary + table + legend

@@ -33,6 +33,7 @@ from .guard import Guard
 from .houseload import MAX_AGE_MINUTES, HouseLoad
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
+from .ledger import Ledger
 from .migrate import (
     COP_TABLE_BT12_FILE,
     CURVE_FILE,
@@ -40,6 +41,7 @@ from .migrate import (
     CHARGE_FILE,
     GUARD_FILE,
     HOUSE_LOAD_FILE,
+    LEDGER_FILE,
     SOLAR_FILE,
     STANDBY_FILE,
     USAGE_FILE,
@@ -143,6 +145,21 @@ def _held_by_block(decision: Any, charging: bool, note: str) -> Any:
     )
 
 
+def _stretch_of(decision: Any, now: float) -> tuple[float, float] | None:
+    """Beslutningens dyre stræk som vægurstid - til en manuel opladning.
+
+    Minutterne tæller fra halvtimens start, som planens rækker.
+    """
+    starts = decision.dear_starts_in
+    ends = decision.dear_ends_in
+    if ends is None and starts is not None and decision.dear_span_minutes:
+        ends = starts + decision.dear_span_minutes
+    if starts is None or ends is None or ends <= starts:
+        return None
+    base = slot_start(now)
+    return base + starts * 60, base + ends * 60
+
+
 def _elapsed_minutes(now: float) -> float:
     """Hvor langt inde i den halvtime vi står i, i minutter."""
     return (now - slot_start(now)) / 60
@@ -219,6 +236,8 @@ class Varmeopt:
         # Opladningen som en blok: planlagt én gang, kørt én gang. Se
         # charge.py for hvorfor det ikke er en beslutning pr. minut.
         self.charge_plan = ChargePlan()
+        # Bagefter-regnestykket for hver opladning - se ledger.py.
+        self.ledger = Ledger()
         # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
         # halverer lageret. Kun i hukommelsen: efter en genstart er svaret
         # «ved ikke», og det er det rigtige svar.
@@ -514,6 +533,22 @@ class Varmeopt:
             # skal overleve en ny Predbat-beregning, før det bliver en blok.
             plan_stamp=prices.get("plan_stamp"),
             confirm_plans=self.options.charge_confirm_plans,
+        )
+        # Regnskabet før beslutningen rettes: det er planlæggerens stræk og
+        # løfte der skal stå på posten, ikke blokkens note.
+        now_at = time.time()
+        price_now = prices.get("price_now")
+        self.ledger.observe(
+            now_at,
+            self.charge_plan.block if self.charge_plan.running(now_at) else None,
+            stretch=_stretch_of(decision, now_at),
+            expected_kr=decision.saving_kr,
+            price_kr=price_now.kr_per_kwh if price_now is not None else None,
+            el_kw=balance.hp_power_kw if balance is not None else None,
+            heat_kw=balance.heatpump_kw if balance is not None else None,
+            hp_heat_price=decision.heat_price,
+            pellet_price=self.planner.pellet_price,
+            wear=self.planner.wear,
         )
         decision = _held_by_block(decision, charging, self.charge_plan.note)
         projection = self.planner.project(
@@ -1925,6 +1960,7 @@ class Varmeopt:
             self.store.save(USAGE_FILE, self.usage.to_raw())
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
+            self.store.save(LEDGER_FILE, self.ledger.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
             # binding" kunne aldrig udløses.
@@ -2019,6 +2055,7 @@ async def run() -> None:
             store.load(CAPACITY_FILE, {}), options.hp_charge_kw
         )
         app.charge_plan = ChargePlan.from_raw(store.load(CHARGE_FILE, {}))
+        app.ledger = Ledger.from_raw(store.load(LEDGER_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
         if app.house_load.curve.point_count:
             log.info(
@@ -2057,6 +2094,7 @@ async def run() -> None:
             standby=lambda: app.standby,
             on_standby=lambda arm: _toggle_standby(app, arm),
             charge_plan=lambda: app.charge_plan,
+            ledger=lambda: app.ledger,
             on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,
             usage=lambda: app.usage,
