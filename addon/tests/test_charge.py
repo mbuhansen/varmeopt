@@ -954,3 +954,143 @@ class PredbatCadenceTest(unittest.TestCase):
         self.step(0, None)
 
         self.assertIsNotNone(self.charge.block)
+
+
+class TopUpTest(unittest.TestCase):
+    """Den 30. september: én efteropladning, når blokken leverede og det ikke slog til.
+
+    Kl. 13:00-13:41 leverede en blok 5,4 af 5,2 kWh til varmt vand, men
+    UVR'en bygger temperaturen op over hele tanken, og der stod nul over 55
+    bagefter. Planen bad om 3,3 kWh mere inden fristen kl. 17, strømmen kom
+    fra nettet kl. 14-15 - og spærren sagde «allerede ladet op» resten af
+    eftermiddagen.
+
+    Ejerens ord: helst én opladning i et stort slot, en ekstra gør ikke noget,
+    bare den ikke starter og stopper tit. Derfor én og ikke flere.
+    """
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        # Billigt fra nettet i fire timer, dyrt bagefter.
+        self.plan = plan(*([35] * 8 + [155] * 8))
+        self.charge = ChargePlan()
+        self.target = self.now + 240 * 60
+
+    def decision_at(self, at):
+        left = max(1, int(round((self.target - slot_start(at)) / 60)))
+        return FakeDecision(
+            planned_kwh=6.0,
+            window_starts_in=left,
+            window_minutes=left,
+            dear_starts_in=left,
+            dear_span_minutes=120,
+        )
+
+    def step(self, minute, heat_kw):
+        at = self.now + minute * 60
+        return self.charge.update(
+            at, self.decision_at(at), self.plan, 16.0, heat_kw=heat_kw
+        )
+
+    def run_next_block(self, first, heat_kw):
+        """Kør minut for minut til den næste blok er startet og slut igen."""
+        started = None
+        for minute in range(first, 240):
+            charging = self.step(minute, heat_kw)
+            if charging and started is None:
+                started = self.charge.block
+            if started is not None and not charging:
+                return started, minute
+        return started, None
+
+    def test_a_measured_block_that_fell_short_gets_one_top_up(self):
+        first, ended = self.run_next_block(0, heat_kw=20.0)
+        self.assertIsNotNone(ended)
+        self.assertFalse(first.top_up)
+
+        second, _ = self.run_next_block(ended + 1, heat_kw=20.0)
+
+        self.assertIsNotNone(second, "der skal lægges en efteropladning")
+        self.assertTrue(second.top_up)
+
+    def test_but_only_one(self):
+        _, ended = self.run_next_block(0, heat_kw=20.0)
+        _, ended = self.run_next_block(ended + 1, heat_kw=20.0)
+        self.assertIsNotNone(ended)
+
+        third, _ = self.run_next_block(ended + 1, heat_kw=20.0)
+
+        self.assertIsNone(third)
+        self.assertIn("allerede ladet op", self.charge.note)
+
+    def test_without_a_measurement_the_lock_holds(self):
+        # Vi ved ikke om det var pumpen eller regnestykket der kom til kort.
+        _, ended = self.run_next_block(0, heat_kw=None)
+
+        second, _ = self.run_next_block(ended + 1, heat_kw=None)
+
+        self.assertIsNone(second)
+        self.assertIn("allerede ladet op", self.charge.note)
+
+    def test_a_block_stopped_with_the_button_opens_nothing(self):
+        for minute in range(0, 240):
+            if self.step(minute, 20.0):
+                break
+        self.charge.stop(self.now + (minute + 5) * 60)
+
+        second, _ = self.run_next_block(minute + 6, heat_kw=20.0)
+
+        self.assertIsNone(second)
+
+    def test_the_open_top_up_survives_a_restart(self):
+        _, ended = self.run_next_block(0, heat_kw=20.0)
+        self.assertTrue(self.charge.top_up_open)
+
+        self.charge = ChargePlan.from_raw(self.charge.to_raw())
+        second, _ = self.run_next_block(ended + 1, heat_kw=20.0)
+
+        self.assertIsNotNone(second)
+        self.assertTrue(ChargePlan.from_raw(
+            {"block": second.to_raw()}
+        ).block.top_up)
+
+
+class HeldByBlockTest(unittest.TestCase):
+    """Siger planlæggeren «lad nu» og blokken nej, skal siden sige blokkens.
+
+    Den 30. september stod der «lader 3,3 kWh op nu» på plan-siden hele
+    eftermiddagen, mens blokken sagde «allerede ladet op» og intet skete.
+    """
+
+    def decision(self, charge):
+        from varmeopt.planner import Decision
+
+        return Decision(
+            source="varmepumpe",
+            heat_price=0.31,
+            pellet_price=0.71,
+            charge=charge,
+            charge_kwh=3.3,
+            charge_state="lader 3.3 kWh op nu",
+            reason="VP 0.31 < pille 0.71; lad 3.3 kWh til varmt vand nu og spar 0.68 kr",
+        )
+
+    def test_the_block_note_replaces_the_promise(self):
+        from varmeopt.__main__ import _held_by_block
+
+        note = "allerede ladet op mod det her dyre stræk"
+        held = _held_by_block(self.decision(True), False, note)
+
+        self.assertFalse(held.charge)
+        self.assertEqual(held.charge_state, note)
+        self.assertNotIn(" nu og spar", held.reason)
+        self.assertTrue(held.reason.startswith("VP 0.31 < pille 0.71; " + note))
+        self.assertIn("3.3 kWh", held.reason)
+
+    def test_agreement_is_left_alone(self):
+        from varmeopt.__main__ import _held_by_block
+
+        original = self.decision(True)
+        self.assertEqual(_held_by_block(original, True, "x").reason, original.reason)
+        # Og en blok der kører mens planlæggeren siger nej, tænder flaget.
+        self.assertTrue(_held_by_block(self.decision(False), True, "x").charge)

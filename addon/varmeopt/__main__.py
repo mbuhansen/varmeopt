@@ -112,6 +112,37 @@ def _clock_ahead(minutes: float, now: float | None = None) -> str:
     ).strftime("%H:%M")
 
 
+def _held_by_block(decision: Any, charging: bool, note: str) -> Any:
+    """Beslutningen rettet ind efter blokken, så siden ikke lover noget.
+
+    Planlæggeren siger hvad den *vil*, blokken hvad der *sker*. Her blev kun
+    flaget rettet, og begrundelsen og overskriften stod urørt. Den 30.
+    september stod der derfor «lader 3,3 kWh op nu» og «lad 3,3 kWh til varmt
+    vand nu» på plan-siden hele eftermiddagen, mens blokken sagde «allerede
+    ladet op mod det her dyre stræk» og intet skete.
+
+    Siger planlæggeren ja og blokken nej, er det blokkens note der står, og
+    planlæggerens mængde står bagved som det den ønskede. Siger begge ja,
+    eller planlæggeren nej, er der ikke noget at rette.
+    """
+    if not decision.charge or charging:
+        return replace(decision, charge=charging)
+    # Kildevalget står før første semikolon - se ``source_now``.
+    head = decision.reason.split("; ", 1)[0]
+    wanted = decision.charge_kwh
+    tail = (
+        f" — planen ønsker {wanted:.1f} kWh"
+        if isinstance(wanted, (int, float)) and math.isfinite(wanted)
+        else ""
+    )
+    return replace(
+        decision,
+        charge=False,
+        charge_state=note,
+        reason=f"{head}; {note}{tail}",
+    )
+
+
 def _elapsed_minutes(now: float) -> float:
     """Hvor langt inde i den halvtime vi står i, i minutter."""
     return (now - slot_start(now)) / 60
@@ -484,7 +515,7 @@ class Varmeopt:
             plan_stamp=prices.get("plan_stamp"),
             confirm_plans=self.options.charge_confirm_plans,
         )
-        decision = replace(decision, charge=charging)
+        decision = _held_by_block(decision, charging, self.charge_plan.note)
         projection = self.planner.project(
             prices.get("plan"),
             lookup.cop if lookup is not None else None,

@@ -160,6 +160,9 @@ class Block:
     # stræk - planlæggeren må gerne lægge sin egen bagefter, hvis der stadig
     # mangler noget.
     manual: bool = False
+    # Lagt mod et stræk der allerede er ladet op imod - se «efteropladningen»
+    # i ``ChargePlan.update``. Når den er kørt, er der ikke flere.
+    top_up: bool = False
 
     @property
     def began(self) -> float:
@@ -186,6 +189,7 @@ class Block:
             "measured_seconds": round(self.measured_seconds, 1),
             "began_at": None if self.began_at is None else round(self.began_at, 1),
             "manual": self.manual,
+            "top_up": self.top_up,
         }
 
     @classmethod
@@ -210,6 +214,7 @@ class Block:
                     float(raw["began_at"]) if raw.get("began_at") is not None else None
                 ),
                 manual=raw.get("manual") is True,
+                top_up=raw.get("top_up") is True,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -235,6 +240,10 @@ class ChargePlan:
     # vi nu sigter mod, begynder inden det her, er det det samme stræk - og
     # ét stræk giver én opladning.
     done_until: float | None = None
+    # Må der lægges én blok mere mod det stræk ``done_until`` dækker? Kun
+    # når den forrige leverede sin mængde, målt - se efteropladningen i
+    # ``update``.
+    top_up_open: bool = False
     note: str = NO_PLAN
     # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
@@ -467,7 +476,7 @@ class ChargePlan:
                 else f" ({self.block.delivered_kwh:.1f} leveret)"
             )
             self.note = (
-                f"{'manuel opladning' if self.block.manual else 'lader'} "
+                f"{self._label(self.block)} "
                 f"{self.block.kwh:.1f} kWh{leveret}, "
                 f"{self.block.minutes_left(now):.0f} min tilbage"
             )
@@ -493,7 +502,19 @@ class ChargePlan:
                 return self._finish(
                     now, f"tiden løb ud — {missing:.1f} kWh nåede ikke i lageret"
                 )
-            return self._finish(now, "kørt")
+            # Kun en blok der *målt* leverede sin mængde, åbner for en
+            # efteropladning. Uden måling ved vi ikke om det var pumpen eller
+            # regnestykket der kom til kort, og så gælder spærren som før.
+            return self._finish(
+                now,
+                "kørt",
+                top_up=(
+                    not self.block.manual
+                    and not self.block.top_up
+                    and measured
+                    and missing <= DELIVERED_TOLERANCE_KWH
+                ),
+            )
 
         self._running = False
 
@@ -519,7 +540,7 @@ class ChargePlan:
             self._wanted_stamps = []
             if self.block is not None:
                 self.note = (
-                    f"venter — lader {self.block.kwh:.1f} kWh om "
+                    f"venter — {self._label(self.block)} {self.block.kwh:.1f} kWh om "
                     f"{self.block.minutes_until(now):.0f} min"
                 )
             else:
@@ -527,7 +548,27 @@ class ChargePlan:
             return False
 
         dear_from, dear_until = self._dear_key(now, decision, window)
-        if self.done_until is not None and dear_from < self.done_until:
+        covered = self.done_until is not None and dear_from < self.done_until
+        # **Efteropladningen.** Én undtagelse fra spærren nedenfor, og den er
+        # ikke den udgåede om et tømt lager: den gælder *før* strækket, ikke
+        # inde i det, og kun når blokken leverede den mængde den blev lagt
+        # for - målt - og planlæggeren alligevel stadig beder om mindst ét
+        # minimumstræk.
+        #
+        # Så er det regnestykket der kom til kort, ikke pumpen. Den 30.
+        # september kl. 13:00-13:41 leverede en blok 5,4 af 5,2 kWh til
+        # varmt vand, men tankene endte på 49/50/50 og 48/33/31 - nul over
+        # 55. UVR'en lader med setpunktet toppen + 2 grader, højst 58, og
+        # bygger temperaturen op over hele tanken; ``energy_to_reach`` regner
+        # lag for lag oppefra. Bagefter bad planen om 3,3 kWh mere, fristen
+        # kl. 17 stod der stadig, og kl. 14-15 kom strømmen fra nettet - men
+        # spærren sagde «allerede ladet op» resten af eftermiddagen.
+        #
+        # Én og ikke flere: en efteropladning åbner ikke for endnu en. Kan
+        # lageret slet ikke nå 55, bliver det ved én ekstra blok og ikke ved
+        # en kompressor der kører hele eftermiddagen efter et tal.
+        top_up = covered and self.top_up_open
+        if covered and not top_up:
             # Det her stræk er klaret. Ét dyrt stræk giver én opladning;
             # først når et *nyt* stræk begynder, lægges der en ny blok.
             #
@@ -553,6 +594,8 @@ class ChargePlan:
             # 56 og fylde *hele* lageret til aftenpris. Kildevalget siger
             # samtidig pillefyr, for det er derfor strækket er et stræk.
             # Alle tre veje er billigere end den undtagelse der udgik.
+            #
+            # Efteropladningen ovenfor er noget andet - se dér.
             self.block = None
             self._forget_wish()
             self.note = "allerede ladet op mod det her dyre stræk"
@@ -583,7 +626,7 @@ class ChargePlan:
                 # Samme Predbat-plan som da den blev lagt: ingen nye priser at
                 # flytte den på.
                 self.note = (
-                    f"venter — lader {self.block.kwh:.1f} kWh om "
+                    f"venter — {self._label(self.block)} {self.block.kwh:.1f} kWh om "
                     f"{self.block.minutes_until(now):.0f} min"
                 )
                 return False
@@ -663,6 +706,7 @@ class ChargePlan:
             float(want),
             deadline=deadline,
             began_at=max(starts, now),
+            top_up=top_up,
         )
         # En ny blok har ikke leveret noget, og den forrige cyklus hører til
         # den gamle. Uden nulstillingen ville det første mellemrum blive
@@ -671,11 +715,12 @@ class ChargePlan:
         self._placed_stamp = plan_stamp
         if self.block.running(now):
             self._running = True
-            self.note = f"lader {want:.1f} kWh nu, {minutes:.0f} min"
+            self.note = f"{self._label(self.block)} {want:.1f} kWh nu, {minutes:.0f} min"
             return True
 
         self.note = (
-            f"lader {want:.1f} kWh om {self.block.minutes_until(now):.0f} min "
+            f"{self._label(self.block)} {want:.1f} kWh om "
+            f"{self.block.minutes_until(now):.0f} min "
             f"i {minutes:.0f} min"
         )
         return False
@@ -735,9 +780,19 @@ class ChargePlan:
                 return True
         return False
 
-    def _finish(self, now: float, why: str) -> bool:
+    @staticmethod
+    def _label(block: Block) -> str:
+        if block.manual:
+            return "manuel opladning"
+        return "efteroplader" if block.top_up else "lader"
+
+    def _finish(self, now: float, why: str, top_up: bool = False) -> bool:
         if self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
+            # Hver automatisk blok der slutter, afgør det på ny. Stoppet med
+            # knappen, fuldt lager, pillefyret, tiden der løb ud - ingen af
+            # dem åbner for en blok mere.
+            self.top_up_open = top_up
         self.block = None
         self._running = False
         self._full_since = None
@@ -755,6 +810,7 @@ class ChargePlan:
         return {
             "block": None if self.block is None else self.block.to_raw(),
             "done_until": self.done_until,
+            "top_up_open": self.top_up_open,
             # Stemplerne overlever en genstart. Ellers ville hver opdatering
             # nulstille bekræftelsen - og et ønske der har holdt på én plan,
             # skal ikke begynde forfra fordi add-on'en blev genstartet.
@@ -775,6 +831,7 @@ class ChargePlan:
         until = raw.get("done_until")
         if _finite(until):
             plan.done_until = float(until)
+        plan.top_up_open = raw.get("top_up_open") is True
         stamps = raw.get("wanted_stamps")
         if isinstance(stamps, list):
             plan._wanted_stamps = [s for s in stamps if isinstance(s, str)][-8:]
