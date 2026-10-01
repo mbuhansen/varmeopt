@@ -465,17 +465,29 @@ class HotWaterTest(unittest.TestCase):
 
         self.assertEqual(cold.hot_water_kwh(55.0, 44.0), 0.0)
 
-    def test_lifting_tank_a_is_enough_for_the_evening(self):
+    def test_lifting_top_and_mid_is_enough_for_the_evening(self):
         # Tankene den 1. oktober kl. 13:05, og 1,82 kWh varmt vand kl. 19-20.
+        # Top og midt op til 55; bunden må blive hvor returen kommer ind.
         buffer = Buffer(
             (Tank("A", 500, 44.7, 45.0, 41.1), Tank("B", 500, 40.6, 34.0, 31.3)),
             reference=30.0,
             ceiling=60.0,
         )
-        lift = self.per * ((55 - 44.7) + (55 - 45.0) + (55 - 41.1))
+        lift = self.per * ((55 - 44.7) + (55 - 45.0))
 
         self.assertAlmostEqual(
             buffer.energy_to_reach(1.82, 55.0, 44.0), lift, places=3
+        )
+
+    def test_top_and_mid_at_the_supply_count_the_whole_tank_to_the_return(self):
+        # Ejerens valg: står top og midt på 55, er det 500 L × (middel − 44).
+        warm = Buffer((Tank("A", 500, 56.0, 55.0, 47.0),), reference=30.0, ceiling=60.0)
+        mean = (56.0 + 55.0 + 47.0) / 3
+
+        self.assertAlmostEqual(
+            warm.hot_water_kwh(55.0, 44.0),
+            500 * WH_PER_LITER_K * (mean - 44.0) / 1000,
+            places=3,
         )
 
 
@@ -500,8 +512,8 @@ class ThinHotLayerTest(unittest.TestCase):
             self.buffer.hot_water_kwh(55.0, 44.0), self.per * 0.7, places=3
         )
 
-    def test_and_so_the_rest_of_the_tank_must_be_lifted(self):
-        lift = self.per * ((55 - 46.0) + (55 - 47.0))
+    def test_and_so_the_middle_must_be_lifted(self):
+        lift = self.per * (55 - 46.0)
 
         self.assertAlmostEqual(
             self.buffer.energy_to_reach(1.82, 55.0, 44.0), lift, places=3

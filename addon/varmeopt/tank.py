@@ -34,6 +34,11 @@ def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
 
 
+# Så mange lag oppefra der skal stå på grænsen, før en tank tæller ned til
+# returen: top og midt. Anlæggets ejer den 1. oktober.
+HOT_LAYERS = 2
+
+
 def _hot_water(
     layers: tuple[float, ...] | list[float],
     liters_per_layer: float,
@@ -42,13 +47,15 @@ def _hot_water(
 ) -> float:
     """Hvad lagene i én tank kan give varmtvandsbeholderen, i kWh.
 
-    Står hele tanken på mindst ``supply``, kan den give alt ned til returen.
-    Ellers er det varme et tyndt lag over et skillelag, og det tæller kun med
-    det der ligger over grænsen - se ``Buffer.hot_water_kwh``.
+    Står top og midt på mindst ``supply``, kan tanken give alt ned til
+    returen - det er 500 L × (middeltemperatur − retur). Bunden må gerne være
+    koldere; det er der returen kommer ind. Ellers er det varme et tyndt lag
+    over et skillelag, og det tæller kun med det der ligger over grænsen - se
+    ``Buffer.hot_water_kwh``.
     """
     if not layers:
         return 0.0
-    floor = return_temp if min(layers) >= supply else supply
+    floor = return_temp if min(layers[:HOT_LAYERS]) >= supply else supply
     wh = sum(liters_per_layer * max(0.0, t - floor) for t in layers)
     return wh * WH_PER_LITER_K / 1000
 
@@ -282,8 +289,9 @@ class Buffer:
         bruge 1,82. Men et lag på 55,7 over et på 46 er et tyndt varmt lag over
         et skillelag, ikke 167 liter badevand. Når beholderen trækker, falder
         toppen under 53, og pumpen starter. Så en tank tæller først ned til
-        returen, når top, midt og bund alle står på grænsen; indtil da tæller
-        den kun det der ligger over den.
+        returen, når top og midt står på grænsen; indtil da tæller den kun det
+        der ligger over den. Bunden må gerne være koldere - det er der returen
+        kommer ind, og ejerens valg var netop top og midt.
         """
         return sum(t.hot_water_kwh(supply, return_temp) for t in self.measured)
 
@@ -333,12 +341,17 @@ class Buffer:
         total = 0.0
         for tank in self.measured:
             per = tank._liters_per_layer * WH_PER_LITER_K / 1000
-            # Løftet: hvert lag under grænsen op til den. Først da tæller
-            # tanken ned til returen - se ``hot_water_kwh`` - og gevinsten er
-            # forskellen på hvad den kan give før og efter.
-            total += sum(per * (temp - layer) for layer in tank.layers if layer < temp)
+            # Løftet: top og midt op til grænsen. Først da tæller tanken ned
+            # til returen - se ``hot_water_kwh`` - og gevinsten er forskellen
+            # på hvad den kan give før og efter. Uden en retur er det hele
+            # tanken, som før.
+            depth = HOT_LAYERS if return_temp is not None else len(tank.layers)
+            lifted = [
+                max(layer, temp) if i < depth else layer
+                for i, layer in enumerate(tank.layers)
+            ]
+            total += sum(per * (new - old) for new, old in zip(lifted, tank.layers))
             if return_temp is not None:
-                lifted = [max(layer, temp) for layer in tank.layers]
                 liters = tank._liters_per_layer
                 missing -= _hot_water(lifted, liters, temp, return_temp) - _hot_water(
                     tank.layers, liters, temp, return_temp
