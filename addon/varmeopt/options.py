@@ -205,13 +205,19 @@ _DEFAULTS: dict[str, object] = {
     "vvb_kw_cold": 8.0,
     "vvb_kw_hot": 3.0,
     # Under den her temperatur kan lageret ikke lade beholderen, og så må
-    # varmepumpen gøre det - også hvis strømmen er dyr netop da.
+    # varmepumpen gøre det - også hvis strømmen er dyr netop da. Det er den
+    # temperatur beholderen lades med. At pumpen først kobler ind når toppen
+    # er under 53, er UVR'ens hysterese og ikke en anden grænse.
     #
     # Ikke det samme som ``tank_cascade_temp``, selv om de to tilfældigvis
     # står på samme tal i dag: kaskaden styrer *ladningens* rækkefølge
     # mellem de to tanke, det her er hvad lageret kan *levere*. To
     # spørgsmål, to indstillinger.
     "dhw_usable_temp": 55.0,
+    # Returen fra varmtvandsbeholderens spiral. Et lag på mindst
+    # ``dhw_usable_temp`` kan give beholderen sin varme helt ned hertil -
+    # ikke kun det der ligger over de 55. Se ``Buffer.hot_water_kwh``.
+    "dhw_return_temp": 44.0,
     "entity_cop_measured": "sensor.node_1_analog_logging_12",
     # Udetemperaturen. Den er ikke til pynt: uden den kan hverken varmekurven
     # eller COP-tabellen slå op, og cyklussen springer over. Den kom før fra
@@ -392,6 +398,7 @@ class Options:
     vvb_kw_cold: float
     vvb_kw_hot: float
     dhw_usable_temp: float
+    dhw_return_temp: float
     entity_cop_measured: str
     entity_outdoor_temp: str
     dhw_setpoint: float
@@ -504,6 +511,7 @@ class Options:
                     "vvb_kw_cold",
                     "vvb_kw_hot",
                     "dhw_usable_temp",
+                    "dhw_return_temp",
                     "store_full_by_hour",
                 )
             },

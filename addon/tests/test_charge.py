@@ -1094,3 +1094,94 @@ class HeldByBlockTest(unittest.TestCase):
         self.assertEqual(_held_by_block(original, True, "x").reason, original.reason)
         # Og en blok der kører mens planlæggeren siger nej, tænder flaget.
         self.assertTrue(_held_by_block(self.decision(False), True, "x").charge)
+
+
+class StoreTargetTest(unittest.TestCase):
+    """Lageret afgør hvornår en blok er færdig - ikke pumpens kWh.
+
+    Ejerens ord den 1. oktober: målingerne skal foregå på lageret, da det er
+    det vi ønsker at fylde til en bestemt tid. Dagen før leverede en blok sine
+    kWh og efterlod nul over 55.
+    """
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        self.plan = plan(*DELIVERY_RATES)
+        self.charge = ChargePlan()
+        self.target = self.now + 120 * 60
+        self.step(0, met=False)
+        self.block = self.charge.block
+
+    def step(self, minute, met, heat_kw=16.0):
+        at = self.now + minute * 60
+        left = max(1, int(round((self.target - slot_start(at)) / 60)))
+        return self.charge.update(
+            at,
+            FakeDecision(
+                planned_kwh=12.0,
+                window_starts_in=left,
+                window_minutes=left,
+                dear_starts_in=left,
+                dear_span_minutes=120,
+            ),
+            self.plan,
+            16.0,
+            heat_kw=heat_kw,
+            min_runtime_minutes=15,
+            target_met=met,
+        )
+
+    def minutes(self, block):
+        return int(round((block.ends_at - block.starts_at) / 60))
+
+    def test_an_unmet_store_runs_past_the_pumps_kwh(self):
+        # Pumpen leverer rigeligt, men lageret er ikke nået op.
+        for minute in range(1, self.minutes(self.block) + 2):
+            self.step(minute, met=False, heat_kw=30.0)
+
+        self.assertTrue(self.charge.charging, "blokken kører videre")
+        self.assertEqual(self.charge.block.ends_at, self.block.deadline)
+
+    def test_and_stops_the_minute_the_store_is_there(self):
+        for minute in range(1, 30):
+            self.step(minute, met=False)
+
+        self.assertFalse(self.step(30, met=True))
+        self.assertIn("nået målet", self.charge.note)
+
+    def test_but_not_before_the_minimum_runtime(self):
+        self.assertTrue(self.step(5, met=True))
+
+    def test_the_deadline_still_closes_it(self):
+        until = int(round((self.block.deadline - self.now) / 60))
+        for minute in range(1, until + 2):
+            self.step(minute, met=False)
+            if self.charge.block is None:
+                break
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("nåede ikke målet", self.charge.note)
+        self.assertFalse(self.charge.top_up_open)
+
+    def test_without_a_target_the_kwh_rule_as_before(self):
+        for minute in range(1, self.minutes(self.block) + 2):
+            if not self.step(minute, met=None, heat_kw=30.0):
+                break
+
+        self.assertFalse(self.charge.charging)
+        self.assertIn("kørt", self.charge.note)
+
+
+class StoreCoversTest(unittest.TestCase):
+    def test_it_reads_the_two_shortfalls(self):
+        from varmeopt.__main__ import _store_covers
+
+        @dataclass
+        class D:
+            dhw_short_kwh: float | None
+            space_short_kwh: float | None
+
+        self.assertIsNone(_store_covers(D(None, None)))
+        self.assertTrue(_store_covers(D(0.0, 0.1)))
+        self.assertFalse(_store_covers(D(3.3, 0.0)))
+        self.assertFalse(_store_covers(D(0.0, 1.0)))

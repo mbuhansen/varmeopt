@@ -399,3 +399,81 @@ class CascadeTest(unittest.TestCase):
             places=9,
         )
 
+
+
+class WholeTankChargeTest(unittest.TestCase):
+    """Den 1. oktober: UVR'en løfter hele tanken, før toppen kommer over 55.
+
+    Planen bad om 5,7 kWh for 1,82 kWh over 55 grader, regnet lag for lag
+    oppefra. Men UVR'en lader med setpunktet toppen + 2 grader og bygger
+    temperaturen op over hele tank A - dagen før endte en blok på 5,4 kWh med
+    nul over 55.
+    """
+
+    def setUp(self):
+        self.buffer = Buffer(
+            (Tank("A", 500, 44.7, 45.0, 41.1), Tank("B", 500, 40.6, 34.0, 31.3)),
+            reference=30.0,
+            ceiling=60.0,
+        )
+
+    def test_the_whole_first_tank_is_lifted(self):
+        per = 500 / 3 * WH_PER_LITER_K / 1000
+        lift = per * ((55 - 44.7) + (55 - 45.0) + (55 - 41.1))
+
+        self.assertAlmostEqual(
+            self.buffer.energy_to_reach(1.82, 55.0), lift + 1.82, places=2
+        )
+
+    def test_the_second_tank_only_when_the_first_cannot_carry_it(self):
+        # Tank A kan bære 5 K over 55 i alle tre lag. Mere end det, og B må med.
+        per = 500 / 3 * WH_PER_LITER_K / 1000
+        a_band = 3 * per * 5
+
+        small = self.buffer.energy_to_reach(a_band - 0.1, 55.0)
+        large = self.buffer.energy_to_reach(a_band + 0.1, 55.0)
+
+        self.assertGreater(large - small, per * (55 - 31.3), "B's løft er med")
+
+    def test_nothing_when_it_is_already_there(self):
+        hot = Buffer((Tank("A", 500, 58.0, 57.0, 56.0),), reference=30.0, ceiling=60.0)
+
+        self.assertEqual(hot.energy_to_reach(1.0, 55.0), 0.0)
+
+
+class HotWaterTest(unittest.TestCase):
+    """Den 1. oktober: et lag på 55-58 kan give beholderen varme ned til 44.
+
+    Anlæggets ejer: «når tank A er 55-58 grader, så er der jo 500 liter der
+    kan afkøles ned til ca. 44 grader, som retur er på VVB'en».
+    """
+
+    def setUp(self):
+        self.per = 500 / 3 * WH_PER_LITER_K / 1000
+
+    def test_a_hot_tank_counts_down_to_the_return(self):
+        hot = Buffer((Tank("A", 500, 56.0, 55.0, 55.0),), reference=30.0, ceiling=60.0)
+
+        self.assertAlmostEqual(
+            hot.hot_water_kwh(55.0, 44.0), self.per * (12 + 11 + 11), places=3
+        )
+        # Det gamle tal talte kun det over grænsen.
+        self.assertLess(hot.usable_kwh(55.0), 1.0)
+
+    def test_layers_below_the_supply_give_nothing(self):
+        cold = Buffer((Tank("A", 500, 54.0, 50.0, 45.0),), reference=30.0, ceiling=60.0)
+
+        self.assertEqual(cold.hot_water_kwh(55.0, 44.0), 0.0)
+
+    def test_lifting_tank_a_is_enough_for_the_evening(self):
+        # Tankene den 1. oktober kl. 13:05, og 1,82 kWh varmt vand kl. 19-20.
+        buffer = Buffer(
+            (Tank("A", 500, 44.7, 45.0, 41.1), Tank("B", 500, 40.6, 34.0, 31.3)),
+            reference=30.0,
+            ceiling=60.0,
+        )
+        lift = self.per * ((55 - 44.7) + (55 - 45.0) + (55 - 41.1))
+
+        self.assertAlmostEqual(
+            buffer.energy_to_reach(1.82, 55.0, 44.0), lift, places=3
+        )

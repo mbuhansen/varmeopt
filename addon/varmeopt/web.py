@@ -390,6 +390,7 @@ class WebUI:
             + _charge_card(
                 status,
                 self._options.dhw_usable_temp if self._options is not None else None,
+                self._options.dhw_return_temp if self._options is not None else None,
             )
             + _balance_section(status.get("balance"), buffer, status)
             + _solar_section(status, buffer)
@@ -1441,7 +1442,11 @@ def _need_line(
     return line
 
 
-def _charge_card(status: dict[str, Any], dhw_temp: float | None = None) -> str:
+def _charge_card(
+    status: dict[str, Any],
+    dhw_temp: float | None = None,
+    return_temp: float | None = None,
+) -> str:
     """Hvorfor den vil lade op — eller hvorfor den lader være.
 
     Beslutningen har hele historien i sin ``reason``, men den er en sætning
@@ -1458,7 +1463,14 @@ def _charge_card(status: dict[str, Any], dhw_temp: float | None = None) -> str:
     if decision is None or not getattr(decision, "charge_state", ""):
         return ""
 
-    over = f" over {dhw_temp:.0f}°" if dhw_temp is not None else ""
+    # Varmen til beholderen tælles fra de lag der er varme nok, ned til
+    # returen - se ``Buffer.hot_water_kwh``.
+    if dhw_temp is not None and return_temp is not None:
+        over = f" ved {dhw_temp:.0f}° og derover, ned til {return_temp:.0f}°"
+    elif dhw_temp is not None:
+        over = f" over {dhw_temp:.0f}°"
+    else:
+        over = ""
     rows: list[tuple[str, str]] = []
     if decision.dhw_need_kwh is not None:
         rows.append(

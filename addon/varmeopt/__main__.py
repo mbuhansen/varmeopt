@@ -145,6 +145,30 @@ def _held_by_block(decision: Any, charging: bool, note: str) -> Any:
     )
 
 
+# Så lidt må mangle, før lageret regnes for at have nået målet. Samme
+# størrelsesorden som følerstøjen på lagerets otte termometre - se
+# ``DELIVERED_TOLERANCE_KWH`` i charge.py.
+STORE_TARGET_TOLERANCE_KWH = 0.2
+
+
+def _store_covers(decision: Any) -> bool | None:
+    """Har lageret nu det strækket skal bruge - målt, ikke skønnet?
+
+    Planlæggeren regner hver cyklus ud hvad lageret mangler til varmt vand
+    over brugstemperaturen og til rumvarmen, og det regnes på tankenes egne
+    termometre. Mangler ingen af dem noget, er målet nået.
+
+    ``None`` når planlæggeren ikke har regnet det ud i den cyklus - så slutter
+    blokken på pumpens kWh som før.
+    """
+    dhw, space = decision.dhw_short_kwh, decision.space_short_kwh
+    if dhw is None and space is None:
+        return None
+    return (dhw or 0.0) <= STORE_TARGET_TOLERANCE_KWH and (
+        space or 0.0
+    ) <= STORE_TARGET_TOLERANCE_KWH
+
+
 def _stretch_of(decision: Any, now: float) -> tuple[float, float] | None:
     """Beslutningens dyre stræk som vægurstid - til en manuel opladning.
 
@@ -453,7 +477,9 @@ class Varmeopt:
             # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
             # er varmt vand - og lageret kunne ikke lave et eneste bad.
             hot_kwh=(
-                store.usable_kwh(self.options.dhw_usable_temp)
+                store.hot_water_kwh(
+                    self.options.dhw_usable_temp, self.options.dhw_return_temp
+                )
                 if store is not None
                 else None
             ),
@@ -467,7 +493,13 @@ class Varmeopt:
             # Og hvad det koster at få den varme til at *stå* der. Lagerets
             # fysik hører hjemme i tank.py, ikke i planlæggeren.
             dhw_input_for=(
-                (lambda kwh: store.energy_to_reach(kwh, self.options.dhw_usable_temp))
+                (
+                    lambda kwh: store.energy_to_reach(
+                        kwh,
+                        self.options.dhw_usable_temp,
+                        self.options.dhw_return_temp,
+                    )
+                )
                 if store is not None
                 else None
             ),
@@ -533,6 +565,9 @@ class Varmeopt:
             # skal overleve en ny Predbat-beregning, før det bliver en blok.
             plan_stamp=prices.get("plan_stamp"),
             confirm_plans=self.options.charge_confirm_plans,
+            # Lagerets eget svar - det er det der skal være fyldt, ikke
+            # pumpen der skal have leveret et tal. Se ``_store_covers``.
+            target_met=_store_covers(decision),
         )
         # Regnskabet før beslutningen rettes: det er planlæggerens stræk og
         # løfte der skal stå på posten, ikke blokkens note.

@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.78.0"
+version: "0.79.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -75,6 +75,7 @@ options:
   vvb_kw_cold: 8
   vvb_kw_hot: 3
   dhw_usable_temp: 55
+  dhw_return_temp: 44
   entity_cop_measured: sensor.node_1_analog_logging_12
   entity_outdoor_temp: sensor.nibe_bt1_average
   dhw_setpoint: 56
@@ -163,6 +164,7 @@ schema:
   vvb_kw_cold: float(0,)?
   vvb_kw_hot: float(0,)?
   dhw_usable_temp: float(0,100)?
+  dhw_return_temp: float(0,100)?
   entity_cop_measured: str
   entity_outdoor_temp: str?
   dhw_setpoint: float(20,90)

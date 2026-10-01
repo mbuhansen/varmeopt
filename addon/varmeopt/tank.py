@@ -240,48 +240,89 @@ class Buffer:
         """
         return sum(t.stored_kwh(above) for t in self.measured)
 
-    def energy_to_reach(self, kwh_above: float, temp: float) -> float:
+    def hot_water_kwh(self, supply: float, return_temp: float) -> float:
+        """Den varme lageret kan give varmtvandsbeholderen.
+
+        Beholderen lades af lagerets varme lag, og vandet kommer tilbage ved
+        returen. Et lag der står på mindst ``supply``, kan derfor give hele
+        sin varme ned til ``return_temp`` - ikke kun det der ligger over
+        ``supply``.
+
+        Her stod ``usable_kwh(55)``, og den talte et lag på 56 grader som én
+        kelvin varmt vand. Anlæggets ejer den 1. oktober: «når tank A er 55-58
+        grader, så er der jo 500 liter der kan afkøles ned til ca. 44 grader,
+        som retur er på VVB'en». Det er 6,4 kWh, hvor det gamle tal sagde 0-2.
+        """
+        total = 0.0
+        for tank in self.measured:
+            per = tank._liters_per_layer
+            total += sum(
+                per * max(0.0, t - return_temp) for t in tank.layers if t >= supply
+            )
+        return total * WH_PER_LITER_K / 1000
+
+    def energy_to_reach(
+        self, kwh_above: float, temp: float, return_temp: float | None = None
+    ) -> float:
         """Hvor meget der skal *ind*, før lageret kan levere ved den temperatur.
 
-        Det her er forskellen mellem at måle og at lade. ``usable_kwh`` siger
-        hvad der står klar over 55 °C; det her siger hvad det koster at få
-        noget til at stå der.
+        Det her er forskellen mellem at måle og at lade. ``hot_water_kwh``
+        siger hvad der står klar til beholderen; det her siger hvad det koster
+        at få noget til at stå der.
 
         Regnestykket har to led, og det andet blev glemt. Vil man have 6 kWh
         stående over 55 °C i et lager der er 45, skal man både betale løftet
         fra 45 til 55 *og* de 6 kWh ovenpå. Den 6. september stod tankene på
         45/45/43 og 47/39/31, og planen sagde «lad 6,0 kWh til varmt vand» —
         men 6 kWh hæver de 1000 L omkring fem grader og efterlader stadig
-        nul over 55. Det rigtige tal er over tyve.
+        nul over 55.
 
-        Lagene tages oppefra og ned, tank for tank, fordi det er sådan
-        anlægget lader: solvarmen kommer ind i bunden af tank ét, og
-        afspærringsventilen til tank to åbner først når tank ét er varm i
-        toppen. Et lag kan kun bære ``loft − temperatur`` over grænsen, så
-        når de øverste lag er fyldt, må de næste med — og et lager med et
-        loft på 60 °C kan i alt kun holde få kilowatt-timer over 55.
-        Rækker det ikke, er svaret det det koster at fylde helt op, og så
-        er det pladsen der binder frem for regnestykket.
+        **Hele tanken løftes først.** UVR'en lader med setpunktet toppen + 2
+        grader, højst 58, og bygger temperaturen op over hele tanken. Den 30.
+        september leverede en blok derfor 5,4 af de 5,2 kWh regnestykket bad
+        om, og tankene endte på 49/50/50 og 48/33/31. Varmen er ikke spildt -
+        den går til rumvarmen bagefter - men den skal med i mængden, ellers
+        bliver blokken for kort.
+
+        **Og et løftet lag kan give ned til returen.** Med ``return_temp``
+        tæller hvert lag der er løftet til ``temp``, med ``temp − retur`` -
+        se ``hot_water_kwh``. Uden den tælles kun det der ligger over
+        ``temp``, som før.
+
+        Tankene tages i rækkefølge, fordi afspærringsventilen til tank to
+        først åbner når tank ét er varm i toppen. Rækker én tank ikke, løftes
+        den videre mod loftet, og så må den næste med. Rækker hele lageret
+        ikke, er svaret det det koster at fylde helt op, og så er det pladsen
+        der binder frem for regnestykket.
         """
-        missing = kwh_above - self.usable_kwh(temp)
+        floor = temp if return_temp is None else min(temp, return_temp)
+        have = (
+            self.usable_kwh(temp)
+            if return_temp is None
+            else self.hot_water_kwh(temp, return_temp)
+        )
+        missing = kwh_above - have
         if missing <= 0:
             return 0.0
 
         total = 0.0
         for tank in self.measured:
             per = tank._liters_per_layer * WH_PER_LITER_K / 1000
-            room_above = per * max(0.0, self.ceiling - temp)
-            for layer in tank.layers:
-                if layer >= temp:
-                    # Laget er allerede over grænsen; det er talt med i
-                    # ``usable_kwh`` og skal ikke betales igen.
-                    continue
-                lift = per * (temp - layer)
-                take = min(missing, room_above)
-                total += lift + take
-                missing -= take
-                if missing <= 0:
-                    return total
+            low = [layer for layer in tank.layers if layer < temp]
+            # Løftet: hvert lag under grænsen op til den - og hvad de lag så
+            # kan give beholderen.
+            total += sum(per * (temp - layer) for layer in low)
+            missing -= len(low) * per * (temp - floor)
+            if missing <= 0:
+                return total
+            # Rækker det ikke, løftes tanken videre mod loftet. Lag der
+            # allerede var over grænsen, bærer kun resten op til loftet.
+            band = sum(per * max(0.0, self.ceiling - max(layer, temp)) for layer in tank.layers)
+            take = min(missing, band)
+            total += take
+            missing -= take
+            if missing <= 0:
+                return total
         return total
 
     @property

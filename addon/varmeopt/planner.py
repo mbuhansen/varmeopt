@@ -1099,14 +1099,14 @@ class Planner:
 
         if dhw_short > 0 and space_short > 0:
             told = (
-                f"varmt vand mangler {dhw_short:.1f} kWh over "
-                f"{self.dhw_temp:.0f}°, rumvarmen {space_short:.1f}"
+                f"varmt vand kræver {dhw_short:.1f} kWh ind i lageret, "
+                f"rumvarmen {space_short:.1f}"
             )
             driver = " til varmt vand og rumvarme"
         elif dhw_short > 0:
             told = (
                 f"der skal {dhw:.1f} kWh varmt vand, og lageret har {hot:.1f} "
-                f"over {self.dhw_temp:.0f}°"
+                f"i lag på {self.dhw_temp:.0f}° og derover"
             )
             driver = " til varmt vand"
         else:

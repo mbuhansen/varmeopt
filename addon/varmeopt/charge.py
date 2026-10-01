@@ -28,8 +28,12 @@ stor nok.
 
 **Blokken flytter sig indtil den starter.** Priserne opdateres, og en blok der
 ikke er begyndt, er ikke et løfte. Det er først ved start den bindes — og så
-kan kun to ting afbryde den: at lageret er fuldt, eller at pillefyret er
-blevet billigere. Alt andet venter.
+kan kun tre ting afbryde den: at lageret har nået det strækket skal bruge,
+at lageret er fuldt, eller at pillefyret er blevet billigere. Alt andet venter.
+
+**Det er lageret der måles på.** Blokkens kWh er et skøn over hvad der skal
+til; om målet er nået, afgøres af tankenes termometre - se ``target_met`` i
+``update``.
 """
 
 from __future__ import annotations
@@ -357,7 +361,9 @@ class ChargePlan:
             measured_seconds=block.measured_seconds + gap,
         )
 
-    def _extend(self, now: float, rate_kw: float) -> None:
+    def _extend(
+        self, now: float, rate_kw: float, target_met: bool | None = None
+    ) -> None:
         """Lad blokken køre videre hvis den ikke nåede sin mængde.
 
         Blokkens længde regnes af en målt ladehastighed, og den hastighed er
@@ -380,6 +386,13 @@ class ChargePlan:
         if block is None or block.manual or rate_kw <= 0:
             return
         if now < block.ends_at or block.deadline <= block.ends_at:
+            return
+        # Lageret går forud for pumpens kWh. Har det ikke nået målet, kører
+        # blokken videre til fristen - og slutter i ``update`` i det minut
+        # målet er nået. Har det nået målet, er der intet at forlænge for.
+        if target_met is not None:
+            if not target_met:
+                self.block = replace(block, ends_at=block.deadline)
             return
         # Uden måling af en rimelig del af blokken ved vi ikke hvad der gik
         # ind, og så er uret det bedste vi har.
@@ -407,6 +420,7 @@ class ChargePlan:
         grid: Any = None,
         plan_stamp: str | None = None,
         confirm_plans: int = 1,
+        target_met: bool | None = None,
     ) -> bool:
         """Ét skridt. Returnerer om der skal lades lige nu.
 
@@ -429,6 +443,14 @@ class ChargePlan:
         blokkens ``delivered_kwh``, så blokken kan slutte på den mængde den
         blev lagt for og ikke bare på uret - se ``_extend``. Uden den
         opfører blokken sig som før.
+
+        ``target_met`` er lagerets eget svar: står der nu så meget over 55
+        grader som varmtvandet skal bruge i strækket, og har rumvarmen sit?
+        **Det er lageret der skal fyldes til en bestemt tid, ikke pumpen der
+        skal levere et tal.** Pumpens kWh var et skøn over hvad der skulle
+        til, og den 30. september ramte skønnet ved siden af - 5,4 kWh
+        leveret, nul over 55. Så længe målet kendes, er det derfor det der
+        afslutter en blok, og pumpens kWh bruges kun når det ikke kendes.
         """
         chosen = source if source is not None else getattr(decision, "source", None)
 
@@ -445,7 +467,7 @@ class ChargePlan:
         #    testen blev det til en blok der voksede et minut ad gangen uden
         #    nogensinde at blive færdig. Strækker vi først, er blokken i gang
         #    når minuttet tælles, og det lander hvor det hører hjemme.
-        self._extend(now, rate_kw)
+        self._extend(now, rate_kw, target_met)
         self._track(now, heat_kw)
 
         # 1. Kører en blok, er den bundet. Kun to ting bryder den.
@@ -465,6 +487,11 @@ class ChargePlan:
             # fordi pillefyret vandt et minut - men et fuldt lager går
             # forud, for der er ingen varme at levere ind i.
             young = (now - self.block.began) / 60 < min_runtime_minutes
+            # Målet er nået: lageret har det strækket skal bruge. Men først
+            # når mindstekørselstiden er gået - en kompressor der lige er
+            # startet, stoppes ikke af at et termometer krydsede en grænse.
+            if target_met and not young and not self.block.manual:
+                return self._finish(now, "lageret har nået målet")
             if chosen == "pillefyr" and not young and not self.block.manual:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
@@ -498,6 +525,10 @@ class ChargePlan:
                 ran > 0 and self.block.measured_seconds >= MIN_MEASURED_SHARE * ran
             )
             missing = self.block.kwh - self.block.delivered_kwh
+            if not self.block.manual and target_met is False:
+                return self._finish(
+                    now, "fristen nået — lageret nåede ikke målet"
+                )
             if not self.block.manual and measured and missing > DELIVERED_TOLERANCE_KWH:
                 return self._finish(
                     now, f"tiden løb ud — {missing:.1f} kWh nåede ikke i lageret"
@@ -559,8 +590,8 @@ class ChargePlan:
         # september kl. 13:00-13:41 leverede en blok 5,4 af 5,2 kWh til
         # varmt vand, men tankene endte på 49/50/50 og 48/33/31 - nul over
         # 55. UVR'en lader med setpunktet toppen + 2 grader, højst 58, og
-        # bygger temperaturen op over hele tanken; ``energy_to_reach`` regner
-        # lag for lag oppefra. Bagefter bad planen om 3,3 kWh mere, fristen
+        # bygger temperaturen op over hele tanken; ``energy_to_reach`` regnede
+        # dengang lag for lag oppefra. Bagefter bad planen om 3,3 kWh mere, fristen
         # kl. 17 stod der stadig, og kl. 14-15 kom strømmen fra nettet - men
         # spærren sagde «allerede ladet op» resten af eftermiddagen.
         #
