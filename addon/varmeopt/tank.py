@@ -34,6 +34,25 @@ def _finite(value: float | None) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
 
 
+def _hot_water(
+    layers: tuple[float, ...] | list[float],
+    liters_per_layer: float,
+    supply: float,
+    return_temp: float,
+) -> float:
+    """Hvad lagene i én tank kan give varmtvandsbeholderen, i kWh.
+
+    Står hele tanken på mindst ``supply``, kan den give alt ned til returen.
+    Ellers er det varme et tyndt lag over et skillelag, og det tæller kun med
+    det der ligger over grænsen - se ``Buffer.hot_water_kwh``.
+    """
+    if not layers:
+        return 0.0
+    floor = return_temp if min(layers) >= supply else supply
+    wh = sum(liters_per_layer * max(0.0, t - floor) for t in layers)
+    return wh * WH_PER_LITER_K / 1000
+
+
 @dataclass(frozen=True)
 class Tank:
     """Én tank med tre dybdefølere og en føler på afgangsrøret."""
@@ -119,6 +138,10 @@ class Tank:
         per = self._liters_per_layer
         wh = sum(per * max(0.0, t - reference) for t in self.layers)
         return wh * WH_PER_LITER_K / 1000
+
+    def hot_water_kwh(self, supply: float, return_temp: float) -> float:
+        """Hvad den her tank kan give varmtvandsbeholderen - se ``Buffer``."""
+        return _hot_water(self.layers, self._liters_per_layer, supply, return_temp)
 
     def headroom_kwh(self, ceiling: float) -> float:
         """Hvor meget mere der kan lagres, før loftet er nået."""
@@ -252,14 +275,17 @@ class Buffer:
         kelvin varmt vand. Anlæggets ejer den 1. oktober: «når tank A er 55-58
         grader, så er der jo 500 liter der kan afkøles ned til ca. 44 grader,
         som retur er på VVB'en». Det er 6,4 kWh, hvor det gamle tal sagde 0-2.
+
+        **Men kun når hele tanken er der.** Samme eftermiddag talte den første
+        udgave af det her hvert lag for sig, og en blok stoppede på A
+        55,7/46/47: toppen alene gav 2,2 kWh ned til 44, og aftenen skulle
+        bruge 1,82. Men et lag på 55,7 over et på 46 er et tyndt varmt lag over
+        et skillelag, ikke 167 liter badevand. Når beholderen trækker, falder
+        toppen under 53, og pumpen starter. Så en tank tæller først ned til
+        returen, når top, midt og bund alle står på grænsen; indtil da tæller
+        den kun det der ligger over den.
         """
-        total = 0.0
-        for tank in self.measured:
-            per = tank._liters_per_layer
-            total += sum(
-                per * max(0.0, t - return_temp) for t in tank.layers if t >= supply
-            )
-        return total * WH_PER_LITER_K / 1000
+        return sum(t.hot_water_kwh(supply, return_temp) for t in self.measured)
 
     def energy_to_reach(
         self, kwh_above: float, temp: float, return_temp: float | None = None
@@ -295,7 +321,6 @@ class Buffer:
         ikke, er svaret det det koster at fylde helt op, og så er det pladsen
         der binder frem for regnestykket.
         """
-        floor = temp if return_temp is None else min(temp, return_temp)
         have = (
             self.usable_kwh(temp)
             if return_temp is None
@@ -308,11 +333,16 @@ class Buffer:
         total = 0.0
         for tank in self.measured:
             per = tank._liters_per_layer * WH_PER_LITER_K / 1000
-            low = [layer for layer in tank.layers if layer < temp]
-            # Løftet: hvert lag under grænsen op til den - og hvad de lag så
-            # kan give beholderen.
-            total += sum(per * (temp - layer) for layer in low)
-            missing -= len(low) * per * (temp - floor)
+            # Løftet: hvert lag under grænsen op til den. Først da tæller
+            # tanken ned til returen - se ``hot_water_kwh`` - og gevinsten er
+            # forskellen på hvad den kan give før og efter.
+            total += sum(per * (temp - layer) for layer in tank.layers if layer < temp)
+            if return_temp is not None:
+                lifted = [max(layer, temp) for layer in tank.layers]
+                liters = tank._liters_per_layer
+                missing -= _hot_water(lifted, liters, temp, return_temp) - _hot_water(
+                    tank.layers, liters, temp, return_temp
+                )
             if missing <= 0:
                 return total
             # Rækker det ikke, løftes tanken videre mod loftet. Lag der

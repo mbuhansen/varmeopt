@@ -477,3 +477,32 @@ class HotWaterTest(unittest.TestCase):
         self.assertAlmostEqual(
             buffer.energy_to_reach(1.82, 55.0, 44.0), lift, places=3
         )
+
+
+class ThinHotLayerTest(unittest.TestCase):
+    """Den 1. oktober kl. 14:42: blokken stoppede på A 55,7/46/47.
+
+    Toppen alene talte 2,2 kWh ned til returen, og aftenen skulle bruge 1,82.
+    Men et varmt lag over et skillelag er ikke 167 liter badevand: toppen
+    falder under 53, når beholderen trækker, og pumpen starter.
+    """
+
+    def setUp(self):
+        self.buffer = Buffer(
+            (Tank("A", 500, 55.7, 46.0, 47.0), Tank("B", 500, 40.0, 34.0, 31.0)),
+            reference=30.0,
+            ceiling=60.0,
+        )
+        self.per = 500 / 3 * WH_PER_LITER_K / 1000
+
+    def test_a_thin_hot_layer_counts_only_above_the_supply(self):
+        self.assertAlmostEqual(
+            self.buffer.hot_water_kwh(55.0, 44.0), self.per * 0.7, places=3
+        )
+
+    def test_and_so_the_rest_of_the_tank_must_be_lifted(self):
+        lift = self.per * ((55 - 46.0) + (55 - 47.0))
+
+        self.assertAlmostEqual(
+            self.buffer.energy_to_reach(1.82, 55.0, 44.0), lift, places=3
+        )
