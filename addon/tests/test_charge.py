@@ -1095,6 +1095,39 @@ class HeldByBlockTest(unittest.TestCase):
         # Og en blok der kører mens planlæggeren siger nej, tænder flaget.
         self.assertTrue(_held_by_block(self.decision(False), True, "x").charge)
 
+    def test_a_placed_block_is_not_explained_away(self):
+        """Planen tegner «lad op», begrundelsen sagde «for tæt».
+
+        Blokken blev lagt mens forskellen var over hysteresen, og står ved
+        magt når den falder under. Så må begrundelsen ikke kun sige nej.
+        """
+        from varmeopt.__main__ import _held_by_block
+        from varmeopt.planner import Decision
+
+        no = Decision(
+            source="varmepumpe",
+            heat_price=0.31,
+            pellet_price=0.71,
+            charge=False,
+            charge_state="forskellen er for lille - kun 0.03 kr/kWh at hente",
+            reason=(
+                "VP 0.31 < pille 0.71; fra nettet kl. 13:00 kun 0.03 kr/kWh "
+                "at hente kl. 18:00 — for tæt til at flytte varme på"
+            ),
+        )
+        note = "venter — lader 5.2 kWh om 40 min"
+
+        for charging in (False, True):
+            held = _held_by_block(no, charging, note, placed=True)
+            self.assertEqual(held.charge, charging)
+            self.assertEqual(held.charge_state, note)
+            self.assertTrue(held.reason.startswith("VP 0.31 < pille 0.71; " + note))
+            # Planlæggerens nej står stadig, bagved.
+            self.assertIn("kun 0.03 kr/kWh", held.reason)
+
+        # Uden en blok er nej'et hele sandheden.
+        self.assertEqual(_held_by_block(no, False, note).reason, no.reason)
+
 
 class StoreTargetTest(unittest.TestCase):
     """Lageret afgør hvornår en blok er færdig - ikke pumpens kWh.

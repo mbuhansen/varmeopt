@@ -114,7 +114,9 @@ def _clock_ahead(minutes: float, now: float | None = None) -> str:
     ).strftime("%H:%M")
 
 
-def _held_by_block(decision: Any, charging: bool, note: str) -> Any:
+def _held_by_block(
+    decision: Any, charging: bool, note: str, placed: bool = False
+) -> Any:
     """Beslutningen rettet ind efter blokken, så siden ikke lover noget.
 
     Planlæggeren siger hvad den *vil*, blokken hvad der *sker*. Her blev kun
@@ -124,13 +126,33 @@ def _held_by_block(decision: Any, charging: bool, note: str) -> Any:
     ladet op mod det her dyre stræk» og intet skete.
 
     Siger planlæggeren ja og blokken nej, er det blokkens note der står, og
-    planlæggerens mængde står bagved som det den ønskede. Siger begge ja,
-    eller planlæggeren nej, er der ikke noget at rette.
+    planlæggerens mængde står bagved som det den ønskede.
+
+    Siger planlæggeren nej og der ligger en blok (``placed``), er det samme
+    fejl den anden vej. En blok der er lagt, står ved magt når planlæggeren
+    senere siger nej - se trin 4 i ``ChargePlan.update`` - og så tegnede
+    planen «lad op», mens begrundelsen sagde «kun 0,03 kr/kWh at hente — for
+    tæt til at flytte varme på». Så står blokkens note først, og
+    planlæggerens nej bagved som det den ser nu.
+
+    Siger begge ja, eller begge nej, er der ikke noget at rette.
     """
+    # Kildevalget står før første semikolon - se ``source_now``.
+    head, _, rest = decision.reason.partition("; ")
+    if not decision.charge and placed:
+        return replace(
+            decision,
+            charge=charging,
+            charge_state=note,
+            reason=(
+                f"{head}; {note} — blokken er lagt og står, "
+                f"selv om planen nu siger: {rest}"
+                if rest
+                else f"{head}; {note}"
+            ),
+        )
     if not decision.charge or charging:
         return replace(decision, charge=charging)
-    # Kildevalget står før første semikolon - se ``source_now``.
-    head = decision.reason.split("; ", 1)[0]
     wanted = decision.charge_kwh
     tail = (
         f" — planen ønsker {wanted:.1f} kWh"
@@ -585,7 +607,12 @@ class Varmeopt:
             pellet_price=self.planner.pellet_price,
             wear=self.planner.wear,
         )
-        decision = _held_by_block(decision, charging, self.charge_plan.note)
+        decision = _held_by_block(
+            decision,
+            charging,
+            self.charge_plan.note,
+            placed=self.charge_plan.block is not None,
+        )
         projection = self.planner.project(
             prices.get("plan"),
             lookup.cop if lookup is not None else None,
