@@ -275,6 +275,10 @@ _DEFAULTS: dict[str, object] = {
     # Hviletiden alene gør et ét-minuts udsving *værre*: er den udløbet,
     # binder vagten sig til fejlen og holder den et kvarter.
     "control_confirm_minutes": 3,
+    # Og hvor mange Predbat-beregninger den skal have holdt på. Prisen skifter
+    # i Predbats takt, cirka hvert femte minut: den 16. oktober tændte en plan
+    # der kun stod i fire minutter, pillefyret.
+    "control_confirm_plans": 2,
     # Efter opstart: lad tabellerne komme på plads før der styres.
     "control_warmup_minutes": 5,
     # Hvor mange Predbat-beregninger et ønske om at lade skal holde på, før
@@ -414,6 +418,7 @@ class Options:
     control_enabled: bool
     control_min_dwell_minutes: float
     control_confirm_minutes: float
+    control_confirm_plans: int
     control_warmup_minutes: float
     charge_confirm_plans: int
     cop_learn_warmup_minutes: float
@@ -479,6 +484,7 @@ class Options:
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
             charge_confirm_plans=int(values["charge_confirm_plans"]),
+            control_confirm_plans=int(values["control_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),

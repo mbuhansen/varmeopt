@@ -178,6 +178,83 @@ class ConfirmTest(unittest.TestCase):
         self.assertIn("skifter", cmd.reason)
 
 
+class PlanConfirmTest(unittest.TestCase):
+    """Et skift skal overleve en ny Predbat-beregning.
+
+    Den 16. oktober kl. 13:05 lagde Predbat en plan hvor halvtimen ikke
+    længere var en ladehalvtime, og strømmen gik fra 2,02 til 2,65. Kl. 13:10
+    kom ladehalvtimen tilbage. Tre minutters bekræftelse var nok til at tænde
+    pillefyret i de fire minutter imellem.
+    """
+
+    def setUp(self):
+        self.g = guard(confirm_minutes=3.0, confirm_plans=2)
+        self.g.check(decision("varmepumpe"), LOOKUP, plan(), 6 * MIN, plan_stamp="12:55")
+
+    def ask(self, source, minute, stamp):
+        return self.g.check(decision(source), LOOKUP, plan(), minute * MIN, plan_stamp=stamp)
+
+    def test_one_plan_is_not_enough_however_long_it_stands(self):
+        # 13:06-13:09: samme plan hele vejen, og nu er der gået mere end tre
+        # minutter.
+        for minute in (66, 67, 68, 69):
+            cmd = self.ask("pillefyr", minute, "13:05")
+
+        self.assertEqual(cmd.source, "varmepumpe")
+        self.assertIn("Predbat-beregning", cmd.reason)
+
+    def test_the_plan_that_takes_it_back_cancels_the_wish(self):
+        for minute in (66, 67, 68, 69):
+            self.ask("pillefyr", minute, "13:05")
+
+        cmd = self.ask("varmepumpe", 70, "13:10")
+
+        self.assertEqual(cmd.source, "varmepumpe")
+        self.assertIsNone(self.g.pending)
+
+    def test_a_wish_the_next_plan_keeps_gets_through(self):
+        for minute in (66, 67, 68, 69):
+            self.ask("pillefyr", minute, "13:05")
+
+        cmd = self.ask("pillefyr", 70, "13:10")
+
+        self.assertEqual(cmd.source, "pillefyr")
+        self.assertIn("skifter", cmd.reason)
+
+    def test_the_minutes_still_count_once_the_plans_agree(self):
+        self.ask("pillefyr", 66, "13:05")
+
+        cmd = self.ask("pillefyr", 67, "13:10")
+
+        self.assertEqual(cmd.source, "varmepumpe")
+        self.assertIn("afventer bekræftelse", cmd.reason)
+
+    def test_a_new_wish_does_not_inherit_old_stamps(self):
+        self.ask("pillefyr", 66, "13:05")
+        self.ask("varmepumpe", 67, "13:05")
+
+        for minute in (70, 71, 72, 73):
+            cmd = self.ask("pillefyr", minute, "13:10")
+
+        self.assertEqual(cmd.source, "varmepumpe")
+
+    def test_without_a_stamp_the_minutes_alone_decide(self):
+        for minute in (66, 67, 68, 69):
+            cmd = self.g.check(decision("pillefyr"), LOOKUP, plan(), minute * MIN)
+
+        self.assertEqual(cmd.source, "pillefyr")
+
+    def test_the_stamps_survive_a_restart(self):
+        for minute in (66, 67, 68, 69):
+            self.ask("pillefyr", minute, "13:05")
+
+        after = guard(confirm_minutes=3.0, confirm_plans=2)
+        after.restore(self.g.to_raw())
+        cmd = after.check(decision("pillefyr"), LOOKUP, plan(), 70 * MIN, plan_stamp="13:10")
+
+        self.assertEqual(cmd.source, "pillefyr")
+
+
 class DwellTest(unittest.TestCase):
     # Bekræftelsen er slået fra her, så hver test handler om én ting.
     # ``ConfirmTest`` ovenfor dækker den anden halvdel.

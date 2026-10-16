@@ -253,6 +253,7 @@ class Varmeopt:
             min_dwell_minutes=options.control_min_dwell_minutes,
             warmup_minutes=options.control_warmup_minutes,
             confirm_minutes=options.control_confirm_minutes,
+            confirm_plans=options.control_confirm_plans,
         )
         self.planner = Planner(
             pellet_price=options.pellet_kwh_price,
@@ -555,7 +556,13 @@ class Varmeopt:
         # varmepumpen. Vagten læser kun ``source`` og ``heat_price``, aldrig
         # ``charge``, så den kan trygt gå først.
         command = self.guard.check(
-            decision, lookup, prices.get("plan"), time.time()
+            decision,
+            lookup,
+            prices.get("plan"),
+            time.time(),
+            # Prisen skifter i Predbats takt. Et skift af kilde skal overleve
+            # en ny Predbat-beregning - se ``Guard.confirm_plans``.
+            plan_stamp=prices.get("plan_stamp"),
         )
 
         # Opladningen er en blok, ikke en beslutning pr. minut. Den siger

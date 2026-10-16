@@ -1,5 +1,5 @@
 name: Varmeopt
-version: "0.79.3"
+version: "0.80.0"
 slug: varmeopt
 description: Prisstyret optimering af varmepumpe, pillefyr og elpatroner, planlagt mod Predbat
 url: https://github.com/mbuhansen/varmeopt
@@ -99,6 +99,7 @@ options:
   control_enabled: false
   control_min_dwell_minutes: 15
   control_confirm_minutes: 3
+  control_confirm_plans: 2
   charge_confirm_plans: 2
   cop_learn_warmup_minutes: 10
   control_warmup_minutes: 5
@@ -188,6 +189,7 @@ schema:
   control_enabled: bool
   control_min_dwell_minutes: float(0,240)
   control_confirm_minutes: float(0,60)
+  control_confirm_plans: int(1,6)
   charge_confirm_plans: int(1,6)
   cop_learn_warmup_minutes: float(0,60)
   control_warmup_minutes: float(0,120)

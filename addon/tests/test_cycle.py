@@ -874,7 +874,11 @@ class TenthOfSeptemberTest(unittest.TestCase):
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
         self.app = Varmeopt(
-            options(control_warmup_minutes=0, control_confirm_minutes=0),
+            options(
+                control_warmup_minutes=0,
+                control_confirm_minutes=0,
+                control_confirm_plans=1,
+            ),
             Store(tmp),
         )
         self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})
@@ -936,11 +940,15 @@ class HeldDecisionTest(unittest.TestCase):
 
     def setUp(self):
         tmp = Path(tempfile.mkdtemp(prefix="varmeopt-test-"))
-        # Bekræftelsen slås fra her, så testen handler om hviletiden og om
+        # Bekræftelserne slås fra her, så testen handler om hviletiden og om
         # hvad der bliver *udgivet*. ``tests.test_guard.ConfirmTest`` dækker
         # bekræftelsen for sig.
         self.app = Varmeopt(
-            options(control_warmup_minutes=0, control_confirm_minutes=0),
+            options(
+                control_warmup_minutes=0,
+                control_confirm_minutes=0,
+                control_confirm_plans=1,
+            ),
             Store(tmp),
         )
         self.app.table = CopTable({31: {17: Cell(cop=4.5, count=10.0)}})

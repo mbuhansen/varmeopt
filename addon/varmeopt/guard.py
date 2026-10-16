@@ -41,6 +41,7 @@ class Guard:
         min_dwell_minutes: float = 15.0,
         warmup_minutes: float = 5.0,
         confirm_minutes: float = 3.0,
+        confirm_plans: int = 1,
     ) -> None:
         self.enabled = enabled
         # Anlægget må ikke vippe frem og tilbage. Hysteresen i planlæggeren
@@ -61,6 +62,17 @@ class Guard:
         # femten. Bekræftelsen afviser udsvinget; hviletiden bærer de
         # skift der er ægte.
         self.confirm_minutes = confirm_minutes
+        # Og hvor mange forskellige Predbat-planer den skal have holdt på.
+        #
+        # Minutterne alene er ikke nok, for prisen skifter i Predbats takt,
+        # ikke i vores. Den 16. oktober kl. 13:05 lagde Predbat en plan hvor
+        # halvtimen ikke længere var en ladehalvtime, og strømmen gik fra
+        # 2,02 (net, lader op) til 2,65 (købes tilbage). Kl. 13:10 kom
+        # ladehalvtimen tilbage. De fire minutter imellem var nok til tre
+        # minutters bekræftelse, og pillefyret blev tændt i dagens billigste
+        # time. Med to planer skal ønsket overleve én ny beregning - samme
+        # regel som ``charge_confirm_plans`` for opladningen.
+        self.confirm_plans = confirm_plans
 
         self.started: float | None = None
         self.committed: str | None = None
@@ -68,6 +80,8 @@ class Guard:
         # Den kilde der banker på, og hvornår den begyndte at banke.
         self.pending: str | None = None
         self.pending_since: float | None = None
+        # De Predbat-stempler den ventende kilde har holdt på.
+        self.pending_stamps: list[str] = []
 
     # ------------------------------------------------------------------ tid
 
@@ -80,7 +94,12 @@ class Guard:
     # -------------------------------------------------------------- vurdering
 
     def check(
-        self, decision: Any, lookup: Any, plan: Any, now: float
+        self,
+        decision: Any,
+        lookup: Any,
+        plan: Any,
+        now: float,
+        plan_stamp: str | None = None,
     ) -> Command:
         """Afgør hvilken kilde der står ved magt — og om den må følges.
 
@@ -106,6 +125,9 @@ class Guard:
           Predbat-plan kunne låse anlægget på et prisløst gæt et kvarter.
         * Under opvarmningen er tilstanden den mindst oplyste vi har — se
           ``warmup_minutes``. Det gælder bindingen lige så meget som flaget.
+
+        ``plan_stamp`` er Predbat-planens ``last_updated``. Uden det gælder
+        kun minutterne, som før - se ``confirm_plans``.
         """
         if self.started is None:
             self.started = now
@@ -122,7 +144,7 @@ class Guard:
             left = self.warmup_minutes - warm
             return Command(decision.source, False, self._off(f"varmer op, {left:.0f} min endnu"))
 
-        held, note = self._hold(decision.source, now)
+        held, note = self._hold(decision.source, now, plan_stamp)
 
         if not self.enabled:
             return Command(held, False, f"styring slået fra — {note}")
@@ -141,7 +163,9 @@ class Guard:
         """
         return reason if self.enabled else f"styring slået fra, {reason}"
 
-    def _hold(self, candidate: str, now: float) -> tuple[str, str]:
+    def _hold(
+        self, candidate: str, now: float, plan_stamp: str | None = None
+    ) -> tuple[str, str]:
         """Hvilken kilde står ved magt, og hvorfor.
 
         Bekræftelsen ligger foran hviletiden, og det er den rækkefølge der
@@ -156,15 +180,28 @@ class Guard:
             # forfra i stedet for at arve en ventetid der ikke var dens.
             self.pending = None
             self.pending_since = None
+            self.pending_stamps = []
             return self.committed, "uændret"
 
         if candidate != self.pending:
             self.pending = candidate
             self.pending_since = now
+            self.pending_stamps = []
+        if plan_stamp is not None and plan_stamp not in self.pending_stamps:
+            self.pending_stamps = (self.pending_stamps + [plan_stamp])[-8:]
 
         waited = self._minutes_since(self.pending_since, now) or 0.0
         if waited < self.confirm_minutes:
             return self.committed, f"afventer bekræftelse af {candidate}"
+        # Uden stempel kan planerne ikke tælles, og så gælder minutterne
+        # alene.
+        if plan_stamp is not None and len(self.pending_stamps) < max(
+            1, int(self.confirm_plans)
+        ):
+            return (
+                self.committed,
+                f"afventer næste Predbat-beregning før {candidate}",
+            )
 
         held = self._minutes_since(self.committed_at, now) or 0.0
         if held < self.min_dwell_minutes:
@@ -179,6 +216,7 @@ class Guard:
         self.committed_at = now
         self.pending = None
         self.pending_since = None
+        self.pending_stamps = []
         return source
 
     # ------------------------------------------------------------------ lager
@@ -199,6 +237,7 @@ class Guard:
             # bekræftelsen en genstart værd.
             "pending": self.pending,
             "pending_since": self.pending_since,
+            "pending_stamps": list(self.pending_stamps),
         }
 
     def restore(self, raw: Any) -> None:
@@ -215,9 +254,14 @@ class Guard:
         self.pending_since = self._seconds(raw.get("pending_since"))
         # En ventende kilde der er blevet den bundne, er ikke en ventende
         # kilde - og en uden tidspunkt kan ikke tælles.
+        stamps = raw.get("pending_stamps")
+        self.pending_stamps = (
+            [str(s) for s in stamps][-8:] if isinstance(stamps, list) else []
+        )
         if self.pending is None or self.pending_since is None or self.pending == self.committed:
             self.pending = None
             self.pending_since = None
+            self.pending_stamps = []
 
     @staticmethod
     def _seconds(value: Any) -> float | None:
@@ -232,3 +276,4 @@ class Guard:
         self.committed_at = None
         self.pending = None
         self.pending_since = None
+        self.pending_stamps = []
