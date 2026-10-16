@@ -1730,6 +1730,32 @@ def _kr(value: float | None, digits: int = 2) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
+def _forecast_vs_measured(ledger: Any, now: float) -> tuple[str, str] | None:
+    """«Ellers» som ventet mod som målt, vægtet med varmen.
+
+    Det er den side af regnestykket regnskabet fra oktober viste ramte ved
+    siden af: strækkene blev lagt mod timer hvor varmepumpen skulle tabe til
+    pillefyret, og målt bagefter lå de mellem 0,24 og 0,69.
+    """
+    pairs = [
+        e
+        for e in ledger.entries
+        if e.settled(now)
+        and e.expected_alt is not None
+        and e.alt_per_kwh is not None
+        and e.heat_kwh > 0
+    ]
+    heat = sum(e.heat_kwh for e in pairs)
+    if heat <= 0:
+        return None
+    expected = sum(e.expected_alt * e.heat_kwh for e in pairs) / heat
+    measured = sum(e.alt_per_kwh * e.heat_kwh for e in pairs) / heat
+    return (
+        "Ellers, ventet mod målt",
+        f"{expected:.2f} mod {measured:.2f} kr over {len(pairs)} opladninger",
+    )
+
+
 def _ledger_body(ledger: Any, now: float) -> str:
     """Siden bag fanen «Regnskab».
 
@@ -1762,6 +1788,9 @@ def _ledger_body(ledger: Any, now: float) -> str:
         ("Ellers pr. kWh varme", f"{_kr(alt)} kr"),
         ("Planlæggeren lovede", f"{total['expected_kr']:.2f} kr"),
     ]
+    forecast = _forecast_vs_measured(ledger, now)
+    if forecast is not None:
+        rows.append(forecast)
     dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in rows)
     summary = (
         "<h2>Afregnet</h2>"
@@ -1794,10 +1823,16 @@ def _ledger_body(ledger: Any, now: float) -> str:
         if saving is not None and not entry.settled(now):
             saving_txt = f'<span style="color:var(--muted)">{saving_txt}*</span>'
         cop = f" ({entry.cop:.1f})" if entry.cop is not None else ""
+        expected = (
+            f"{_kr(entry.expected_paid)} / {_kr(entry.expected_alt)}"
+            if entry.expected_alt is not None
+            else "—"
+        )
         body_rows.append(
             f"<tr><td class=clock>{_esc(span)}</td><td>{kind}</td>"
             f"<td>{entry.heat_kwh:.1f}</td><td>{entry.el_kwh:.1f}{cop}</td>"
             f"<td>{_kr(entry.paid_per_kwh)}</td><td>{_kr(entry.alt_per_kwh)}</td>"
+            f"<td>{_esc(expected)}</td>"
             f"<td>{saving_txt}</td><td>{_kr(entry.expected_kr)}</td>"
             f'<td class="why">{_esc(state)}</td></tr>'
         )
@@ -1805,7 +1840,8 @@ def _ledger_body(ledger: Any, now: float) -> str:
         "<h2>Opladningerne</h2>"
         '<div class="scroll"><table class="plan"><thead><tr>'
         "<th>Tid</th><th>Slags</th><th>Varme kWh</th><th>El kWh (COP)</th>"
-        "<th>Betalt kr/kWh</th><th>Ellers kr/kWh</th><th>Sparet kr</th>"
+        "<th>Betalt kr/kWh</th><th>Ellers kr/kWh</th>"
+        "<th>Ventet betalt / ellers</th><th>Sparet kr</th>"
         "<th>Lovet kr</th><th>Status</th></tr></thead>"
         f"<tbody>{''.join(body_rows)}</tbody></table></div>"
     )
@@ -1813,7 +1849,9 @@ def _ledger_body(ledger: Any, now: float) -> str:
         '<p class="legend">«Betalt» er varmepumpens målte strøm til '
         "minuttets marginalpris — batteriets værdi når strømmen kom derfra — "
         "plus slitagen, delt med den leverede varme. «Ellers» er den billigste "
-        "varme der kunne laves på stedet i strækket. * betyder foreløbig: "
+        "varme der kunne laves på stedet i strækket. «Ventet» er de to samme "
+        "priser som planlæggeren regnede med, da den lovede besparelsen. "
+        "* betyder foreløbig: "
         "strækket er ikke forbi. <b>Ikke trukket fra:</b> ståtabet mens "
         "varmen venter, og at noget af den måske først bruges efter "
         "strækket. Tallet er derfor lidt for pænt.</p>"

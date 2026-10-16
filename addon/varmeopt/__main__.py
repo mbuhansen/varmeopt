@@ -598,6 +598,9 @@ class Varmeopt:
             # pumpen der skal have leveret et tal. Se ``_store_covers``.
             target_met=_store_covers(decision),
         )
+        # Løftet skrives på blokken, så regnskabet har det, også når blokken
+        # starter i et minut hvor beslutningen siger «venter».
+        self.charge_plan.remember_promise(decision, time.time())
         # Regnskabet før beslutningen rettes: det er planlæggerens stræk og
         # løfte der skal stå på posten, ikke blokkens note.
         now_at = time.time()

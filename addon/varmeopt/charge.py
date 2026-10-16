@@ -99,6 +99,14 @@ CHARGE_RESERVE_SHARE = 0.3
 NO_PLAN = "ingen opladning planlagt"
 
 
+def _number(value: Any) -> float | None:
+    return float(value) if _finite(value) else None
+
+
+def _rounded(value: float | None) -> float | None:
+    return None if value is None else round(value, 4)
+
+
 def _finite(value: Any) -> bool:
     return (
         isinstance(value, (int, float))
@@ -167,6 +175,13 @@ class Block:
     # Lagt mod et stræk der allerede er ladet op imod - se «efteropladningen»
     # i ``ChargePlan.update``. Når den er kørt, er der ikke flere.
     top_up: bool = False
+    # Planlæggerens løfte: besparelsen og de to varmepriser den er regnet af.
+    # Blokken husker dem, fordi beslutningen i det minut blokken starter, ofte
+    # ikke har noget løfte - den er lagt mens svaret var «venter», og så stod
+    # regnskabets «Lovet» tom på ni af tolv opladninger.
+    expected_kr: float | None = None
+    expected_paid: float | None = None
+    expected_alt: float | None = None
 
     @property
     def began(self) -> float:
@@ -194,6 +209,9 @@ class Block:
             "began_at": None if self.began_at is None else round(self.began_at, 1),
             "manual": self.manual,
             "top_up": self.top_up,
+            "expected_kr": _rounded(self.expected_kr),
+            "expected_paid": _rounded(self.expected_paid),
+            "expected_alt": _rounded(self.expected_alt),
         }
 
     @classmethod
@@ -219,6 +237,9 @@ class Block:
                 ),
                 manual=raw.get("manual") is True,
                 top_up=raw.get("top_up") is True,
+                expected_kr=_number(raw.get("expected_kr")),
+                expected_paid=_number(raw.get("expected_paid")),
+                expected_alt=_number(raw.get("expected_alt")),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -287,6 +308,30 @@ class ChargePlan:
         return self.block is not None and self.block.manual
 
     # ----------------------------------------------------------------- knappen
+
+    def remember_promise(self, decision: Any, now: float) -> None:
+        """Skriv planlæggerens løfte på blokken, så regnskabet kan finde det.
+
+        Det seneste løfte før blokken begynder, gælder - priserne kan have
+        flyttet sig siden den blev lagt. Når den er begyndt, står løftet fast,
+        for så er det regnet på det der faktisk sker.
+        """
+        block = self.block
+        if block is None or block.manual:
+            return
+        if now >= block.began and block.expected_kr is not None:
+            return
+        saving = getattr(decision, "saving_kr", None)
+        if not getattr(decision, "charge", False) or not _finite(saving):
+            return
+        paid = getattr(decision, "expected_paid", None)
+        alt = getattr(decision, "expected_alt", None)
+        self.block = replace(
+            block,
+            expected_kr=float(saving),
+            expected_paid=float(paid) if _finite(paid) else None,
+            expected_alt=float(alt) if _finite(alt) else None,
+        )
 
     def start_manual(self, now: float, minutes: float, rate_kw: float) -> str:
         """Lad op nu, i så mange minutter - startet med knappen på plan-siden.

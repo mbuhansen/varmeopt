@@ -831,6 +831,66 @@ class ManualTest(unittest.TestCase):
         )
 
 
+@dataclass
+class Promise:
+    charge: bool = True
+    saving_kr: float | None = 1.2
+    expected_paid: float | None = 0.5
+    expected_alt: float | None = 0.7
+
+
+class PromiseTest(unittest.TestCase):
+    """Blokken husker planlæggerens løfte.
+
+    Regnskabet læste løftet af beslutningen i det minut blokken startede. Men
+    blokken lægges tit mens svaret er «venter», og så var der intet løfte at
+    læse: «Lovet» stod tom på ni af tolv automatiske opladninger fra 1. til 15.
+    oktober - og netop på de to der tabte.
+    """
+
+    def setUp(self):
+        self.now = 1_757_000_000.0
+        self.charge = ChargePlan()
+        self.charge.update(self.now, FakeDecision(), plan(*RATES), 16.0)
+        self.assertFalse(self.charge.block.running(self.now))
+
+    def test_a_waiting_block_takes_the_promise(self):
+        self.charge.remember_promise(Promise(), self.now)
+
+        self.assertEqual(self.charge.block.expected_kr, 1.2)
+        self.assertEqual(self.charge.block.expected_paid, 0.5)
+        self.assertEqual(self.charge.block.expected_alt, 0.7)
+
+    def test_a_later_promise_before_the_start_replaces_it(self):
+        self.charge.remember_promise(Promise(), self.now)
+        self.charge.remember_promise(Promise(saving_kr=2.0), self.now + 60)
+
+        self.assertEqual(self.charge.block.expected_kr, 2.0)
+
+    def test_once_running_the_promise_stands(self):
+        self.charge.remember_promise(Promise(), self.now)
+        later = self.charge.block.began + 60
+
+        self.charge.remember_promise(Promise(saving_kr=9.0), later)
+
+        self.assertEqual(self.charge.block.expected_kr, 1.2)
+
+    def test_a_waiting_answer_does_not_erase_it(self):
+        self.charge.remember_promise(Promise(), self.now)
+
+        self.charge.remember_promise(Promise(charge=False, saving_kr=None), self.now + 60)
+
+        self.assertEqual(self.charge.block.expected_kr, 1.2)
+
+    def test_a_manual_block_has_no_promise(self):
+        self.charge.block = None
+        self.charge.start_manual(self.now, 30, 16.0)
+
+        self.charge.remember_promise(Promise(), self.now)
+
+        self.assertIsNone(self.charge.block.expected_kr)
+
+
 class StorageTest(unittest.TestCase):
     def test_a_running_block_survives_a_restart(self):
         # En genstart midt i en opladning må ikke starte kompressoren forfra
@@ -844,6 +904,20 @@ class StorageTest(unittest.TestCase):
         back = ChargePlan.from_raw(charge.to_raw())
 
         self.assertEqual(back.slots(), charge.slots())
+
+    def test_the_promise_survives_a_restart(self):
+        now = 1_757_000_000.0
+        charge = ChargePlan()
+        charge.update(
+            now, FakeDecision(window_starts_in=90, window_minutes=90), plan(35, 35, 155, 155), 16.0
+        )
+        charge.remember_promise(Promise(), now)
+
+        back = ChargePlan.from_raw(charge.to_raw())
+
+        self.assertEqual(back.block.expected_kr, 1.2)
+        self.assertEqual(back.block.expected_alt, 0.7)
+        self.assertEqual(back.block.expected_paid, 0.5)
 
     def test_garbage_gives_an_empty_plan(self):
         for junk in (None, "aeh", {}, {"block": "nej"}, {"block": {"kwh": -1}}):

@@ -61,8 +61,12 @@ class Entry:
     # en besparelse, kun en pris.
     stretch_from: float | None = None
     stretch_until: float | None = None
-    # Hvad planlæggeren lovede, da blokken blev lagt.
+    # Hvad planlæggeren lovede, da blokken blev lagt - og de to varmepriser
+    # løftet er regnet af, så de kan holdes op mod ``paid_per_kwh`` og
+    # ``alt_per_kwh``.
     expected_kr: float | None = None
+    expected_paid: float | None = None
+    expected_alt: float | None = None
     heat_kwh: float = 0.0
     el_kwh: float = 0.0
     el_kr: float = 0.0
@@ -168,6 +172,8 @@ class Ledger:
             gap_for_block = None
         else:
             gap_for_block = gap
+        if current is not None and not current.manual:
+            self._promise(current, block)
 
         if current is not None and gap_for_block is not None:
             hours = gap_for_block / 3600
@@ -191,6 +197,27 @@ class Ledger:
                     ):
                         entry.alt_weighted += alt * gap
                         entry.alt_seconds += gap
+
+    @staticmethod
+    def _promise(entry: Entry, block: Any) -> None:
+        """Hent løftet fra blokken, hvis posten ikke har det.
+
+        Blokken husker det løfte der gjaldt da den blev lagt. Beslutningen i
+        startminuttet har det ofte ikke - se ``Block.expected_kr``. Og et løfte
+        uden de to priser lader sig ikke sammenligne, så de følger med fra
+        samme sted.
+        """
+        if block is None:
+            return
+        kr = getattr(block, "expected_kr", None)
+        if not _finite(kr):
+            return
+        if entry.expected_kr is None or entry.expected_alt is None:
+            entry.expected_kr = float(kr)
+            paid = getattr(block, "expected_paid", None)
+            alt = getattr(block, "expected_alt", None)
+            entry.expected_paid = float(paid) if _finite(paid) else None
+            entry.expected_alt = float(alt) if _finite(alt) else None
 
     @staticmethod
     def _alternative(hp: float | None, pellet: float | None) -> float | None:

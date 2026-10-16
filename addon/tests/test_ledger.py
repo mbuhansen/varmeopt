@@ -16,6 +16,9 @@ class FakeBlock:
     dear_until: float
     manual: bool = False
     top_up: bool = False
+    expected_kr: float | None = None
+    expected_paid: float | None = None
+    expected_alt: float | None = None
 
 
 class LedgerTest(unittest.TestCase):
@@ -105,6 +108,33 @@ class LedgerTest(unittest.TestCase):
         self.step(11, block=self.block)
 
         self.assertAlmostEqual(self.ledger.entries[0].el_kwh, 4.0 / 60, places=3)
+
+    def test_the_promise_comes_from_the_block(self):
+        # Blokken blev lagt mens svaret var «venter», så beslutningen i
+        # startminuttet har intet løfte. Blokken har.
+        self.block.expected_kr = 1.1
+        self.block.expected_paid = 0.45
+        self.block.expected_alt = 0.71
+        for minute in range(0, 31):
+            self.step(minute, block=self.block, expected=None)
+
+        entry = self.ledger.entries[0]
+        self.assertEqual(entry.expected_kr, 1.1)
+        self.assertEqual(entry.expected_paid, 0.45)
+        self.assertEqual(entry.expected_alt, 0.71)
+
+    def test_the_page_sets_the_forecast_against_the_measurement(self):
+        self.block.expected_kr = 1.1
+        self.block.expected_paid = 0.45
+        self.block.expected_alt = 0.71
+        self.run_charge()
+
+        back = Ledger.from_raw(self.ledger.to_raw())
+        html = _ledger_body(back, NOW + 400 * 60)
+
+        self.assertEqual(back.entries[0].expected_alt, 0.71)
+        self.assertIn("Ellers, ventet mod målt", html)
+        self.assertIn("0.71 mod 0.70", html)
 
     def test_two_blocks_are_two_entries(self):
         for minute in range(0, 31):

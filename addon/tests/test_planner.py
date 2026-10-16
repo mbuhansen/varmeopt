@@ -349,6 +349,24 @@ class SavingTest(unittest.TestCase):
         margin = 0.706 - (0.40 / 4.0 + 0.15)
         self.assertAlmostEqual(d.saving_kr, margin * d.charge_kwh, places=6)
 
+    def test_the_promise_carries_the_two_prices_it_is_made_of(self):
+        # Regnskabet måler begge priser bagefter. Uden de forudsagte ved
+        # siden af kan det ikke ses hvilken side der ramte ved siden af.
+        d = planner().decide(
+            plan(40, 240, 240, 240),
+            cop_now=4.0,
+            headroom_kwh=6.0,
+            demand_kw=10.0,
+            stored_kwh=0.0,
+        )
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertAlmostEqual(d.expected_paid, 0.40 / 4.0 + 0.15, places=6)
+        self.assertAlmostEqual(d.expected_alt, 0.706, places=6)
+        self.assertAlmostEqual(
+            d.saving_kr, (d.expected_alt - d.expected_paid) * d.charge_kwh, places=6
+        )
+
 
 class SixthOfSeptemberTest(unittest.TestCase):
     """Dagen hvor den ikke ladede op, og brugeren måtte gøre det selv.

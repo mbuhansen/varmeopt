@@ -97,6 +97,12 @@ class Decision:
     # den 15. september brændte en halv time på uret derfor hele døgnet.
     dear_ends_in: int | None = None
     saving_kr: float | None = None
+    # Og hvad løftet er regnet af: varmeprisen opladningen ventes at koste, og
+    # den varmepris den ventes at fortrænge. Regnskabet måler begge bagefter,
+    # og først med de forudsagte ved siden af kan man se *hvilken* side af
+    # regnestykket der ramte ved siden af.
+    expected_paid: float | None = None
+    expected_alt: float | None = None
     # Den dyreste halvtime. Findes der et stræk, er det strækkets egen top -
     # ikke horisontens. De to er ikke det samme når batteriets marginalpris
     # lægger timerne fladt oven på hinanden, og så er horisontens top valgt af
@@ -909,6 +915,8 @@ class Planner:
             window_starts_in=frist,
             deadline_on_the_clock=on_the_clock,
             saving_kr=saving,
+            expected_paid=grid_heat,
+            expected_alt=target_heat,
             window_minutes=best_when,
             charge_state=f"lader {want:.1f} kWh op nu",
             dhw_short_kwh=None if short is None else short.dhw_kwh,
