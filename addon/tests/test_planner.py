@@ -231,7 +231,7 @@ class WaitingStillHasAnIntentTest(unittest.TestCase):
         # hensigten ukendt mens den ventede - så planen kunne ikke tegne
         # "lad op" på netop de halvtimer den ventede på.
         d = planner().decide(
-            plan(90, 30, 30, 300), cop_now=4.0, headroom_kwh=20, stored_kwh=0.0
+            plan(90, 30, 30, 300), cop_now=4.0, headroom_kwh=8.0, stored_kwh=0.0
         )
 
         self.assertFalse(d.charge)
@@ -390,7 +390,7 @@ class SixthOfSeptemberTest(unittest.TestCase):
             peak_ceiling=90.0,
         )
 
-    def decide(self, buf, dhw_kwh, rates=(37, 37, 37, 37, 37, 37, 157, 157, 157)):
+    def decide(self, buf, dhw_kwh, rates=(36, 37, 37, 37, 37, 37, 157, 157, 157)):
         # 0,37 kr/kWh formiddagen igennem mod 1,57 om aftenen, COP 4,47 som
         # den var. Der er timer at lade i inden prisen stiger - det var der
         # også den 6. september.
@@ -494,8 +494,11 @@ class WaitForTheCheapestTest(unittest.TestCase):
         self.planner = planner()
 
     def test_it_waits_for_the_cheap_slot_instead_of_charging_now(self):
+        # Én halvtimes opladning, så den billige halvtime kan bære den. Med
+        # 24 kWh (tre halvtimer) er der kun plads fra nu, og så har blokken
+        # altid ladet nu - planlæggerens «venter» var kun tekst.
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=8.0
         )
 
         self.assertFalse(d.charge)
@@ -733,8 +736,11 @@ class DeadlineTest(unittest.TestCase):
     def test_without_a_deadline_it_waits_for_the_cheap_half_hour(self):
         # Den billige halvtime ligger før toppen, og der er tid nok. Så
         # venter den - og det er rigtigt, når uret ikke siger andet.
+        # Én halvtimes opladning, så den billige halvtime kan bære den. Med
+        # 24 kWh (tre halvtimer) er der kun plads fra nu, og så har blokken
+        # altid ladet nu - planlæggerens «venter» var kun tekst.
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=8.0
         )
 
         self.assertFalse(d.charge)
@@ -757,7 +763,7 @@ class DeadlineTest(unittest.TestCase):
         # Ligger fristen længere ude end det tidspunkt hvor det bliver
         # dyrt, er det stadig prisen der binder.
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0,
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=8.0,
             deadline_minutes=600,
         )
 
@@ -821,8 +827,10 @@ class ClockTest(unittest.TestCase):
         self.planner = planner(clock=lambda m: f"kl. {6 + int(m) // 60:02d}:00")
 
     def test_the_waiting_reason_says_a_clock_time(self):
+        # Én halvtimes opladning, så den billige halvtime kan bære den, og
+        # søgningen faktisk venter på den.
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=8.0
         )
 
         self.assertIn("venter", d.reason)
@@ -831,7 +839,7 @@ class ClockTest(unittest.TestCase):
 
     def test_the_charge_state_says_it_too(self):
         d = self.planner.decide(
-            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=24.0
+            self.plan, cop_now=3.0, cop_later=3.0, headroom_kwh=8.0
         )
 
         self.assertIn("kl. ", d.charge_state)
@@ -959,7 +967,9 @@ class FallbackStretchTest(unittest.TestCase):
         # 0,48 + hysteresen. Så var der ingen stræk, intet fortrængt, og svaret
         # blev «intet at lade op til» med 12 øre at hente.
         d = planner().decide(
-            plan(*((100,) * 4 + (148,) * 6 + (100,) * 38)),
+            # Nu-halvtimen én øre billigere: søgningen tager ellers den seneste
+            # af de lige billige, som blokken altid har gjort.
+            plan(*((99,) + (100,) * 3 + (148,) * 6 + (100,) * 38)),
             cop_now=3.0,
             cop_later=4.0,
             charge_cop_at=4.0,
@@ -1451,9 +1461,9 @@ class LockedPricesTest(unittest.TestCase):
     # stiger til sit højeste i række 14-15 - ude i prognosen.
     RATES = (40,) * 6 + (150,) * 8 + (190,) * 2
 
-    def decide(self, locked=None):
+    def decide(self, locked=None, rates=None):
         return planner(horizon_minutes=1440).decide(
-            plan(*self.RATES),
+            plan(*(rates or self.RATES)),
             cop_now=4.4,
             cop_later=4.4,
             headroom_kwh=20.0,
@@ -1477,8 +1487,11 @@ class LockedPricesTest(unittest.TestCase):
         self.assertIn("om 180 min", d.reason)
 
     def test_the_saving_is_counted_at_the_locked_top(self):
-        låst = self.decide(locked=13 * 30)
-        alt = self.decide(locked=None)
+        # Nu-halvtimen én øre billigere: søgningen tager ellers den seneste af
+        # de lige billige, og så er der ingen opladning nu at måle på.
+        now = (39,) + self.RATES[1:]
+        låst = self.decide(locked=13 * 30, rates=now)
+        alt = self.decide(locked=None, rates=now)
 
         self.assertIsNotNone(låst.saving_kr)
         self.assertLess(låst.saving_kr, alt.saving_kr, "ingen prognose-gevinst")
@@ -1642,7 +1655,8 @@ class GridReachTest(unittest.TestCase):
 class MinSavingTest(unittest.TestCase):
     """En opladning skal spare et beløb, der er en kompressorstart værd."""
 
-    P = plan(40, 40, 40, 40, 180, 180, 180, 180)
+    # Nu-halvtimen én øre billigere, så «nu» er søgningens eget valg.
+    P = plan(39, 40, 40, 40, 180, 180, 180, 180)
 
     def decide(self, floor, p=None):
         return planner(min_saving_kr=floor, horizon_minutes=1440).decide(

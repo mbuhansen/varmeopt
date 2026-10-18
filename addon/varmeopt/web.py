@@ -1195,9 +1195,15 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                     "Kun fra nettet, når Predbat lader",
                     running
                     or c_rule == "waiting"
-                    or (d_rule in ("charge_now", "wait_grid") and not refused),
+                    or (
+                        d_rule in ("charge_now", "wait_grid", "wait_cheaper")
+                        and not refused
+                    ),
                 ),
-                line("Venter på en billigere halvtime", d_rule == "wait_cheaper"),
+                line(
+                    "Venter på en senere halvtime fra nettet",
+                    d_rule == "wait_cheaper",
+                ),
                 line(
                     f"Bekræftes af {number('confirm_plans', 'd')} Predbat-beregninger",
                     c_rule == "waiting_predbat",

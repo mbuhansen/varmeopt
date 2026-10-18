@@ -1806,3 +1806,133 @@ class WaitingBlockOnBatteryTest(unittest.TestCase):
         self.assertFalse(ran, "blokken må ikke starte på batteriets strøm")
         self.assertIsNone(charge.block)
         self.assertIn("dropped_battery", rules)
+
+
+class PlannerBlockAgreementTest(unittest.TestCase):
+    """Planlæggeren og blokken leder med samme søgning - ``block_window``.
+
+    Gennemgangen den 18. oktober: planlæggeren regnede gevinsten på en
+    nethalvtime til 1,20 og sagde «venter», mens blokken lagde sig nu til
+    1,54, fordi den holdt en reserve før fristen, og planlæggeren ikke gjorde.
+    """
+
+    RATE = 10.0
+    MINRUN = 15
+
+    @staticmethod
+    def planner():
+        from varmeopt.planner import Planner
+
+        return Planner(
+            pellet_price=0.71,
+            min_charge_kwh=PlannerBlockAgreementTest.RATE * 15 / 60,
+            charge_kw=PlannerBlockAgreementTest.RATE,
+            horizon_minutes=1440,
+            min_runtime_minutes=PlannerBlockAgreementTest.MINRUN,
+        )
+
+    def both(self, p, elapsed, headroom=12.0, demand=2.0, grid=None):
+        """Planlæggerens svar, og hvad blokken gør med det."""
+        d = self.planner().decide(
+            p, cop_now=4.4, cop_later=4.4, headroom_kwh=headroom,
+            stored_kwh=0.0, demand_kw=demand, elapsed_minutes=elapsed, grid=grid,
+        )
+        now = slot_start(1_757_000_000.0) + elapsed * 60
+        charge = ChargePlan()
+        charging = charge.update(
+            now, d, p, self.RATE, min_runtime_minutes=self.MINRUN, grid=grid
+        )
+        offset = (
+            None
+            if charge.block is None
+            else int(round((charge.block.starts_at - slot_start(now)) / 60))
+        )
+        return d, charging, offset
+
+    def test_the_reviewers_case(self):
+        # Net til 1,54 nu, batteri, så net til 1,20; dyrt fra 90 minutter.
+        # Blokkens reserve før fristen udelukker halvtimen til 1,20 - den
+        # slutter præcis på fristen. Det er blokkens regel og står uændret;
+        # det der er rettet, er at planlæggeren nu siger det samme og regner
+        # løftet på de 1,54 der faktisk betales, ikke på 1,20.
+        p = mixed_plan(
+            [("holdchrg", 154, 10), ("demand", 185, 10), ("holdchrg", 120, 10)]
+            + [("holdchrg", 300, 60)] * 6
+        )
+
+        d, charging, offset = self.both(p, elapsed=0, headroom=4.0)
+
+        self.assertEqual(offset, 0)
+        self.assertTrue(charging)
+        self.assertTrue(d.charge, d.reason)
+        paid_now = self.planner().heat_price(1.54, 4.4)
+        self.assertAlmostEqual(d.expected_paid, paid_now, places=6)
+
+    def test_a_now_half_hour_almost_gone_gives_way_to_a_later_one(self):
+        # Kl. :22 er der otte minutter tilbage af nethalvtimen - mindre end
+        # én mindstekørselstid. En senere nethalvtime kan bære det hele.
+        p = mixed_plan(
+            [("holdchrg", 120, 10), ("demand", 185, 10), ("holdchrg", 130, 10)]
+            + [("holdchrg", 300, 60)] * 6
+        )
+
+        d, charging, offset = self.both(p, elapsed=22, headroom=4.0)
+
+        self.assertIsNotNone(d.planned_kwh, d.reason)
+        self.assertEqual(offset, 60)
+        self.assertFalse(charging)
+
+    def test_the_sun_charges_now_in_the_block_too(self):
+        # Ejerens regel: er det solen der leverer, fyldes tankene nu. Den stod
+        # kun i planlæggeren, og blokken ventede imens på en billigere time.
+        from varmeopt.prices import Grid
+
+        p = mixed_plan(
+            [("holdchrg", 100, 10)] * 3 + [("holdchrg", 30, 10)] + [("holdchrg", 300, 60)] * 4
+        )
+        sun = Grid(pv_power=3000.0)
+
+        d, charging, offset = self.both(p, elapsed=0, headroom=4.0, grid=sun)
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertTrue(charging)
+        self.assertEqual(offset, 0)
+
+    def test_they_agree_over_many_random_plans(self):
+        """Samme halvtime hver gang, og «lader nu» kun når blokken lader nu."""
+        import random
+
+        rng = random.Random(18_10_2026)
+        cases = 0
+        for _ in range(600):
+            rows = [
+                (
+                    rng.choice(["holdchrg", "chrg", "demand", "exp"]),
+                    rng.choice([40, 90, 120, 154, 170]),
+                    10,
+                )
+                for _ in range(10)
+            ] + [("holdchrg", 300, 60)] * 6
+            p = mixed_plan(rows)
+            elapsed = rng.randrange(0, 30)
+            d, charging, offset = self.both(
+                p,
+                elapsed,
+                headroom=rng.choice([6.0, 12.0, 25.0]),
+                demand=rng.choice([1.0, 2.0, 4.0]),
+            )
+            if not d.planned_kwh:
+                continue
+            cases += 1
+            with self.subTest(rows=rows, elapsed=elapsed):
+                from varmeopt.charge import block_window
+
+                found = block_window(
+                    p, d.planned_kwh, self.RATE, d.window_starts_in,
+                    self.MINRUN, None, elapsed,
+                )
+                self.assertIsNotNone(offset, "blokken skal lægges")
+                self.assertEqual(offset, found[0])
+                self.assertEqual(bool(d.charge), charging, d.reason)
+
+        self.assertGreater(cases, 100, "testen skal have noget at sige")

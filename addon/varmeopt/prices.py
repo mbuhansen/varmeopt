@@ -1057,14 +1057,39 @@ class Plan:
 
     # -------------------------------------------------------------- planlæg
 
+    def grid_run(
+        self, offset_minutes: int, limit_minutes: float, grid: Grid | None = None
+    ) -> float:
+        """Hvor mange minutter fra ``offset_minutes`` strømmen kommer fra
+        nettet uden afbrydelse, højst til ``limit_minutes``.
+
+        Tæller hele halvtimer og stopper ved den første der tager af
+        batteriet, eller hvor planen slutter - en halvtime vi ikke kender, er
+        ikke en nethalvtime. Planlæggeren og blokken tæller begge her, så de
+        ikke kan nå to forskellige svar.
+        """
+        reach = 0.0
+        at = offset_minutes
+        while at < limit_minutes:
+            price = self.marginal(at, grid=grid if at == 0 else None)
+            if price is None or price.source == BATTERY:
+                break
+            reach += SLOT_MINUTES
+            at += SLOT_MINUTES
+        return min(reach, max(0.0, limit_minutes - offset_minutes))
+
     def cheapest_window(
         self,
         duration_minutes: int,
         before_minutes: int | None = None,
         grid: Grid | None = None,
         grid_only: bool = False,
+        not_before_minutes: int = 0,
     ) -> tuple[int, float] | None:
         """Find det billigste sammenhængende vindue.
+
+        ``not_before_minutes`` udelukker vinduer der starter tidligere - til
+        at springe en nu-halvtime over, der næsten er gået.
 
         Returnerer (minutter frem til start, gennemsnitspris). Det er dette
         opslag en blokplan er bygget på: «hvornår ligger de billigste 45
@@ -1125,7 +1150,8 @@ class Plan:
         # strengt billigere for at vinde, og det er den med scanningen vendt
         # om - uden en tærskel nogen skal vedligeholde.
         best: tuple[int, float] | None = None
-        for start in range(limit - needed, -1, -1):
+        first = max(0, math.ceil(not_before_minutes / SLOT_MINUTES))
+        for start in range(limit - needed, first - 1, -1):
             prices = [
                 self.marginal(s * SLOT_MINUTES, grid=grid if s == 0 else None)
                 for s in range(start, start + needed)

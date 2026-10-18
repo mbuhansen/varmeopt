@@ -216,20 +216,6 @@ def _finite(value: Any) -> bool:
     )
 
 
-def _on_sun(price: Any, grid: Any) -> bool:
-    """Er det solen der leverer lige nu?
-
-    To veje til det samme svar, og de dækker hver sit tilfælde. Prisen
-    siger det når batteriet er ude af spillet og måleren ser panelerne
-    bære huset. Måleren siger det også når batteriet står frit - der er
-    prisen batteriets, men strømmen i ledningen er stadig solens. Begge
-    tæller, for spørgsmålet er hvor strømmen kommer fra.
-    """
-    if price is not None and getattr(price, "source", None) == SUN:
-        return True
-    return bool(getattr(grid, "solar_covering", False))
-
-
 def minutes_until_hour(hour: float | None, now: float) -> int | None:
     """Minutter til næste gang klokken slår ``hour`` — i lokal tid.
 
@@ -284,6 +270,7 @@ class Planner:
         dhw_temp: float = 55.0,
         clock: Any = None,
         min_saving_kr: float = 0.0,
+        min_runtime_minutes: float = 0.0,
     ) -> None:
         self.pellet_price = pellet_price
         self.hysteresis = hysteresis
@@ -296,6 +283,10 @@ class Planner:
         # startes for den. Marginen pr. kWh siger om forskellen kan skelnes
         # fra støj; det her siger om den samlede gevinst er en start værd.
         self.min_saving_kr = min_saving_kr
+        # Mindstekørselstiden. Blokken holder en reserve før fristen, der er
+        # mindst så lang, og planlæggeren skal lede med den samme - se
+        # ``charge.block_window``.
+        self.min_runtime_minutes = min_runtime_minutes
         self.charge_kw = charge_kw
         self.horizon_minutes = horizon_minutes
         # Kun til begrundelsen: hvilken temperatur lageret blev talt ved.
@@ -866,20 +857,33 @@ class Planner:
                 ),
             )
 
-        # Kommer nu-timen selv fra nettet eller solen, bliver spørgsmålet om
-        # *hvornår* stående hos 3b nedenfor, som før. Kun når nu-timen er en
-        # batteritime, kan der slet ikke lades nu - så venter planlæggeren på
-        # nettet, og siger det samme som blokken der lægges der.
-        now_from_grid = price_now is not None and price_now.source != BATTERY
-        if grid_when > 0 and not now_from_grid:
+        # Spørgsmål 3b: er *nu* det rigtige tidspunkt?
+        #
+        # Svaret er søgningens, ikke et regnestykke for sig. Her stod to
+        # regler blokken ikke kendte: «vent på en billigere halvtime» og «er
+        # det solen, lades der nu». Blokken lægges altid efter sin egen
+        # søgning, så de flyttede aldrig en opladning - de fik kun teksten
+        # til at modsige den. Gennemgangen den 18. oktober fandt 47 af 696
+        # tilfældige planer, hvor planlæggeren sagde «lad nu», mens blokken
+        # lagde sig senere. Nu ligger begge regler i ``charge.block_window``,
+        # og «lader nu» står præcis når søgningen siger nu.
+        #
+        # Det oprindelige argument - 1,00 -> 0,30 -> 0,30 -> 3,00, vent på de
+        # billige - bærer søgningen kun når mængden kan være i de billige
+        # halvtimer. Skal der tre halvtimer til, er der kun plads fra nu, og så
+        # lades der nu; det gjorde blokken også før, mens teksten sagde
+        # «venter». At lade *mindre* i de billige halvtimer i stedet for mere
+        # nu, er en anden regel, og den findes ikke endnu.
+        if grid_when > 0:
+            now_from_grid = price_now is not None and price_now.source != BATTERY
             return _with(
                 decision,
                 **stretch,
                 planned_kwh=want,
                 window_minutes=best_when,
-                window_starts_in=frist,
+                window_starts_in=window,
                 deadline_on_the_clock=on_the_clock,
-                rule="wait_grid",
+                rule="wait_cheaper" if now_from_grid else "wait_grid",
                 charge_state=(
                     f"venter - {self._when(grid_when)} kan der lades fra nettet"
                 ),
@@ -891,60 +895,6 @@ class Planner:
                 ),
             )
 
-        # Spørgsmål 3b: er *nu* overhovedet det rigtige tidspunkt?
-        #
-        # Her stod intet, og det var en dyr tavshed. Løkken ovenfor finder
-        # den dyreste time forude, men spurgte aldrig om der lå en billigere
-        # halvtime imellem. Med priserne 1,00 -> 0,30 -> 0,30 -> 3,00 lader
-        # den 24 kWh nu til 1,00 i stedet for at vente et kvarter på 0,30 -
-        # 4,20 kr smidt væk på ét træk, og lageret er fuldt når den
-        # billige time kommer.
-        #
-        # Spørgsmålet stod før *før* mængden blev regnet, og så var
-        # hensigten ukendt mens den ventede. Planen kunne derfor ikke tegne
-        # "lad op" på de halvtimer den ventede på - og det er netop dem man
-        # vil se, inden styringen kobles til.
-        cheaper = self._cheaper_moment_before(
-            plan, frist, vp_charge, cop_now, cop_later, charge_cop_at
-        )
-        # Kommer strømmen fra solen lige nu, ventes der ikke. Den billigere
-        # halvtime forude er en anden slags strøm end den der står på
-        # taget i det her øjeblik, og lageret skal alligevel være fyldt
-        # inden fristen: er det solen der leverer, skal tankene bare fyldes.
-        # Det er kun når der lades fra nettet at timen skal være den
-        # billigste.
-        if _on_sun(price_now, grid):
-            cheaper = None
-        if cheaper is not None:
-            when, price = cheaper
-            return _with(
-                decision,
-                **stretch,
-                planned_kwh=want,
-                window_minutes=best_when,
-                window_starts_in=frist,
-                deadline_on_the_clock=on_the_clock,
-                rule="wait_cheaper",
-                charge_state=(
-                    f"venter - {self._when(when)} er strømmen billigere, og "
-                    "der er stadig tid inden det bliver dyrt"
-                ),
-                dhw_short_kwh=None if short is None else short.dhw_kwh,
-                space_short_kwh=None if short is None else short.space_kwh,
-                dhw_need_kwh=None if short is None else short.dhw_need,
-                dhw_have_kwh=None if short is None else short.dhw_have,
-                space_need_kwh=None if short is None else short.space_need,
-                space_have_kwh=None if short is None else short.space_have,
-                reason=(
-                    f"{why}; venter - {self._when(when)} koster varmen "
-                    f"{price:.2f} mod {vp_now:.2f} nu, og der er stadig tid inden "
-                    + (
-                        f"lageret skal være fyldt {self._when(frist)}"
-                        if on_the_clock
-                        else f"toppen {self._when(best_when)}"
-                    )
-                ),
-            )
         # Gevinsten gælder det der faktisk bliver ladet. Her stod ``need``,
         # og når pladsen var mindre end behovet, lovede den en besparelse på
         # varme der aldrig kom i tanken: "lad 5,9 kWh nu og spar 13,02 kr" er
@@ -977,7 +927,7 @@ class Planner:
             charge=True,
             charge_kwh=want,
             planned_kwh=want,
-            window_starts_in=frist,
+            window_starts_in=window,
             deadline_on_the_clock=on_the_clock,
             saving_kr=saving,
             expected_paid=grid_heat,
@@ -1061,9 +1011,10 @@ class Planner:
 
         Returnerer (minutter frem til vinduet, opladningens varmepris i det,
         kWh der kan nås fra nettet) eller ``None`` hvis der ingen
-        sammenhængende net-halvtimer er inden fristen. Det er det samme
-        opslag ``charge.py`` lægger blokken efter, så planlæggeren og blokken
-        kan ikke sige hver sit.
+        sammenhængende net-halvtimer er inden fristen. Søgningen er
+        ``charge.block_window`` - den samme blokken lægges efter - så
+        planlæggeren og blokken kan ikke sige hver sit. Det kunne de før:
+        blokken holdt en reserve før fristen, planlæggeren ikke.
 
         **Det der kan nås, tælles fra nu.** ``cheapest_window`` regner i hele
         halvtimer, og den 18. oktober kl. 04:45 så den 30 minutter fra nettet
@@ -1072,26 +1023,39 @@ class Planner:
         første der tager af batteriet, og står vi i den første, trækkes det
         der er gået af den, fra.
         """
+        from .charge import block_window
+
         if self.charge_kw <= 0 or not _finite(want) or want <= 0:
             return None
-        minutes = want / self.charge_kw * 60
-        needed = min(int(math.ceil(minutes)), max(1, int(window)))
-        found = plan.cheapest_window(needed, int(window), grid=grid, grid_only=True)
-        if found is None:
-            return None
-        offset = found[0]
-        reach = 0.0
-        at = offset
-        while at < window:
-            price = plan.marginal(at, grid=grid if at == 0 else None)
-            if price is None or price.source == BATTERY:
+        # Samme søgning som blokken, med den mængde blokken får. Mængden
+        # kappes til det der kan nås fra nettet, og en mindre mængde kan
+        # flytte vinduet - så der søges igen, til de to står stille. Uden
+        # det ville blokken lede med en anden mængde end planlæggeren, og
+        # finde en anden halvtime.
+        amount = float(want)
+        found = None
+        for _ in range(4):
+            found = block_window(
+                plan,
+                amount,
+                self.charge_kw,
+                int(window),
+                self.min_runtime_minutes,
+                grid,
+                elapsed,
+            )
+            if found is None:
+                return None
+            capped = min(float(want), self.charge_kw * found[1] / 60)
+            if abs(capped - amount) < 1e-6:
                 break
-            reach += SLOT_MINUTES
-            at += SLOT_MINUTES
-        reach = min(reach, max(0.0, window - offset))
-        if offset == 0:
-            reach = max(0.0, reach - elapsed)
+            if capped <= 0:
+                break
+            amount = capped
+        assert found is not None
+        offset, reach = found
         reach_kwh = self.charge_kw * reach / 60
+        needed = min(int(math.ceil(max(1.0, amount / self.charge_kw * 60))), max(1, int(window)))
         heats: list[float] = []
         for index in range(max(1, math.ceil(needed / SLOT_MINUTES))):
             at = offset + index * SLOT_MINUTES
@@ -1106,47 +1070,6 @@ class Planner:
         if not heats:
             return None
         return offset, sum(heats) / len(heats), reach_kwh
-
-    def _cheaper_moment_before(
-        self,
-        plan: Any,
-        best_when: int,
-        vp_charge: float,
-        cop_now: Any,
-        cop_later: Any,
-        charge_cop_at: Any = None,
-    ) -> tuple[int, float] | None:
-        """Ligger der en billigere halvtime mellem nu og toppen?
-
-        Begge led er opladningens egen pris. Spørgsmålet er ikke om varmen
-        bliver billigere, men om det bliver billigere at *fylde lageret*, og
-        det sker ved samme temperatur nu og om en time.
-
-        Den skal også være til at nå: der skal være tid nok tilbage til at
-        lade mindstetrækket inden prisen stiger. Ellers er en billigere
-        halvtime uden værdi - man når ikke at bruge den.
-        """
-        best: tuple[int, float] | None = None
-        for minutes in range(SLOT_MINUTES, best_when, SLOT_MINUTES):
-            price = plan.marginal(minutes)
-            if price is None:
-                break
-            # Kun halvtimer der lades fra nettet. En batteripris siger hvad en
-            # kilowatt-time af Predbats lager er værd - ikke hvad en blok
-            # kommer til at koste. Se spørgsmål 3a i ``decide``.
-            if price.source == BATTERY:
-                continue
-            heat = self.heat_price(
-                price.kr_per_kwh,
-                self._charge_cop(minutes, cop_now, cop_later, charge_cop_at),
-            )
-            if heat is None or heat >= vp_charge - self.hysteresis:
-                continue
-            if self.charge_kw * (best_when - minutes) / 60 < self.min_charge_kwh:
-                continue
-            if best is None or heat < best[1]:
-                best = (minutes, heat)
-        return best
 
     def store_short(
         self,

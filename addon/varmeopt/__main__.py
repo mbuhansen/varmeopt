@@ -300,6 +300,7 @@ class Varmeopt:
             # «kl. 13:26» kan læses; «om 510 min» skal regnes.
             clock=_clock_ahead,
             min_saving_kr=options.charge_min_saving_kr,
+            min_runtime_minutes=options.hp_min_runtime_minutes,
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         # Ståtabsmålingen. Den måler kun når brugeren selv har åbnet et

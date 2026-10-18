@@ -137,6 +137,94 @@ def slot_start(at: float) -> float:
     return math.floor(at / SLOT_SECONDS) * SLOT_SECONDS
 
 
+def block_window(
+    plan: Any,
+    want_kwh: float,
+    rate_kw: float,
+    window: int,
+    min_runtime_minutes: float = 0.0,
+    grid: Any = None,
+    elapsed: float = 0.0,
+) -> tuple[int, float] | None:
+    """Hvor en blok på ``want_kwh`` skal ligge - og hvor langt den kan nå.
+
+    Returnerer (minutter fra halvtimens start til blokken, minutter fra
+    nettet der kan nås derfra) eller ``None``. **Planlæggeren og blokken
+    kalder begge den her.** Før ledte de hver for sig: blokken med en reserve
+    før fristen, planlæggeren uden. Gennemgangen den 18. oktober fandt et
+    vindue hvor planlæggeren regnede gevinsten på en nethalvtime til 1,20 og
+    sagde «venter», mens blokken lagde sig nu til 1,54 - fordi reserven
+    skubbede den sene halvtime ud af blokkens søgning.
+
+    Reglerne er blokkens:
+
+    * Først i et vindue der slutter en reserve før fristen, så der er noget
+      at strække sig ud i - se ``CHARGE_RESERVE_SHARE``. Kan den ikke være
+      der, i hele vinduet.
+    * Kun hvor strømmen kommer fra nettet.
+    * En nu-halvtime tæller kun med det der er tilbage af den
+      (``elapsed``). Er der mindre tilbage end én mindstekørselstid, er den
+      ikke en blok, og så prøves de senere nethalvtimer; den 18. oktober kl.
+      04:52 var der otte minutter tilbage, og svaret blev «for lidt», selv om
+      en senere nethalvtime kunne have båret det hele. Er der mindst én
+      mindstekørselstid tilbage, står den billigste halvtime - også selv om
+      den ikke bærer hele mængden, for en kortere kørsel til 1,54 er stadig
+      billigere end en hel til 1,70. Så kortes blokken ned, som før.
+    * Kommer strømmen fra solen nu, lades der nu. Det er ejerens regel, og
+      den stod før kun i planlæggeren: er det solen der leverer, skal
+      tankene bare fyldes; det er kun når der lades fra nettet, at timen skal
+      være den billigste. Blokken ventede imens på en billigere nethalvtime,
+      mens planlæggeren sagde «lader nu». Kun når *prisen* siger sol - står
+      batteriet frit, er den næste kilowatt-time batteriets.
+    """
+    if rate_kw <= 0 or not _finite(want_kwh) or want_kwh <= 0 or window <= 0:
+        return None
+    minutes = max(1.0, want_kwh / rate_kw * 60)
+    needed = min(int(math.ceil(minutes)), max(1, int(window)))
+    reserve = max(float(min_runtime_minutes), CHARGE_RESERVE_SHARE * minutes)
+
+    def search(not_before: int) -> tuple[int, float] | None:
+        room = int(window - reserve)
+        found = None
+        if room >= needed:
+            found = plan.cheapest_window(
+                needed, room, grid=grid, grid_only=True, not_before_minutes=not_before
+            )
+        if found is None:
+            found = plan.cheapest_window(
+                needed,
+                int(window),
+                grid=grid,
+                grid_only=True,
+                not_before_minutes=not_before,
+            )
+        return found
+
+    def reach(offset: int) -> float:
+        run = plan.grid_run(offset, window, grid)
+        return max(0.0, run - elapsed) if offset == 0 else run
+
+    from .prices import SUN
+
+    first = plan.marginal(0, grid=grid)
+    if (
+        first is not None
+        and first.source == SUN
+        and reach(0) + 1e-6 >= min(minutes, float(min_runtime_minutes))
+    ):
+        return 0, reach(0)
+
+    found = search(0)
+    if found is None:
+        return None
+    offset = found[0]
+    if offset == 0 and reach(0) + 1e-6 < min(minutes, float(min_runtime_minutes)):
+        later = search(SLOT_SECONDS // 60)
+        if later is not None:
+            offset = later[0]
+    return offset, reach(offset)
+
+
 @dataclass(frozen=True)
 class Block:
     """Én planlagt opladning: hvornår, hvor længe, hvor meget.
@@ -918,22 +1006,18 @@ class ChargePlan:
         # minutter. ``ceil`` gør det til 91, og et vindue på 90 minutter har
         # ikke plads til 91. Målt over 200.000 kombinationer af ladehastighed
         # og vindue skete det i 9,4 % af tilfældene.
-        needed = min(int(math.ceil(minutes)), max(1, int(window)))
-        # Blokken søges i et vindue der slutter før fristen, så der er noget
-        # at strække sig ud i. Kan den ikke være der, er en sen blok uden
-        # reserve stadig bedre end ingen blok - så søges der forfra i hele
-        # vinduet.
-        reserve = max(float(min_runtime_minutes), CHARGE_RESERVE_SHARE * minutes)
-        found = None
-        room = int(window - reserve)
-        # Og kun hvor strømmen kommer fra nettet - i begge søgninger, ellers
-        # smutter en blok ind ad bagdøren gennem den uden reserve.
-        if room >= needed:
-            found = plan.cheapest_window(needed, room, grid=grid, grid_only=True)
-        if found is None:
-            found = plan.cheapest_window(
-                needed, int(window), grid=grid, grid_only=True
-            )
+        # Samme søgning som planlæggeren - se ``block_window``. Reserven før
+        # fristen, kun nethalvtimer, og en nu-halvtime der næsten er gået,
+        # viger for en senere.
+        found = block_window(
+            plan,
+            float(want),
+            rate_kw,
+            int(window),
+            min_runtime_minutes,
+            grid,
+            (now - slot_start(now)) / 60,
+        )
         if found is None:
             # Ingen plads er ikke det samme som «drop det der allerede er
             # lagt». En blok der venter, er lagt på priser vi har set efter;
@@ -946,7 +1030,7 @@ class ChargePlan:
             )
             return False
 
-        offset, _price = found
+        offset, _reach = found
         # ``offset`` tælles i hele halvtimer fra den halvtime vi *står i*,
         # ikke fra det her sekund. Uden gulvet gled en ventende bloks start
         # ét minut frem pr. cyklus og sprang 30 minutter tilbage ved hver
