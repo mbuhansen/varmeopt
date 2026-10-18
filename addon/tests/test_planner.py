@@ -1784,3 +1784,45 @@ class DeadlineOnTheClockTest(unittest.TestCase):
         self.assertIsNone(minutes_until_hour(-1, now))
         self.assertIsNone(minutes_until_hour(24, now))
         self.assertIsNone(minutes_until_hour(None, now))
+
+
+class RuleCodeTest(unittest.TestCase):
+    """Hver udgang siger hvilken regel der afgjorde den - som en kode, så
+    regelkortet på plan-siden ikke skal genkende sætninger."""
+
+    def test_charging_now(self):
+        self.assertEqual(MinSavingTest("test_without_a_floor_it_charges").decide(0.0).rule, "charge_now")
+
+    def test_under_the_saving_floor(self):
+        t = MinSavingTest("test_without_a_floor_it_charges")
+        self.assertEqual(t.decide(1000.0).rule, "saving_small")
+
+    def test_too_little_left_from_the_grid(self):
+        t = GridReachTest("test_less_than_one_minimum_run_left_is_no_charge")
+        self.assertEqual(t.decide(20).rule, "grid_below_min")
+
+    def test_waiting_for_the_grid(self):
+        t = ChargeFromTheGridTest("test_a_battery_hour_now_waits_for_the_grid")
+        p = ChargeFromTheGridTest.rows(
+            *[("demand", 90, 10)] * 2,
+            *[("chrg", 40, 10)] * 4,
+            *[("holdchrg", 200, 60)] * 8,
+        )
+        self.assertEqual(t.decide(p).rule, "wait_grid")
+
+    def test_no_grid_before_the_deadline(self):
+        t = ChargeFromTheGridTest("test_no_grid_before_the_deadline_is_no_charge")
+        p = ChargeFromTheGridTest.rows(*[("exp", 150, 150)] * 6, *[("holdchrg", 250, 60)] * 8)
+        self.assertEqual(t.decide(p).rule, "no_grid")
+
+    def test_a_full_store(self):
+        t = MinSavingTest("test_without_a_floor_it_charges")
+        d = planner(horizon_minutes=1440).decide(
+            t.P, cop_now=4.4, cop_later=4.4, headroom_kwh=20.0,
+            stored_kwh=40.0, demand_kw=2.0,
+        )
+        self.assertEqual(d.rule, "store_covers")
+
+    def test_nothing_dear_ahead(self):
+        d = planner().decide(plan(100, 100, 100, 100), cop_now=4.4, cop_later=4.4)
+        self.assertEqual(d.rule, "no_dear")

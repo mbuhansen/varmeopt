@@ -662,3 +662,129 @@ class HistoryWindowTest(unittest.TestCase):
         html = _history_chart(self.history(days=10, step_hours=48))
 
         self.assertIn("<svg", html)
+
+
+class RulesCardTest(unittest.TestCase):
+    """Regelkortet over plantabellen: prik ud for den regel der gælder."""
+
+    SETTINGS = {
+        "store_full_by_hour": 17,
+        "dhw_temp": 55,
+        "min_runtime_minutes": 15,
+        "min_saving_kr": 1.0,
+        "confirm_plans": 2,
+        "max_delivered_share": 2.0,
+    }
+
+    def html(self, decision, charge=None, rows=True):
+        import asyncio
+
+        from varmeopt.charge import ChargePlan
+        from varmeopt.planner import Projection
+        from varmeopt.web import WebUI
+
+        projection = (
+            [
+                Projection(
+                    minutes=0,
+                    electricity=1.54,
+                    reason="net, lader op",
+                    power="net",
+                    import_price=1.54,
+                    export_price=1.0,
+                    heat_price=0.49,
+                    state="chrg",
+                    soc_percent=40.0,
+                )
+            ]
+            if rows
+            else []
+        )
+        charge = charge or ChargePlan()
+        status = {
+            "projection": projection,
+            "decision": decision,
+            "charge_rules": self.SETTINGS,
+        }
+        ui = WebUI(lambda: status, lambda: None, charge_plan=lambda: charge, on_charge=lambda s: "")
+        return asyncio.run(ui.plan(None)).text
+
+    @staticmethod
+    def decision(**over):
+        from varmeopt.planner import Decision
+
+        values = dict(source="varmepumpe", heat_price=0.49, pellet_price=0.71)
+        values.update(over)
+        return Decision(**values)
+
+    @staticmethod
+    def marked(html):
+        import re
+
+        return [
+            m.group(1)
+            for m in re.finditer(r'<div class="rule on"><span class="dot">.</span>([^<]*)', html)
+        ]
+
+    def test_the_card_stands_above_the_plan_table(self):
+        html = self.html(self.decision())
+
+        self.assertIn("Reglerne", html)
+        self.assertLess(html.index("Reglerne"), html.index('<table class="plan">'))
+
+    def test_charging_for_hot_water_from_the_grid(self):
+        html = self.html(
+            self.decision(
+                charge=True, charge_kwh=3.6, saving_kr=1.2, window_minutes=330,
+                rule="charge_now", dhw_short_kwh=1.6, space_short_kwh=0.0,
+            )
+        )
+        marked = self.marked(html)
+
+        self.assertIn("Varmt vand over 55°", marked)
+        self.assertIn("Kun fra nettet, når Predbat lader", marked)
+        self.assertNotIn("Rumvarme i det dyre stræk", marked)
+        self.assertIn("1.6 kWh mangler", html)
+
+    def test_a_saving_under_the_floor(self):
+        marked = self.marked(self.html(self.decision(rule="saving_small")))
+
+        self.assertEqual(marked, ["Gevinst under 1.00 kr"])
+
+    def test_the_deadline_on_the_clock(self):
+        marked = self.marked(self.html(self.decision(deadline_on_the_clock=True)))
+
+        self.assertIn("Lageret fyldt kl. 17", marked)
+
+    def test_the_last_end_is_said(self):
+        import time
+
+        from varmeopt.charge import ChargePlan
+
+        charge = ChargePlan()
+        charge.last_end = {"at": time.time(), "code": "battery", "why": "Predbat tager nu strømmen af batteriet"}
+        html = self.html(self.decision(), charge)
+
+        self.assertIn("Seneste opladning sluttede kl.", html)
+        self.assertIn("Predbat tager nu strømmen af batteriet", html)
+        self.assertIn("Stopper, hvis Predbat tager af batteriet (2 planer)", self.marked(html))
+
+    def test_it_is_there_without_a_plan_too(self):
+        self.assertIn("Reglerne", self.html(self.decision(rule="no_dear"), rows=False))
+
+
+class BannerClockTest(unittest.TestCase):
+    """Banneret fik et minuttal behandlet som tidsstempel: en anden ``_when``
+    længere nede skyggede for den der tager minutter."""
+
+    def test_the_banner_names_a_clock_time(self):
+        from varmeopt.planner import Decision
+        from varmeopt.web import _decision_banner, _when
+
+        d = Decision(
+            source="varmepumpe", heat_price=0.49, pellet_price=0.71,
+            charge=True, charge_kwh=3.6, saving_kr=1.2, window_minutes=120,
+        )
+
+        self.assertTrue(_when(120).startswith("kl. "))
+        self.assertIn("kr at hente mod kl. ", _decision_banner(d))

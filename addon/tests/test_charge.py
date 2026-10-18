@@ -1694,3 +1694,49 @@ class BatteryStampsRestartTest(unittest.TestCase):
         charge = ChargePlan()
         charge._battery_stamps = ["p2"]
         self.assertEqual(ChargePlan.from_raw(charge.to_raw())._battery_stamps, ["p2"])
+
+
+class RuleAndLastEndTest(unittest.TestCase):
+    """Blokken siger hvilken regel den står ved, og hvorfor den sidst
+    sluttede - til regelkortet på plan-siden."""
+
+    def test_a_block_that_waits_and_one_that_runs(self):
+        charge = ChargePlan()
+        now = 1_757_000_000.0
+        charge.update(now, FakeDecision(), plan(*RATES), 16.0)
+        self.assertEqual(charge.rule, "waiting")
+
+        charge.update(charge.block.starts_at, FakeDecision(), plan(*RATES[4:]), 16.0)
+        self.assertEqual(charge.rule, "running")
+
+    def test_the_battery_stop_is_remembered(self):
+        t = BatteryStopResumeTest("test_one_more_block_on_the_later_grid_half_hours_and_no_more")
+        t.setUp()
+        for minute in range(15, 31):
+            t.step(minute, t.ROWS)
+
+        self.assertEqual(t.charge.last_end["code"], "battery")
+        self.assertIn("batteriet", t.charge.last_end["why"])
+
+    def test_the_button_is_remembered_and_survives_a_restart(self):
+        charge = ChargePlan()
+        now = 1_757_000_000.0
+        charge.start_manual(now, 30, 10.0)
+        charge.stop(now + 60)
+
+        self.assertEqual(charge.last_end["code"], "button")
+        restored = ChargePlan.from_raw(charge.to_raw())
+        self.assertEqual(restored.last_end, charge.last_end)
+
+    def test_garbage_for_the_last_end_is_ignored(self):
+        raw = ChargePlan().to_raw()
+        raw["last_end"] = {"at": "nu", "code": 3}
+        self.assertIsNone(ChargePlan.from_raw(raw).last_end)
+
+    def test_already_charged_for_the_stretch(self):
+        t = BatteryStopResumeTest("test_one_more_block_on_the_later_grid_half_hours_and_no_more")
+        t.setUp()
+        for minute in range(15, 200):
+            t.step(minute, t.ROWS)
+
+        self.assertEqual(t.charge.rule, "covered")

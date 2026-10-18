@@ -302,6 +302,12 @@ class ChargePlan:
     # ``update``.
     top_up_open: bool = False
     note: str = NO_PLAN
+    # Den regel der står bag noten, som en kode - til regelkortet på
+    # plan-siden. Noten er en sætning; koden er det siden kan sætte en prik
+    # efter.
+    rule: str = "no_plan"
+    # Hvorfor den seneste blok sluttede: tidspunkt, kode og noten.
+    last_end: dict[str, Any] | None = None
     # Hvornår lageret første gang meldte sig fuldt i det her forløb.
     _full_since: float | None = None
     # De Predbat-planer ønsket om at lade har holdt på, som deres stempler.
@@ -394,6 +400,7 @@ class ChargePlan:
         self._running = True
         self._full_since = None
         self._forget_wish()
+        self.rule = "manual"
         self.note = f"manuel opladning, {minutes:.0f} min"
         return f"opladning startet — {self.block.kwh:.1f} kWh over {minutes:.0f} min"
 
@@ -406,7 +413,7 @@ class ChargePlan:
         if not self.running(now):
             return "der kører ingen opladning"
         manual = self.manual
-        self._finish(now, "stoppet med knappen")
+        self._finish(now, "stoppet med knappen", code="button")
         return "manuel opladning stoppet" if manual else "opladning stoppet"
 
     # -------------------------------------------------------------- skridtet
@@ -602,7 +609,7 @@ class ChargePlan:
                 if self._full_since is None:
                     self._full_since = now
                 if now - self._full_since >= FULL_HOLD_SECONDS:
-                    return self._finish(now, "lageret blev fuldt")
+                    return self._finish(now, "lageret blev fuldt", code="full")
             else:
                 self._full_since = None
             # Kortcykling slider. En blok der lige er startet, afsluttes ikke
@@ -613,7 +620,7 @@ class ChargePlan:
             # når mindstekørselstiden er gået - en kompressor der lige er
             # startet, stoppes ikke af at et termometer krydsede en grænse.
             if target_met and not young and not self.block.manual:
-                return self._finish(now, "lageret har nået målet")
+                return self._finish(now, "lageret har nået målet", code="target_met")
             if not young and not self.block.manual:
                 block = self.block
                 ran = now - block.began
@@ -632,6 +639,7 @@ class ChargePlan:
                         f"leveret {block.delivered_kwh:.1f} kWh, "
                         f"over {MAX_DELIVERED_SHARE:.0f} gange de {block.kwh:.1f} "
                         "den blev lagt for",
+                        code="cap",
                     )
                 # En blok der er forlænget på lagerets mål, men hvor målet nu
                 # ikke kendes: planlæggeren regner ikke manglen ud, når der
@@ -644,10 +652,12 @@ class ChargePlan:
                     and block.kwh - block.delivered_kwh <= DELIVERED_TOLERANCE_KWH
                 ):
                     return self._finish(
-                        now, "leveret sin mængde — lagerets mål kendes ikke længere"
+                        now,
+                        "leveret sin mængde — lagerets mål kendes ikke længere",
+                        code="kwh_done",
                     )
             if chosen == "pillefyr" and not young and not self.block.manual:
-                return self._finish(now, "pillefyret blev billigere")
+                return self._finish(now, "pillefyret blev billigere", code="pellet")
             # Predbat har lagt om, så halvtimen vi står i, tager af
             # batteriet. Blokken blev lagt på strøm fra nettet, og en blok må
             # kun køre der - den regel gælder også efter start, ikke kun når
@@ -661,6 +671,7 @@ class ChargePlan:
                     now,
                     "Predbat tager nu strømmen af batteriet",
                     top_up=self._may_resume(self.block),
+                    code="battery",
                 )
             self._running = True
             # Den leverede mængde står med, for det er den der afgør
@@ -670,6 +681,7 @@ class ChargePlan:
                 if self.block.manual
                 else f" ({self.block.delivered_kwh:.1f} leveret)"
             )
+            self.rule = "manual" if self.block.manual else "running"
             self.note = (
                 f"{self._label(self.block)} "
                 f"{self.block.kwh:.1f} kWh{leveret}, "
@@ -706,20 +718,23 @@ class ChargePlan:
                         "strømmen kommer nu fra batteriet — "
                         "lageret nåede ikke målet",
                         top_up=self._may_resume(self.block),
+                        code="battery",
                     )
                 # Ellers er det enten fristen, eller at der ikke kunne
                 # forlænges af en anden grund - fx en ladehastighed der ikke
                 # kendes. Noten må ikke sige «fristen», når den ikke er nået.
                 if now < self.block.deadline:
                     return self._finish(
-                        now, "tiden løb ud — lageret nåede ikke målet"
+                        now, "tiden løb ud — lageret nåede ikke målet", code="time_out"
                     )
                 return self._finish(
-                    now, "fristen nået — lageret nåede ikke målet"
+                    now, "fristen nået — lageret nåede ikke målet", code="deadline"
                 )
             if not self.block.manual and measured and missing > DELIVERED_TOLERANCE_KWH:
                 return self._finish(
-                    now, f"tiden løb ud — {missing:.1f} kWh nåede ikke i lageret"
+                    now,
+                    f"tiden løb ud — {missing:.1f} kWh nåede ikke i lageret",
+                    code="time_out",
                 )
             # Kun en blok der *målt* leverede sin mængde, åbner for en
             # efteropladning. Uden måling ved vi ikke om det var pumpen eller
@@ -727,6 +742,7 @@ class ChargePlan:
             return self._finish(
                 now,
                 "kørt",
+                code="ran",
                 top_up=(
                     not self.block.manual
                     and not self.block.top_up
@@ -742,6 +758,7 @@ class ChargePlan:
         if self.block is not None and (full or chosen == "pillefyr"):
             self.block = None
             self._forget_wish()
+            self.rule = "dropped_full" if full else "dropped_pellet"
             self.note = "opladning droppet — " + (
                 "lageret er fuldt" if full else "pillefyret vinder"
             )
@@ -758,11 +775,13 @@ class ChargePlan:
         if not _finite(want) or want <= 0 or not window or plan is None:
             self._wanted_stamps = []
             if self.block is not None:
+                self.rule = "waiting"
                 self.note = (
                     f"venter — {self._label(self.block)} {self.block.kwh:.1f} kWh om "
                     f"{self.block.minutes_until(now):.0f} min"
                 )
             else:
+                self.rule = "no_plan"
                 self.note = NO_PLAN
             return False
 
@@ -817,6 +836,7 @@ class ChargePlan:
             # Efteropladningen ovenfor er noget andet - se dér.
             self.block = None
             self._forget_wish()
+            self.rule = "covered"
             self.note = "allerede ladet op mod det her dyre stræk"
             return False
 
@@ -836,6 +856,7 @@ class ChargePlan:
         ):
             self.block = None
             self._placed_stamp = None
+            self.rule = "dropped_battery"
             self.note = "opladning droppet — Predbat tager nu strømmen af batteriet"
             return False
 
@@ -844,6 +865,7 @@ class ChargePlan:
             if self.block is not None and plan_stamp == self._placed_stamp:
                 # Samme Predbat-plan som da den blev lagt: ingen nye priser at
                 # flytte den på.
+                self.rule = "waiting"
                 self.note = (
                     f"venter — {self._label(self.block)} {self.block.kwh:.1f} kWh om "
                     f"{self.block.minutes_until(now):.0f} min"
@@ -853,6 +875,7 @@ class ChargePlan:
                 if plan_stamp not in self._wanted_stamps:
                     self._wanted_stamps = (self._wanted_stamps + [plan_stamp])[-8:]
                 if len(self._wanted_stamps) < max(1, int(confirm_plans)):
+                    self.rule = "waiting_predbat"
                     self.note = "afventer næste Predbat-beregning"
                     return False
 
@@ -890,6 +913,7 @@ class ChargePlan:
             # at der ikke kan lægges en *ny* i det her minut, siger ingenting
             # om den. Før stod her ``self.block = None``, og så slettede en
             # forbigående trangt vindue en opladning der var klar.
+            self.rule = "no_grid_minutes"
             self.note = (
                 f"ingen {minutes:.0f} min fra nettet inden prisen stiger"
             )
@@ -918,6 +942,7 @@ class ChargePlan:
         if ends > stop:
             ends = stop
             if ends <= max(starts, now):
+                self.rule = "no_room_minutes"
                 self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
                 return False
             minutes = (ends - max(starts, now)) / 60
@@ -926,6 +951,7 @@ class ChargePlan:
             # start. Lagt kl. 04:52 mod en nethalvtime der slutter kl. 05:00,
             # blev det til otte minutter og 1,9 kWh.
             if minutes < min_runtime_minutes:
+                self.rule = "below_min_runtime"
                 self.note = (
                     f"kun {minutes:.0f} min fra nettet inden prisen stiger "
                     "— under mindstekørselstiden"
@@ -949,9 +975,11 @@ class ChargePlan:
         self._placed_stamp = plan_stamp
         if self.block.running(now):
             self._running = True
+            self.rule = "running"
             self.note = f"{self._label(self.block)} {want:.1f} kWh nu, {minutes:.0f} min"
             return True
 
+        self.rule = "waiting"
         self.note = (
             f"{self._label(self.block)} {want:.1f} kWh om "
             f"{self.block.minutes_until(now):.0f} min "
@@ -1057,7 +1085,13 @@ class ChargePlan:
             return "manuel opladning"
         return "efteroplader" if block.top_up else "lader"
 
-    def _finish(self, now: float, why: str, top_up: bool = False) -> bool:
+    def _finish(
+        self, now: float, why: str, top_up: bool = False, code: str = "ran"
+    ) -> bool:
+        if self.block is not None:
+            # Hvorfor den seneste opladning sluttede - til regelkortet. Det
+            # var netop det der var svært at se den 18. oktober.
+            self.last_end = {"at": round(now, 1), "code": code, "why": why}
         if self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
             # Hver automatisk blok der slutter, afgør det på ny. Kun to veje
@@ -1070,6 +1104,7 @@ class ChargePlan:
         self._running = False
         self._full_since = None
         self._forget_wish()
+        self.rule = "ended"
         self.note = f"opladning slut — {why}"
         return False
 
@@ -1090,6 +1125,7 @@ class ChargePlan:
             "wanted_stamps": list(self._wanted_stamps),
             "placed_stamp": self._placed_stamp,
             "battery_stamps": list(self._battery_stamps),
+            "last_end": self.last_end,
         }
 
     @classmethod
@@ -1114,6 +1150,15 @@ class ChargePlan:
         battery = raw.get("battery_stamps")
         if isinstance(battery, list):
             plan._battery_stamps = [s for s in battery if isinstance(s, str)][-8:]
+        end = raw.get("last_end")
+        if (
+            isinstance(end, dict)
+            and _finite(end.get("at"))
+            and isinstance(end.get("code"), str)
+            and isinstance(end.get("why"), str)
+        ):
+            plan.last_end = {"at": float(end["at"]), "code": end["code"], "why": end["why"]}
         if plan.block is not None:
+            plan.rule = "waiting"
             plan.note = "genoptager planlagt opladning"
         return plan

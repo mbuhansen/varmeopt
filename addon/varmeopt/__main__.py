@@ -24,7 +24,7 @@ import aiohttp
 
 from . import VERSION, selfupdate
 from .capacity import ChargeRate
-from .charge import NO_PLAN, ChargePlan, slot_start
+from .charge import MAX_DELIVERED_SHARE, NO_PLAN, ChargePlan, slot_start
 from .cop import CopTable
 from .curve import HeatCurve
 from .demand import Balance, Load
@@ -727,6 +727,16 @@ class Varmeopt:
                 else None
             ),
             charge_plan=self.charge_plan.note,
+            # Anlæggets egne tal til regelkortet på plan-siden, så «gevinst
+            # under 1,00 kr» står med den værdi der faktisk gælder.
+            charge_rules={
+                "store_full_by_hour": self.options.store_full_by_hour,
+                "dhw_temp": self.options.dhw_usable_temp,
+                "min_runtime_minutes": self.options.hp_min_runtime_minutes,
+                "min_saving_kr": self.options.charge_min_saving_kr,
+                "confirm_plans": self.options.charge_confirm_plans,
+                "max_delivered_share": MAX_DELIVERED_SHARE,
+            },
             charge_rate=self.charge_rate.note,
             charge_rate_kw=self.charge_rate.effective_kw,
             house_load_bias=self.house_load.bias_kw,

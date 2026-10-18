@@ -129,6 +129,19 @@ table.plan td.raw { color:var(--muted); font-variant-numeric:tabular-nums; }
         gap:12px; flex-wrap:wrap; }
 .head form { margin:0; text-align:right; }
 .head .hint { color:var(--muted); font-size:12px; margin:5px 0 0; }
+.rules { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+        gap:6px 26px; }
+.rules h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+        color:var(--muted); margin:4px 0 4px; font-weight:600; }
+.rule { display:flex; gap:8px; align-items:baseline; padding:2px 0;
+        color:var(--muted); }
+.rule .dot { width:1em; flex:none; text-align:center; }
+.rule.on { color:var(--fg); font-weight:600; }
+.rule.on .dot { color:var(--accent); }
+.rule small { margin-left:auto; padding-left:8px; font-weight:400;
+        color:var(--muted); font-variant-numeric:tabular-nums; white-space:nowrap; }
+.lastend { margin:10px 0 0; padding-top:8px; border-top:1px solid var(--line);
+        font-size:12px; color:var(--muted); }
 """
 
 # Kurvens egen farve. Fast frem for currentColor, fordi linjen er det ene
@@ -427,6 +440,7 @@ class WebUI:
                 "plan",
                 f"{heading}<p class='sub'>Ingen plan fra Predbat endnu. "
                 "Kildevalget står stadig — det kræver ingen plan.</p>"
+                + self._rules(status, decision)
                 + (_price_section(status) if status.get("price_now") else ""),
             )
 
@@ -524,11 +538,17 @@ class WebUI:
             f'<p class="sub">{len(rows)} halvtimer frem, {hours:.0f} timer · '
             "priserne er Predbats, COP fremad regnes på nuværende udetemperatur</p>"
             f"{summary}"
+            f"{self._rules(status, decision)}"
             f'<div class="scroll"><table class="plan">{head}'
             f"<tbody>{''.join(cells)}</tbody></table></div>"
             '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod, og «lad op» de halvtimer opladningen ventes at ligge i — en hensigt der regnes forfra hvert minut, ikke et skema.</p>'
         )
         return _page("Plan", "plan", body)
+
+    def _rules(self, status: dict[str, Any], decision: Any) -> str:
+        """Regelkortet - over plantabellen, så det er det første man ser."""
+        charge = self._charge_plan() if self._charge_plan is not None else None
+        return _rules_card(decision, charge, status.get("charge_rules"))
 
     def _plan_head(self, note: str = "") -> str:
         """Overskriften med knappen til en manuel opladning i højre hjørne.
@@ -1066,6 +1086,145 @@ def _held_source(decision: Any, command: Any) -> tuple[str, str]:
     if command is None or command.source is None or command.source == raw:
         return raw, decision.reason
     return command.source, f"{decision.reason} — {command.reason}"
+
+
+def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> str:
+    """Reglerne for opladningen, med en prik ud for dem der gælder nu.
+
+    Opladningen styres af mange regler efterhånden, og det var svært at se
+    hvilken der afgjorde den. Den 18. oktober kørte en blok fire timer på
+    batteriets strøm, og intet på siden sagde hvorfor. Prikkerne sættes på
+    regelkoderne - ``Decision.rule`` og ``ChargePlan.rule`` - ikke på
+    ordlyden af en begrundelse, så en omformulering ikke flytter dem.
+    """
+    settings = settings or {}
+    d_rule = getattr(decision, "rule", None)
+    c_rule = getattr(charge, "rule", None)
+    block = getattr(charge, "block", None)
+    last = getattr(charge, "last_end", None)
+    last_code = last.get("code") if isinstance(last, dict) else None
+    dhw = getattr(decision, "dhw_short_kwh", None)
+    space = getattr(decision, "space_short_kwh", None)
+
+    def number(key: str, fmt: str) -> str:
+        value = settings.get(key)
+        return format(value, fmt) if isinstance(value, (int, float)) else "?"
+
+    def line(text: str, on: bool, value: str = "") -> str:
+        small = f"<small>{_esc(value)}</small>" if value else ""
+        dot = "●" if on else "○"
+        cls = "rule on" if on else "rule"
+        return f'<div class="{cls}"><span class="dot">{dot}</span>{_esc(text)}{small}</div>'
+
+    running = c_rule in ("running", "manual")
+    delivered = ""
+    if running and block is not None:
+        delivered = (
+            "manuel"
+            if block.manual
+            else f"{block.delivered_kwh:.1f} af {block.kwh:.1f} kWh"
+        )
+    groups = [
+        (
+            "Hvad lades der til",
+            [
+                line(
+                    f"Varmt vand over {number('dhw_temp', '.0f')}°",
+                    bool(dhw and dhw > 0.01),
+                    f"{dhw:.1f} kWh mangler" if dhw and dhw > 0.01 else "",
+                ),
+                line(
+                    "Rumvarme i det dyre stræk",
+                    bool(space and space > 0.01),
+                    f"{space:.1f} kWh mangler" if space and space > 0.01 else "",
+                ),
+                line(
+                    f"Lageret fyldt kl. {number('store_full_by_hour', '02.0f')}",
+                    bool(getattr(decision, "deadline_on_the_clock", False)),
+                ),
+            ],
+        ),
+        (
+            "Hvornår",
+            [
+                line(
+                    "Kun fra nettet, når Predbat lader",
+                    d_rule in ("charge_now", "wait_grid") or running,
+                ),
+                line("Venter på en billigere halvtime", d_rule == "wait_cheaper"),
+                line(
+                    f"Bekræftes af {number('confirm_plans', 'd')} Predbat-beregninger",
+                    c_rule == "waiting_predbat",
+                ),
+                line("Blokken er lagt og venter", c_rule == "waiting"),
+            ],
+        ),
+        (
+            "Hvorfor ikke",
+            [
+                line(
+                    "Ingen dyrere timer, eller for lille forskel pr. kWh",
+                    d_rule in ("no_dear", "margin_small", "grid_gain_small"),
+                ),
+                line(
+                    f"Gevinst under {number('min_saving_kr', '.2f')} kr",
+                    d_rule == "saving_small",
+                ),
+                line(
+                    f"Under ét minimumstræk ({number('min_runtime_minutes', '.0f')} min)",
+                    d_rule in ("below_min_need", "grid_below_min", "no_room")
+                    or c_rule in ("below_min_runtime", "no_room_minutes"),
+                ),
+                line(
+                    "Ingen halvtime fra nettet før fristen",
+                    d_rule == "no_grid"
+                    or c_rule in ("no_grid_minutes", "dropped_battery"),
+                ),
+                line("Lageret rækker", d_rule == "store_covers"),
+                line(
+                    "Allerede ladet op mod strækket — højst én blok til",
+                    c_rule == "covered",
+                ),
+            ],
+        ),
+        (
+            "Blokken",
+            [
+                line("Kører, til lageret har målet", running, delivered),
+                line(
+                    "Stopper, hvis Predbat tager af batteriet "
+                    f"({number('confirm_plans', 'd')} planer)",
+                    last_code == "battery",
+                ),
+                line(
+                    f"Højst {number('max_delivered_share', '.0f')} gange mængden",
+                    last_code == "cap",
+                ),
+            ],
+        ),
+    ]
+    body = "".join(
+        f"<div><h3>{_esc(title)}</h3>{''.join(lines)}</div>" for title, lines in groups
+    )
+    end = ""
+    if isinstance(last, dict) and _finite_number(last.get("at")):
+        stamp = datetime.fromtimestamp(last["at"]).astimezone()
+        today = datetime.now().astimezone().date()
+        clock = stamp.strftime("%H:%M" if stamp.date() == today else "%d/%m %H:%M")
+        end = (
+            f'<p class="lastend">Seneste opladning sluttede kl. {clock} — '
+            f"{_esc(last.get('why', ''))}</p>"
+        )
+    return f'<h2>Reglerne</h2><div class="card"><div class="rules">{body}</div>{end}</div>'
+
+
+def _finite_number(value: Any) -> bool:
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value == value
+        and value not in (float("inf"), float("-inf"))
+    )
 
 
 def _decision_banner(decision: Any, command: Any = None) -> str:
@@ -1718,7 +1877,9 @@ def _fmt(value: Any, unit: str = "", digits: int = 2) -> str:
     return f"{_esc(value)}{' ' + unit if unit else ''}"
 
 
-def _when(at: float) -> str:
+def _when_at(at: float) -> str:
+    # Hed før ``_when`` og skyggede for minut-udgaven længere oppe: banneret
+    # på plan-siden sendte minutter ind og fik «01/01 01:02» tilbage.
     return datetime.fromtimestamp(at).astimezone().strftime("%d/%m %H:%M")
 
 
@@ -1804,7 +1965,7 @@ def _ledger_body(ledger: Any, now: float) -> str:
     body_rows = []
     for entry in reversed(ledger.entries):
         kind = "manuel" if entry.manual else ("efter" if entry.top_up else "auto")
-        span = _when(entry.started) + (
+        span = _when_at(entry.started) + (
             f"–{_hhmm(entry.ended)}" if entry.ended is not None else "–"
         )
         if entry.ended is None:

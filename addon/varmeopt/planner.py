@@ -113,6 +113,10 @@ class Decision:
     # ``reason`` er hele historien; det her er den linje der kan stå på en
     # skærm uden at nogen skal læse sig frem til pointen.
     charge_state: str = ""
+    # Hvilken regel der afgjorde svaret, som en kode - til regelkortet på
+    # plan-siden. ``charge_state`` og ``reason`` er sætninger, og en side der
+    # genkendte dem på ordlyden, ville knække ved første omformulering.
+    rule: str | None = None
     # Hvad opladningen er *til*: hvor meget lageret mangler til hver af de to,
     # talt ved hver sin temperatur. Varmt vand og spa kan kun tage af den del
     # af lageret der er varm nok til dem; rumvarmen kan tage af det hele.
@@ -538,6 +542,7 @@ class Planner:
             return _with(
                 decision,
                 **stretch,
+                rule="no_dear",
                 charge_state="ingen dyrere timer forude at gemme varme til",
                 reason=f"{why}; intet at hente ved at gemme",
             )
@@ -588,6 +593,7 @@ class Planner:
                 decision,
                 **stretch,
                 window_minutes=best_when,
+                rule="margin_small",
                 charge_state=(
                     f"forskellen er for lille - kun {margin:.2f} kr/kWh at hente"
                 ),
@@ -623,6 +629,7 @@ class Planner:
                 decision,
                 **stretch,
                 window_minutes=best_when,
+                rule="no_room",
                 charge_state=f"der er kun {room:.1f} kWh plads i lageret",
                 reason=(
                     f"{why}; {margin:.2f} kr/kWh at hente "
@@ -716,6 +723,7 @@ class Planner:
                     decision,
                     **stretch,
                     window_minutes=best_when,
+                    rule="store_covers" if need <= 0 else "below_min_need",
                     charge_state=(
                         "lageret rækker - der er ikke noget at lade op til"
                         if need <= 0
@@ -780,6 +788,7 @@ class Planner:
                 decision,
                 **stretch,
                 window_minutes=best_when,
+                rule="no_grid",
                 charge_state="ingen halvtime fra nettet inden fristen",
                 **short_fields,
                 reason=(
@@ -797,6 +806,7 @@ class Planner:
                     decision,
                     **stretch,
                     window_minutes=best_when,
+                    rule="grid_below_min",
                     charge_state=(
                         f"kun {want:.1f} kWh kan lades fra nettet — under ét "
                         "minimumstræk"
@@ -817,6 +827,7 @@ class Planner:
                 decision,
                 **stretch,
                 window_minutes=best_when,
+                rule="grid_gain_small",
                 charge_state=(
                     f"forskellen er for lille - kun {grid_gain:.2f} kr/kWh at "
                     "hente ved at lade fra nettet"
@@ -842,6 +853,7 @@ class Planner:
                 decision,
                 **stretch,
                 window_minutes=best_when,
+                rule="saving_small",
                 charge_state=(
                     f"gevinsten er for lille - {expected:.2f} kr, under "
                     f"{self.min_saving_kr:.2f}"
@@ -867,6 +879,7 @@ class Planner:
                 window_minutes=best_when,
                 window_starts_in=frist,
                 deadline_on_the_clock=on_the_clock,
+                rule="wait_grid",
                 charge_state=(
                     f"venter - {self._when(grid_when)} kan der lades fra nettet"
                 ),
@@ -911,6 +924,7 @@ class Planner:
                 window_minutes=best_when,
                 window_starts_in=frist,
                 deadline_on_the_clock=on_the_clock,
+                rule="wait_cheaper",
                 charge_state=(
                     f"venter - {self._when(when)} er strømmen billigere, og "
                     "der er stadig tid inden det bliver dyrt"
@@ -969,6 +983,7 @@ class Planner:
             expected_paid=grid_heat,
             expected_alt=target_heat,
             window_minutes=best_when,
+            rule="charge_now",
             charge_state=f"lader {want:.1f} kWh op nu",
             dhw_short_kwh=None if short is None else short.dhw_kwh,
             space_short_kwh=None if short is None else short.space_kwh,
