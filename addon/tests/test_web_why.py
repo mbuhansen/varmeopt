@@ -754,7 +754,7 @@ class RulesCardTest(unittest.TestCase):
     def test_the_deadline_on_the_clock(self):
         marked = self.marked(self.html(self.decision(deadline_on_the_clock=True)))
 
-        self.assertIn("Lageret fyldt kl. 17", marked)
+        self.assertIn("Lageret fyldt kl. 17:00", marked)
 
     def test_the_last_end_is_said(self):
         import time
@@ -768,6 +768,54 @@ class RulesCardTest(unittest.TestCase):
         self.assertIn("Seneste opladning sluttede kl.", html)
         self.assertIn("Predbat tager nu strømmen af batteriet", html)
         self.assertIn("Stopper, hvis Predbat tager af batteriet (2 planer)", self.marked(html))
+
+    def test_a_running_block_is_not_contradicted_by_the_plans_no(self):
+        # Gennemgangen: «Gevinst under 1 kr» og «Kører» stod markeret samtidig.
+        from varmeopt.charge import ChargePlan
+
+        charge = ChargePlan()
+        charge.rule = "running"
+        html = self.html(self.decision(rule="saving_small"), charge)
+        marked = self.marked(html)
+
+        self.assertIn("Kører, til lageret har målet", marked)
+        self.assertNotIn("Gevinst under 1.00 kr", marked)
+        self.assertIn("planen siger nu", html)
+
+    def test_a_block_that_refuses_does_not_mark_the_grid_rule(self):
+        from varmeopt.charge import ChargePlan
+
+        charge = ChargePlan()
+        charge.rule = "covered"
+        marked = self.marked(self.html(self.decision(rule="charge_now"), charge))
+
+        self.assertNotIn("Kun fra nettet, når Predbat lader", marked)
+        self.assertIn("Allerede ladet op mod strækket — højst én blok til", marked)
+
+    def test_an_old_last_end_does_not_mark_its_rule(self):
+        import time
+
+        from varmeopt.charge import ChargePlan
+
+        charge = ChargePlan()
+        charge.last_end = {"at": time.time() - 3 * 86400, "code": "battery", "why": "batteriet"}
+        html = self.html(self.decision(), charge)
+
+        self.assertNotIn("Stopper, hvis Predbat tager af batteriet (2 planer)", self.marked(html))
+        self.assertIn("Seneste opladning sluttede", html)
+
+    def test_a_half_hour_deadline_and_none_at_all(self):
+        self.SETTINGS = dict(self.SETTINGS, store_full_by_hour=16.5)
+        self.assertIn("Lageret fyldt kl. 16:30", self.html(self.decision()))
+
+        self.SETTINGS = dict(self.SETTINGS, store_full_by_hour=-1)
+        html = self.html(self.decision())
+        self.assertIn("Ingen fast frist på uret", html)
+        self.assertNotIn("kl. -1", html)
+
+    def test_a_whole_number_setting_given_as_a_float(self):
+        self.SETTINGS = dict(self.SETTINGS, confirm_plans=2.0)
+        self.assertIn("Bekræftes af 2 Predbat-beregninger", self.html(self.decision()))
 
     def test_it_is_there_without_a_plan_too(self):
         self.assertIn("Reglerne", self.html(self.decision(rule="no_dear"), rows=False))

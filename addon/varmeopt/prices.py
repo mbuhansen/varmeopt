@@ -143,6 +143,15 @@ _STATES: dict[str, str] = {
     "frz": LOCKED,
 }
 
+# Ord hvor Predbat selv *regner* med at batteriet holdes, selv om inverteren
+# kører Demand. Til prisen er de afladning (se «frzchrg» ovenfor), men
+# ladetilstanden i de rækker er Predbats hold-tal: den står fladt, fordi
+# Predbat tror batteriet er låst. En flad strækning dér er derfor ikke en
+# bund, og den må ikke udnævne en reserve. Gennemgangen den 18. oktober: som
+# afladning blev fem frzchrg-halvtimer på 22 % til reserven, og aftenens
+# pris sprang fra 1,08 til 2,50 «købes tilbage».
+_HELD_IN_PLAN = frozenset({"frzchrg"})
+
 # Bemærk hvad der *ikke* står der. Predbat har flere ord - "ecoo" (Eco, no
 # discharge) og "idle" blandt dem - men de forekommer ikke på det her
 # anlæg, og hvad de præcis betyder, ville være et gæt. Et gæt i den
@@ -589,6 +598,7 @@ class Plan:
             if s.soc_percent is not None
             and s.soc_percent <= floor + FLOOR_TOLERANCE
             and s.mode != LOCKED
+            and s.word not in _HELD_IN_PLAN
         ]
         if len(resting) < RESERVE_SLOTS:
             return None

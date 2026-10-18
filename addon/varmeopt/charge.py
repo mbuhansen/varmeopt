@@ -705,21 +705,36 @@ class ChargePlan:
                 ran > 0 and self.block.measured_seconds >= MIN_MEASURED_SHARE * ran
             )
             missing = self.block.kwh - self.block.delivered_kwh
+            # Er det batteriet der stoppede blokken, skal det stå der - og
+            # strækket er ikke klaret: der må lægges én blok mere, hvis der
+            # kommer net-halvtimer før fristen. Kendes lagerets mål ikke, er
+            # pumpens kWh målet; mangler der målt noget, er det det samme
+            # stop. Her stod kun «målet ikke nået», og et ukendt mål endte
+            # som «tiden løb ud» og brændte strækket (gennemgangen den 18.
+            # oktober).
+            fell_short = target_met is False or (
+                target_met is None
+                and measured
+                and missing > DELIVERED_TOLERANCE_KWH
+            )
+            if (
+                not self.block.manual
+                and fell_short
+                and now < self.block.deadline
+                and self._grid_reach(plan, now, self.block.deadline, grid) <= now
+            ):
+                return self._finish(
+                    now,
+                    "strømmen kommer nu fra batteriet — "
+                    + (
+                        "lageret nåede ikke målet"
+                        if target_met is False
+                        else f"{missing:.1f} kWh nåede ikke i lageret"
+                    ),
+                    top_up=self._may_resume(self.block),
+                    code="battery",
+                )
             if not self.block.manual and target_met is False:
-                # Er det batteriet der stoppede forlængelsen, skal det stå
-                # der - og strækket er ikke klaret: der må lægges én blok
-                # mere, hvis der kommer net-halvtimer før fristen.
-                if (
-                    now < self.block.deadline
-                    and self._grid_reach(plan, now, self.block.deadline, grid) <= now
-                ):
-                    return self._finish(
-                        now,
-                        "strømmen kommer nu fra batteriet — "
-                        "lageret nåede ikke målet",
-                        top_up=self._may_resume(self.block),
-                        code="battery",
-                    )
                 # Ellers er det enten fristen, eller at der ikke kunne
                 # forlænges af en anden grund - fx en ladehastighed der ikke
                 # kendes. Noten må ikke sige «fristen», når den ikke er nået.
@@ -762,6 +777,38 @@ class ChargePlan:
             self.note = "opladning droppet — " + (
                 "lageret er fuldt" if full else "pillefyret vinder"
             )
+            return False
+
+        # 3b. En ventende blok der nu ligger på batteriet, droppes.
+        #
+        #     Normalt står en ventende blok ved magt, også når der ikke kan
+        #     lægges en ny - se «Ingen plads» nedenfor. Den her er en
+        #     undtagelse, og den er bevidst: siden 23. september må en blok
+        #     kun ligge hvor strømmen kommer fra nettet. Har Predbat siden
+        #     lagt om, så en af dens halvtimer nu tager af batteriet, er den
+        #     ikke længere en blok vi må køre.
+        #
+        #     Den står *før* trin 4, og det er med vilje. Her stod den efter,
+        #     og trin 4 vender om når planlæggeren ikke har en hensigt - så
+        #     en blok lagt kl. 13 overlevede at Predbat flyttede dens
+        #     halvtimer til batteriet, bare fordi planlæggeren samtidig sagde
+        #     «gevinsten er for lille». Den startede og kørte 15 minutter på
+        #     batteriets strøm. Fundet i gennemgangen den 18. oktober.
+        #
+        #     Og ønsket glemmes: en ny blok skal bekræftes forfra, ellers
+        #     lægges den igen i næste minut, og noten skifter mellem «droppet»
+        #     og «lader» i Predbats takt.
+        if (
+            plan is not None
+            and self.block is not None
+            and not self.block.manual
+            and not self.block.running(now)
+            and self._on_battery(self.block, plan, now)
+        ):
+            self.block = None
+            self._forget_wish()
+            self.rule = "dropped_battery"
+            self.note = "opladning droppet — Predbat tager nu strømmen af batteriet"
             return False
 
         # 4. Er der en hensigt at planlægge efter?
@@ -838,26 +885,6 @@ class ChargePlan:
             self._forget_wish()
             self.rule = "covered"
             self.note = "allerede ladet op mod det her dyre stræk"
-            return False
-
-        # 4b. En ventende blok der nu ligger på batteriet, droppes.
-        #
-        #     Normalt står en ventende blok ved magt, også når der ikke kan
-        #     lægges en ny - se «Ingen plads» nedenfor. Den her er en
-        #     undtagelse, og den er bevidst: siden 23. september må en blok
-        #     kun ligge hvor strømmen kommer fra nettet. Har Predbat siden
-        #     lagt om, så en af dens halvtimer nu tager af batteriet, er den
-        #     ikke længere en blok vi må køre.
-        if (
-            self.block is not None
-            and not self.block.manual
-            and not self.block.running(now)
-            and self._on_battery(self.block, plan, now)
-        ):
-            self.block = None
-            self._placed_stamp = None
-            self.rule = "dropped_battery"
-            self.note = "opladning droppet — Predbat tager nu strømmen af batteriet"
             return False
 
         # 4c. Blokken følger Predbats takt, ikke add-on'ens minut.

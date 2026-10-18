@@ -1597,6 +1597,33 @@ class BatteryStopResumeTest(unittest.TestCase):
         self.assertTrue(any("batteriet" in n for n in notes), notes)
         self.assertIn("allerede ladet op", self.charge.note)
 
+    def test_an_unknown_target_does_not_burn_the_stretch(self):
+        # Gennemgangen den 18. oktober: uden et lagermål endte batteristoppet
+        # som «tiden løb ud», og de senere nethalvtimer blev ikke brugt.
+        runs = RunCounter()
+        notes = []
+        for minute in range(15, 270):
+            charging = self.charge.update(
+                self.base + minute * 60,
+                FakeDecision(
+                    planned_kwh=3.6,
+                    window_starts_in=max(1, 270 - (minute // 30) * 30),
+                    window_minutes=max(1, 270 - (minute // 30) * 30),
+                    dear_starts_in=max(1, 270 - (minute // 30) * 30),
+                    dear_span_minutes=120,
+                ),
+                mixed_plan(self.ROWS[minute // 30:]),
+                10.0,
+                heat_kw=7.0,
+                min_runtime_minutes=10,
+                target_met=None,
+            )
+            runs.see(minute, charging)
+            notes.append(self.charge.note)
+
+        self.assertEqual(len(runs.runs), 2, runs.runs)
+        self.assertTrue(any("batteriet" in n for n in notes))
+
     def test_a_predbat_that_flips_every_plan_gives_no_short_runs(self):
         """Ejerens krav: skifter Predbat plan tit, må pumpen ikke lave små
         kørsler. Nu-halvtimen skifter mellem net og batteri ved hver ny
@@ -1740,3 +1767,42 @@ class RuleAndLastEndTest(unittest.TestCase):
             t.step(minute, t.ROWS)
 
         self.assertEqual(t.charge.rule, "covered")
+
+
+class WaitingBlockOnBatteryTest(unittest.TestCase):
+    """En ventende blok droppes, når dens halvtimer kommer på batteriet -
+    også når planlæggeren samtidig siger nej.
+
+    Gennemgangen den 18. oktober: planlæggerens nej («gevinsten er for
+    lille») vendte om i trin 4, før batteritjekket nåedes. Blokken startede
+    og kørte 15 minutter på batteriets strøm.
+    """
+
+    def test_a_no_from_the_planner_does_not_shield_it(self):
+        now = slot_start(1_757_000_000.0)
+        charge = ChargePlan()
+        grid = mixed_plan(
+            [("exp", 90, 10)] * 4 + [("holdchrg", 35, 10)] * 4 + [("exp", 155, 50)] * 4
+        )
+        charge.update(now, FakeDecision(), grid, 16.0)
+        self.assertIsNotNone(charge.block)
+        starts = charge.block.starts_at
+
+        battery = mixed_plan([("exp", 90, 10)] * 12)
+        no = FakeDecision(planned_kwh=None)
+        ran = False
+        rules = set()
+        minute = 1
+        while now + minute * 60 <= starts + 20 * 60:
+            ran = (
+                charge.update(
+                    now + minute * 60, no, battery, 16.0, min_runtime_minutes=15
+                )
+                or ran
+            )
+            rules.add(charge.rule)
+            minute += 1
+
+        self.assertFalse(ran, "blokken må ikke starte på batteriets strøm")
+        self.assertIsNone(charge.block)
+        self.assertIn("dropped_battery", rules)

@@ -1526,7 +1526,15 @@ class Varmeopt:
         ours = slot.mode
         if ours == LOCKED and getattr(price, "source", None) == BATTERY:
             ours = DISCHARGE
-        if theirs is None or theirs == ours:
+        if theirs == ours:
+            # Enige igen: næste uenighed skal siges, også med samme tekst.
+            # Her blev ``_last_status_warning`` aldrig nulstillet, og efter
+            # første «Demand» tav enhver senere Demand-uenighed i hele
+            # processens levetid - også den farlige, hvor vi regner med
+            # nettet mens batteriet leverer (gennemgangen den 18. oktober).
+            self._last_status_warning = None
+            return
+        if theirs is None:
             return
         if text != self._last_status_warning:
             log.warning(

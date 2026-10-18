@@ -558,6 +558,27 @@ class CycleTest(unittest.TestCase):
             any("tilstandsstrengene" in line for line in caught.output), caught.output
         )
 
+    def test_a_disagreement_is_said_again_after_they_have_agreed(self):
+        warnings = []
+
+        def check(status, state):
+            self.with_plan_and_status(state, status)
+            with mock.patch("varmeopt.__main__.log") as fake:
+                self.cycle()
+            warnings.append(
+                any(
+                    "tilstandsstrengene" in str(c.args[0])
+                    for c in fake.warning.call_args_list
+                    if c.args
+                )
+            )
+
+        check("Charging", "demand")  # uenige
+        check("Demand", "demand")  # enige
+        check("Charging", "demand")  # uenige igen, samme tekst
+
+        self.assertEqual(warnings, [True, False, True])
+
     def test_a_cycle_survives_predbat_having_a_status(self):
         # Her gik 0.38.0 ned: kontrollen mod Predbats status læste stadig
         # ``slot.discharging`` og ``slot.charging``, som var væk. Ingen test

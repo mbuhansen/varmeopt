@@ -164,11 +164,26 @@ class FreezeChargeTest(unittest.TestCase):
         self.assertEqual(hold.marginal(0, grid=grid).source, NET)
         self.assertEqual(freeze.marginal(0, grid=grid).source, BATTERY)
 
-    def test_a_flat_bottom_in_it_marks_the_reserve(self):
-        # I Demand står batteriet på reserven, når planen ligger fladt nede.
+    def test_a_flat_stretch_in_it_is_not_a_reserve(self):
+        # Ladetilstanden i frzchrg er Predbats hold-tal: den står fladt fordi
+        # Predbat tror batteriet holdes, mens inverteren aflader videre. Som
+        # reserve gjorde den aftenen falsk dyr - 2,50 «købes tilbage» i
+        # stedet for 1,08 (gennemgangen den 18. oktober).
+        p = plan(
+            row(soc=45),
+            row(soc=30),
+            *[row(state="frzchrg", soc=22) for _ in range(5)],
+            row(state="chrg", soc=22),
+        )
+
+        self.assertIsNone(p.reserve)
+
+    def test_a_real_bottom_beside_it_still_counts(self):
+        # Ligger bunden også i almindelige afladningsrækker, er den en bund.
         p = plan(
             row(soc=30),
-            row(state="frzchrg", soc=12),
+            row(soc=12),
+            row(soc=12),
             row(state="frzchrg", soc=12),
             row(soc=20),
         )

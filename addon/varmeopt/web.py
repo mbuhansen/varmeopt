@@ -129,7 +129,8 @@ table.plan td.raw { color:var(--muted); font-variant-numeric:tabular-nums; }
         gap:12px; flex-wrap:wrap; }
 .head form { margin:0; text-align:right; }
 .head .hint { color:var(--muted); font-size:12px; margin:5px 0 0; }
-.rules { display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr));
+.rules { display:grid;
+        grid-template-columns:repeat(auto-fit,minmax(min(240px,100%),1fr));
         gap:6px 26px; }
 .rules h3 { font-size:11px; text-transform:uppercase; letter-spacing:.06em;
         color:var(--muted); margin:4px 0 4px; font-weight:600; }
@@ -1108,7 +1109,16 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
 
     def number(key: str, fmt: str) -> str:
         value = settings.get(key)
-        return format(value, fmt) if isinstance(value, (int, float)) else "?"
+        if not _finite_number(value):
+            return "?"
+        # «d» vil have et heltal; en indstilling kan komme som 2.0.
+        return format(int(value) if fmt == "d" else value, fmt)
+
+    def clock(hour: float) -> str:
+        # Fristen kan være en halv time - 16,5 er 16:30, ikke 16.
+        whole = int(hour)
+        minutes = int(round((hour - whole) * 60))
+        return f"{whole:02d}:{minutes:02d}"
 
     def line(text: str, on: bool, value: str = "") -> str:
         small = f"<small>{_esc(value)}</small>" if value else ""
@@ -1117,6 +1127,35 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
         return f'<div class="{cls}"><span class="dot">{dot}</span>{_esc(text)}{small}</div>'
 
     running = c_rule in ("running", "manual")
+    # Holder blokken sit eget svar - den kører eller er lagt - er
+    # planlæggerens nej ikke det der gælder. Uden det stod «Gevinst under 1
+    # kr» og «Kører» markeret på samme tid, og man læste det som om
+    # gevinsten stoppede en opladning der kørte (gennemgangen den 18.
+    # oktober). Planens nej står stadig, men som «planen siger nu».
+    held = c_rule in ("running", "manual", "waiting")
+    # Blokken afviser selv, hvad planlæggeren beder om.
+    refused = c_rule in (
+        "covered",
+        "below_min_runtime",
+        "no_room_minutes",
+        "no_grid_minutes",
+        "dropped_battery",
+    )
+    # Den seneste slutning gælder kun som prik, indtil der sker noget nyt:
+    # ingen blok, og ikke ældre end seks timer. Ellers hang prikken ved
+    # «batteriet» fast i dagevis, også mens en ny blok kørte.
+    fresh_end = (
+        last_code is not None
+        and block is None
+        and _finite_number(last.get("at"))
+        and time.time() - last["at"] < 6 * 3600
+    )
+
+    def plan_says(codes: tuple[str, ...], text: str, value: str = "") -> str:
+        """Linje for planlæggerens nej: prik, eller «planen siger nu»."""
+        if d_rule in codes and held:
+            return line(text, False, "planen siger nu")
+        return line(text, d_rule in codes, value)
     delivered = ""
     if running and block is not None:
         delivered = (
@@ -1138,9 +1177,14 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                     bool(space and space > 0.01),
                     f"{space:.1f} kWh mangler" if space and space > 0.01 else "",
                 ),
-                line(
-                    f"Lageret fyldt kl. {number('store_full_by_hour', '02.0f')}",
-                    bool(getattr(decision, "deadline_on_the_clock", False)),
+                (
+                    line(
+                        f"Lageret fyldt kl. {clock(settings['store_full_by_hour'])}",
+                        bool(getattr(decision, "deadline_on_the_clock", False)),
+                    )
+                    if _finite_number(settings.get("store_full_by_hour"))
+                    and settings["store_full_by_hour"] >= 0
+                    else line("Ingen fast frist på uret", False)
                 ),
             ],
         ),
@@ -1149,7 +1193,9 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
             [
                 line(
                     "Kun fra nettet, når Predbat lader",
-                    d_rule in ("charge_now", "wait_grid") or running,
+                    running
+                    or c_rule == "waiting"
+                    or (d_rule in ("charge_now", "wait_grid") and not refused),
                 ),
                 line("Venter på en billigere halvtime", d_rule == "wait_cheaper"),
                 line(
@@ -1162,25 +1208,31 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
         (
             "Hvorfor ikke",
             [
-                line(
+                plan_says(
+                    ("no_dear", "margin_small", "grid_gain_small"),
                     "Ingen dyrere timer, eller for lille forskel pr. kWh",
-                    d_rule in ("no_dear", "margin_small", "grid_gain_small"),
                 ),
-                line(
+                plan_says(
+                    ("saving_small",),
                     f"Gevinst under {number('min_saving_kr', '.2f')} kr",
-                    d_rule == "saving_small",
                 ),
-                line(
-                    f"Under ét minimumstræk ({number('min_runtime_minutes', '.0f')} min)",
-                    d_rule in ("below_min_need", "grid_below_min", "no_room")
-                    or c_rule in ("below_min_runtime", "no_room_minutes"),
+                (
+                    line(
+                        f"Under ét minimumstræk ({number('min_runtime_minutes', '.0f')} min)",
+                        True,
+                    )
+                    if c_rule in ("below_min_runtime", "no_room_minutes")
+                    else plan_says(
+                        ("below_min_need", "grid_below_min", "no_room"),
+                        f"Under ét minimumstræk ({number('min_runtime_minutes', '.0f')} min)",
+                    )
                 ),
-                line(
-                    "Ingen halvtime fra nettet før fristen",
-                    d_rule == "no_grid"
-                    or c_rule in ("no_grid_minutes", "dropped_battery"),
+                (
+                    line("Ingen halvtime fra nettet før fristen", True)
+                    if c_rule in ("no_grid_minutes", "dropped_battery")
+                    else plan_says(("no_grid",), "Ingen halvtime fra nettet før fristen")
                 ),
-                line("Lageret rækker", d_rule == "store_covers"),
+                plan_says(("store_covers",), "Lageret rækker"),
                 line(
                     "Allerede ladet op mod strækket — højst én blok til",
                     c_rule == "covered",
@@ -1194,11 +1246,11 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                 line(
                     "Stopper, hvis Predbat tager af batteriet "
                     f"({number('confirm_plans', 'd')} planer)",
-                    last_code == "battery",
+                    fresh_end and last_code == "battery",
                 ),
                 line(
                     f"Højst {number('max_delivered_share', '.0f')} gange mængden",
-                    last_code == "cap",
+                    fresh_end and last_code == "cap",
                 ),
             ],
         ),
