@@ -1478,6 +1478,12 @@ class Varmeopt:
             return DISCHARGE
         if "exp" in text:
             return EXPORT
+        # «Freeze charging» er Demand på det her anlæg: freeze charge er slået
+        # fra, og natten til den 18. oktober kl. 00:00-00:10 stod statussen
+        # der, mens batteriet leverede. Samme fejl som «frzchrg» i planen -
+        # se ``prices._STATES``. Den skal stå før «charg» nedenfor.
+        if ("freeze" in text or "frz" in text) and ("charg" in text or "chrg" in text):
+            return DISCHARGE
         if "chrg" in text or "charg" in text or "hold" in text:
             return LOCKED
         if "freeze" in text or "frz" in text:

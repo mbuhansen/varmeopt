@@ -537,7 +537,8 @@ class CycleTest(unittest.TestCase):
             ("Discharging", "discharge"),
             ("Charging", "locked"),
             ("Hold charging", "locked"),
-            ("Freeze charging", "locked"),
+            # Demand på anlægget - se ``_status_mode``.
+            ("Freeze charging", "discharge"),
             ("Exporting", "export"),
         ):
             with self.subTest(status=status):
