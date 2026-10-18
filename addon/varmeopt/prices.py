@@ -128,7 +128,14 @@ _STATES: dict[str, str] = {
     "discharge": DISCHARGE,
     "charge": LOCKED,
     "export": EXPORT,
-    "frzchrg": LOCKED,
+    # «frzchrg» er en fejl i Predbat på det her anlæg. Ejeren har slået
+    # freeze charge fra (18. oktober), men planen skriver ordet alligevel, og
+    # inverteren kører Demand: kl. 00:00 den 18. sagde Predbats status
+    # «Demand» mens række 0 sagde «frzchrg». Som låst blev halvtimen prissat
+    # af hold-gulvet - og ligger ladetilstanden mellem reserven og gulvet,
+    # blev den regnet som net, mens batteriet leverede. Som afladning er
+    # det batteriet, og der lades ikke op på dens strøm.
+    "frzchrg": DISCHARGE,
     "frzdischrg": LOCKED,
     "frzdis": LOCKED,
     "hold": LOCKED,

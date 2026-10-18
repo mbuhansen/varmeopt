@@ -145,6 +145,57 @@ class SlotStateTest(unittest.TestCase):
         self.assertFalse(Slot(0, "frzchrg", None, None, None).refills)
 
 
+class FreezeChargeTest(unittest.TestCase):
+    """«frzchrg» er en Predbat-fejl på anlægget: freeze charge er slået fra,
+    og inverteren kører Demand. Ejeren, 18. oktober."""
+
+    def test_the_word_means_the_inverter_carries_the_house(self):
+        self.assertEqual(Slot(0, "frzchrg", None, None, None).mode, DISCHARGE)
+        self.assertTrue(Slot(0, "FrzChrg", None, None, None).understood)
+
+    def test_it_is_the_battery_even_under_the_hold_floor(self):
+        # Ladetilstanden 40 % ligger under hold-gulvet på 60 %. Som hold er
+        # det nettet; som Demand aflader inverteren ned til reserven, og så
+        # er det batteriet. Kl. 00:00 den 18. var det Demand.
+        grid = Grid(discharge_floor=60.0)
+        hold = plan(row(state="holdchrg", soc=40), cheapest=1.00)
+        freeze = plan(row(state="frzchrg", soc=40), cheapest=1.00)
+
+        self.assertEqual(hold.marginal(0, grid=grid).source, NET)
+        self.assertEqual(freeze.marginal(0, grid=grid).source, BATTERY)
+
+    def test_a_flat_bottom_in_it_marks_the_reserve(self):
+        # I Demand står batteriet på reserven, når planen ligger fladt nede.
+        p = plan(
+            row(soc=30),
+            row(state="frzchrg", soc=12),
+            row(state="frzchrg", soc=12),
+            row(soc=20),
+        )
+
+        self.assertEqual(p.reserve, 12)
+
+    def test_no_block_is_laid_in_it(self):
+        from varmeopt.charge import ChargePlan, slot_start
+        from tests.test_charge import FakeDecision
+
+        rows = [row(state="frzchrg", import_rate=40, soc=60)] * 4 + [
+            row(state="holdchrg", import_rate=250, soc=60)
+        ] * 8
+        charge = ChargePlan()
+
+        charging = charge.update(
+            slot_start(1_757_000_000.0),
+            FakeDecision(planned_kwh=4.0, window_starts_in=120, window_minutes=120),
+            plan(*rows),
+            16.0,
+        )
+
+        self.assertFalse(charging)
+        self.assertIsNone(charge.block)
+        self.assertIn("fra nettet", charge.note)
+
+
 class MarginalTest(unittest.TestCase):
     def test_planned_export_costs_the_lost_income(self):
         p = plan(row(state="exp", export_rate=140))
