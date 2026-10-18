@@ -52,6 +52,7 @@ from .migrate import (
 from .options import Options
 from .planner import Planner, minutes_until_hour
 from .prices import (
+    BATTERY,
     BATTERY_LOSS,
     BATTERY_LOSS_DISCHARGE,
     DISCHARGE,
@@ -1447,7 +1448,7 @@ class Varmeopt:
         # står i, er det os der læser planen forkert.
         status = await self._state(ha, self.options.entity_predbat_status)
         if status is not None and plan.slots:
-            self._check_predbat_status(status.state, plan.slots[0])
+            self._check_predbat_status(status.state, plan.slots[0], now)
 
         return {
             "plan": plan,
@@ -1492,7 +1493,9 @@ class Varmeopt:
             return DISCHARGE
         return None
 
-    def _check_predbat_status(self, status: str, slot: Any) -> None:
+    def _check_predbat_status(
+        self, status: str, slot: Any, price: Any = None
+    ) -> None:
         """Siger Predbat og vores læsning af planen det samme om nu?
 
         Kun en kontrol - der styres ikke efter den. Men er de uenige om
@@ -1504,7 +1507,16 @@ class Varmeopt:
         if not text or text in ("unknown", "unavailable"):
             return
         theirs = self._status_mode(text)
-        if theirs is None or theirs == slot.mode:
+        # Sammenlign med det vi faktisk regner med, ikke med rækkens rå ord.
+        # «holdchrg» låser batteriet ved Predbats charge limit, men ligger
+        # ladetilstanden over grænsen, aflader inverteren ned til den - og
+        # så siger Predbat «Demand» med rette, og vi prissætter halvtimen som
+        # batteri. Kl. 00:20 den 18. oktober advarede kontrollen om netop
+        # det, mens begge sider var enige om at strømmen kom fra batteriet.
+        ours = slot.mode
+        if ours == LOCKED and getattr(price, "source", None) == BATTERY:
+            ours = DISCHARGE
+        if theirs is None or theirs == ours:
             return
         if text != self._last_status_warning:
             log.warning(
@@ -1512,7 +1524,7 @@ class Varmeopt:
                 "%s - tjek tilstandsstrengene",
                 status,
                 slot.state,
-                slot.mode,
+                ours,
             )
             self._last_status_warning = text
 

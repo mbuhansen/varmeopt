@@ -506,6 +506,58 @@ class CycleTest(unittest.TestCase):
             o.entity_predbat_status, status, {}, "status-1"
         )
 
+    def with_hold_over_limit(self, soc, limit, status):
+        """En «holdchrg»-række med ladetilstanden ``soc`` mod Predbats charge
+        limit ``limit``, og Predbats status."""
+        o = self.app.options
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {
+                "raw": {
+                    "rows": [
+                        {
+                            "state": "holdchrg",
+                            "import_rate": 180,
+                            "export_rate": 60,
+                            "soc_percent": soc,
+                        }
+                    ]
+                }
+            },
+            "plan-1",
+        )
+        self.ha._states[o.entity_predbat_charge_limit] = State(
+            o.entity_predbat_charge_limit, str(limit), {"unit_of_measurement": "%"}, "lim-1"
+        )
+        self.ha._states[o.entity_predbat_status] = State(
+            o.entity_predbat_status, status, {}, "status-1"
+        )
+
+    def test_a_hold_over_the_charge_limit_is_demand_as_predbat_says(self):
+        # Kl. 00:20 den 18. oktober: status «Demand», række «holdchrg», og
+        # prisen stod som batteri. De var enige - der må ikke advares.
+        self.with_hold_over_limit(soc=60, limit=40, status="Demand")
+
+        with mock.patch("varmeopt.__main__.log") as fake:
+            self.cycle()
+
+        said = [str(c.args[0]) for c in fake.warning.call_args_list if c.args]
+        self.assertFalse(any("tilstandsstrengene" in line for line in said), said)
+        self.assertEqual(self.app.status["price_now"].source, "batteri")
+
+    def test_a_hold_at_the_charge_limit_against_demand_is_said_out_loud(self):
+        # Låst ved grænsen regner vi med nettet. Siger Predbat alligevel
+        # Demand, leverer batteriet måske - det er den uenighed der tæller.
+        self.with_hold_over_limit(soc=40, limit=40, status="Demand")
+
+        with self.assertLogs("varmeopt", level="WARNING") as caught:
+            self.cycle()
+
+        self.assertTrue(
+            any("tilstandsstrengene" in line for line in caught.output), caught.output
+        )
+
     def test_a_cycle_survives_predbat_having_a_status(self):
         # Her gik 0.38.0 ned: kontrollen mod Predbats status læste stadig
         # ``slot.discharging`` og ``slot.charging``, som var væk. Ingen test
