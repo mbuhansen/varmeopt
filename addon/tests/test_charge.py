@@ -1397,3 +1397,120 @@ class RunawayBlockTest(unittest.TestCase):
             self.step(minute, rows, met=False)
 
         self.assertTrue(ChargePlan.from_raw(self.charge.to_raw()).block.extended)
+
+
+class BlockTargetTest(unittest.TestCase):
+    """Lagerets mål regnes mod blokkens eget stræk.
+
+    Den 18. oktober svarede planlæggeren «intet at hente» hele morgenen og
+    regnede derfor ikke manglen ud. Målet blev ukendt, og den kørende blok
+    havde ingen udgang tilbage.
+    """
+
+    def setUp(self):
+        from varmeopt.charge import Block
+        from varmeopt.planner import Planner
+
+        self.planner = Planner(pellet_price=0.71)
+        self.now = slot_start(1_757_000_000.0)
+        # Lagt mod et stræk fra om 4 timer og to timer frem.
+        self.block = Block(
+            dear_from=self.now + 240 * 60,
+            dear_until=self.now + 360 * 60,
+            starts_at=self.now,
+            ends_at=self.now + 30 * 60,
+            kwh=3.6,
+        )
+
+    def target(self, stored, hot, dhw=1.6, demand=1.0, known=True):
+        from varmeopt.__main__ import _block_target
+
+        self.asked = []
+
+        def dhw_over(start, hours):
+            self.asked.append((start, hours))
+            return dhw
+
+        return _block_target(
+            self.planner,
+            self.block,
+            self.now + 5 * 60,
+            known,
+            stored_kwh=stored,
+            hot_kwh=hot,
+            dhw_kwh_over=dhw_over,
+            dhw_input_for=None,
+            demand_kw=demand,
+            demand_kw_at=None,
+        )
+
+    def test_an_empty_store_has_not_met_the_target(self):
+        self.assertIs(self.target(stored=1.0, hot=0.0), False)
+
+    def test_a_full_store_has(self):
+        self.assertIs(self.target(stored=20.0, hot=5.0), True)
+
+    def test_it_is_measured_over_the_blocks_own_stretch(self):
+        self.target(stored=20.0, hot=5.0)
+        self.assertEqual(self.asked, [(240, 2.0)])
+
+    def test_unknown_tanks_give_an_unknown_target(self):
+        self.assertIsNone(self.target(stored=20.0, hot=5.0, known=False))
+
+    def test_an_unknown_house_gives_an_unknown_target(self):
+        self.assertIsNone(self.target(stored=20.0, hot=5.0, demand=None))
+
+
+class BatteryMidBlockTest(unittest.TestCase):
+    """Lægger Predbat om midt i en blok, så nu-halvtimen tager af batteriet,
+    stopper blokken - når to Predbat-planer har sagt det."""
+
+    GRID = (
+        [("holdchrg", 120, 10)]
+        + [("holdchrg", 154, 10)] * 3
+        + [("holdchrg", 250, 50)] * 4
+    )
+    BATTERY = [("exp", 120, 10)] + GRID[1:]
+
+    def setUp(self):
+        self.now = slot_start(1_757_000_000.0)
+        self.charge = ChargePlan()
+        self.step(0, self.GRID, "p1", confirm=1)
+        self.assertTrue(self.charge.charging, "blokken kører")
+
+    def step(self, minute, rows, stamp, confirm=2):
+        return self.charge.update(
+            self.now + minute * 60,
+            FakeDecision(
+                planned_kwh=8.0,
+                window_starts_in=120,
+                window_minutes=120,
+                dear_starts_in=120,
+                dear_span_minutes=120,
+            ),
+            mixed_plan(rows),
+            16.0,
+            heat_kw=16.0,
+            min_runtime_minutes=10,
+            plan_stamp=stamp,
+            confirm_plans=confirm,
+            target_met=False,
+        )
+
+    def test_one_plan_on_the_battery_does_not_stop_it(self):
+        self.assertTrue(self.step(12, self.BATTERY, "p2"))
+        self.assertTrue(self.step(13, self.BATTERY, "p2"))
+
+    def test_two_plans_do(self):
+        self.step(12, self.BATTERY, "p2")
+        self.assertFalse(self.step(17, self.BATTERY, "p3"))
+        self.assertIn("batteriet", self.charge.note)
+
+    def test_not_inside_the_minimum_runtime(self):
+        self.step(3, self.BATTERY, "p2")
+        self.assertTrue(self.step(5, self.BATTERY, "p3"))
+
+    def test_a_plan_back_on_the_grid_starts_the_count_over(self):
+        self.step(12, self.BATTERY, "p2")
+        self.step(14, self.GRID, "p3")
+        self.assertTrue(self.step(17, self.BATTERY, "p4"))

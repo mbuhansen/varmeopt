@@ -191,6 +191,37 @@ def _store_covers(decision: Any) -> bool | None:
     ) <= STORE_TARGET_TOLERANCE_KWH
 
 
+def _covers(short: Any) -> bool | None:
+    """Mangler lageret intet til nogen af de to - målt på tankene?"""
+    if short is None:
+        return None
+    return (
+        short.dhw_kwh <= STORE_TARGET_TOLERANCE_KWH
+        and short.space_kwh <= STORE_TARGET_TOLERANCE_KWH
+    )
+
+
+def _block_target(
+    planner: Any, block: Any, now: float, store_known: bool, **inputs: Any
+) -> bool | None:
+    """Har lageret det *blokkens* stræk skal bruge?
+
+    Ikke planlæggerens stræk: det kan være et andet end det blokken blev lagt
+    mod, og svarer planlæggeren «intet at hente», har den slet ikke regnet
+    manglen ud. Den 18. oktober var det svaret hele morgenen, og en blok på
+    3,6 kWh kørte til den havde leveret 41,6.
+
+    ``None`` når det ikke kan måles - tankene svarer ikke, eller husets
+    forbrug kan ikke skønnes. Så tager blokkens egne udgange over.
+    """
+    if not store_known:
+        return None
+    base = slot_start(now)
+    starts = max(0, int(round((block.dear_from - base) / 60)))
+    ends = int(round((block.dear_until - base) / 60))
+    return _covers(planner.store_short(starts, ends - starts, **inputs))
+
+
 def _stretch_of(decision: Any, now: float) -> tuple[float, float] | None:
     """Beslutningens dyre stræk som vægurstid - til en manuel opladning.
 
@@ -481,6 +512,37 @@ class Varmeopt:
         # en halveret plads er præcis det der lagde en blok der ikke skulle
         # lægges. Vises må den gerne; det er en anden ting.
         store = buffer if buffer is not None and buffer.complete else None
+        # Den del af lageret der er varm nok til at lade beholderen. Uden den
+        # blev 13 kWh ved 45 grader talt med mod en aften der delvis er varmt
+        # vand - og lageret kunne ikke lave et eneste bad.
+        hot_kwh = (
+            store.hot_water_kwh(
+                self.options.dhw_usable_temp, self.options.dhw_return_temp
+            )
+            if store is not None
+            else None
+        )
+
+        # Varmtvandet i det dyre vindue, ikke i de næste timer: profilen
+        # læses fra vinduets begyndelse.
+        def dhw_kwh_over(start_min: float, hours: float) -> float | None:
+            return self.house_load.vessels.kwh_between(
+                slot_start(time.time()) + start_min * 60, hours
+            )
+
+        # Og hvad det koster at få den varme til at *stå* der. Lagerets
+        # fysik hører hjemme i tank.py, ikke i planlæggeren.
+        dhw_input_for = (
+            (
+                lambda kwh: store.energy_to_reach(
+                    kwh,
+                    self.options.dhw_usable_temp,
+                    self.options.dhw_return_temp,
+                )
+            )
+            if store is not None
+            else None
+        )
         decision = self.planner.decide(
             plan=prices.get("plan"),
             cop_now=lookup.cop if lookup is not None else None,
@@ -499,33 +561,9 @@ class Varmeopt:
             # Den del af lageret der er varm nok til at lade beholderen. Uden
             # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
             # er varmt vand - og lageret kunne ikke lave et eneste bad.
-            hot_kwh=(
-                store.hot_water_kwh(
-                    self.options.dhw_usable_temp, self.options.dhw_return_temp
-                )
-                if store is not None
-                else None
-            ),
-            # Varmtvandet i det dyre vindue, ikke i de næste timer: profilen
-            # læses fra vinduets begyndelse.
-            dhw_kwh_over=lambda start_min, hours: (
-                self.house_load.vessels.kwh_between(
-                    slot_start(time.time()) + start_min * 60, hours
-                )
-            ),
-            # Og hvad det koster at få den varme til at *stå* der. Lagerets
-            # fysik hører hjemme i tank.py, ikke i planlæggeren.
-            dhw_input_for=(
-                (
-                    lambda kwh: store.energy_to_reach(
-                        kwh,
-                        self.options.dhw_usable_temp,
-                        self.options.dhw_return_temp,
-                    )
-                )
-                if store is not None
-                else None
-            ),
+            hot_kwh=hot_kwh,
+            dhw_kwh_over=dhw_kwh_over,
+            dhw_input_for=dhw_input_for,
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
@@ -596,7 +634,14 @@ class Varmeopt:
             confirm_plans=self.options.charge_confirm_plans,
             # Lagerets eget svar - det er det der skal være fyldt, ikke
             # pumpen der skal have leveret et tal. Se ``_store_covers``.
-            target_met=_store_covers(decision),
+            target_met=self._block_target_met(
+                decision,
+                store,
+                hot_kwh,
+                dhw_kwh_over,
+                dhw_input_for,
+                balance.load.kw if balance is not None else None,
+            ),
         )
         # Løftet skrives på blokken, så regnskabet har det, også når blokken
         # starter i et minut hvor beslutningen siger «venter».
@@ -1269,6 +1314,36 @@ class Varmeopt:
         if self._forecast_wall is not None:
             minutes = minutes + (slot_start(time.time()) - self._forecast_wall) / 60
         return self.forecast.temperature_at(minutes)
+
+    def _block_target_met(
+        self,
+        decision: Any,
+        store: Any,
+        hot_kwh: float | None,
+        dhw_kwh_over: Any,
+        dhw_input_for: Any,
+        demand_kw: float | None,
+    ) -> bool | None:
+        """Lagerets mål for den blok der er lagt - se ``_block_target``.
+
+        Uden en automatisk blok er der intet stræk at måle mod, og så gælder
+        planlæggerens eget svar som før.
+        """
+        block = self.charge_plan.block
+        if block is None or block.manual:
+            return _store_covers(decision)
+        return _block_target(
+            self.planner,
+            block,
+            time.time(),
+            store is not None,
+            stored_kwh=store.stored_kwh if store is not None else None,
+            hot_kwh=hot_kwh,
+            dhw_kwh_over=dhw_kwh_over,
+            dhw_input_for=dhw_input_for,
+            demand_kw=demand_kw,
+            demand_kw_at=self._demand_at,
+        )
 
     def _demand_at(self, minutes: int) -> float | None:
         """Hvad huset ventes at trække om så mange minutter.

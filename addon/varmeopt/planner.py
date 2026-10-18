@@ -1061,6 +1061,37 @@ class Planner:
                 best = (minutes, heat)
         return best
 
+    def store_short(
+        self,
+        starts: int,
+        span: int,
+        stored_kwh: float | None = None,
+        hot_kwh: float | None = None,
+        dhw_kwh_over: Any = None,
+        dhw_input_for: Any = None,
+        demand_kw: float | None = None,
+        demand_kw_at: Any = None,
+    ) -> Shortfall | None:
+        """Hvad lageret mangler til et *givet* stræk - samme regnestykke som
+        ``decide``.
+
+        ``decide`` regner kun manglen ud til det stræk den selv ser, og kun
+        når den når så langt. Svarer den «intet at hente», er manglen ukendt -
+        og den 18. oktober var det præcis det svar en kørende blok fik hele
+        morgenen. Blokken skal vide om lageret er fyldt til *sit* stræk, ikke
+        til planlæggerens, så den spørger her.
+
+        ``starts`` og ``span`` er minutter i planens ramme, fra halvtimens
+        start. ``None`` når husets forbrug ikke kan skønnes.
+        """
+        if span <= 0:
+            return None
+        displaced = self._displaced_kwh(span, demand_kw, demand_kw_at, starts)
+        if displaced is None:
+            return None
+        dhw_kwh = dhw_kwh_over(starts, span / 60) if dhw_kwh_over is not None else None
+        return self._shortfall(displaced, stored_kwh, hot_kwh, dhw_kwh, dhw_input_for)
+
     def _shortfall(
         self,
         displaced: float,

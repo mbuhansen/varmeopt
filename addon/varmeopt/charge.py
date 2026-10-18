@@ -304,6 +304,10 @@ class ChargePlan:
     # Hvornår vi sidst så varmeydelsen. Integrationen har brug for et
     # mellemrum, ikke et øjebliksbillede.
     _last_seen: float | None = None
+    # De Predbat-planer der har lagt halvtimen vi står i, på batteriet, mens
+    # en blok kørte. Samme regel som ønsket om at lade: ét minuts svar binder
+    # ikke, en ny Predbat-beregning gør.
+    _battery_stamps: list[str] = field(default_factory=list)
 
     # ---------------------------------------------------------------- opslag
 
@@ -626,6 +630,16 @@ class ChargePlan:
                     )
             if chosen == "pillefyr" and not young and not self.block.manual:
                 return self._finish(now, "pillefyret blev billigere")
+            # Predbat har lagt om, så halvtimen vi står i, tager af
+            # batteriet. Blokken blev lagt på strøm fra nettet, og en blok må
+            # kun køre der - den regel gælder også efter start, ikke kun når
+            # den lægges og forlænges.
+            if (
+                not self.block.manual
+                and self._battery_now(plan, grid, plan_stamp, confirm_plans)
+                and not young
+            ):
+                return self._finish(now, "Predbat tager nu strømmen af batteriet")
             self._running = True
             # Den leverede mængde står med, for det er den der afgør
             # hvornår blokken er færdig - ikke minutterne alene.
@@ -941,6 +955,26 @@ class ChargePlan:
     def _forget_wish(self) -> None:
         self._wanted_stamps = []
         self._placed_stamp = None
+        self._battery_stamps = []
+
+    def _battery_now(
+        self, plan: Any, grid: Any, plan_stamp: str | None, confirm_plans: int
+    ) -> bool:
+        """Har halvtimen vi står i, holdt sig på batteriet længe nok?
+
+        Uden stempel svarer ét minut, som før stemplerne fandtes.
+        """
+        from .prices import BATTERY
+
+        price = plan.marginal(0, grid=grid) if plan is not None else None
+        if price is None or price.source != BATTERY:
+            self._battery_stamps = []
+            return False
+        if plan_stamp is None:
+            return True
+        if plan_stamp not in self._battery_stamps:
+            self._battery_stamps = (self._battery_stamps + [plan_stamp])[-8:]
+        return len(self._battery_stamps) >= max(1, int(confirm_plans))
 
     @staticmethod
     def _on_battery(block: Block, plan: Any, now: float) -> bool:
