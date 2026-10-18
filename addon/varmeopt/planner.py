@@ -279,6 +279,7 @@ class Planner:
         horizon_minutes: int = DEFAULT_HORIZON_MINUTES,
         dhw_temp: float = 55.0,
         clock: Any = None,
+        min_saving_kr: float = 0.0,
     ) -> None:
         self.pellet_price = pellet_price
         self.hysteresis = hysteresis
@@ -287,6 +288,10 @@ class Planner:
         # er det en indstilling, så det kan efterprøves mod virkeligheden.
         self.wear = wear_kr_per_kwh
         self.min_charge_kwh = min_charge_kwh
+        # Det mindste en blok skal spare i kroner, for at kompressoren
+        # startes for den. Marginen pr. kWh siger om forskellen kan skelnes
+        # fra støj; det her siger om den samlede gevinst er en start værd.
+        self.min_saving_kr = min_saving_kr
         self.charge_kw = charge_kw
         self.horizon_minutes = horizon_minutes
         # Kun til begrundelsen: hvilken temperatur lageret blev talt ved.
@@ -760,7 +765,7 @@ class Planner:
         # nu-timens pris. Er nu-timen en batteripris, siger den ingenting om
         # hvad opladningen kommer til at koste.
         grid_window = self._grid_window(
-            plan, want, window, grid, cop_now, cop_later, charge_cop_at
+            plan, want, window, grid, cop_now, cop_later, charge_cop_at, elapsed
         )
         short_fields = dict(
             dhw_short_kwh=None if short is None else short.dhw_kwh,
@@ -782,7 +787,27 @@ class Planner:
                     f"{self._when(frist)} — lader ikke af batteriet"
                 ),
             )
-        grid_when, grid_heat = grid_window
+        grid_when, grid_heat, reach_kwh = grid_window
+        # Kun det der kan lades fra nettet, inden batteriet tager over, tæller
+        # - både for om det er en opladning, og for hvad den sparer.
+        if reach_kwh + 1e-6 < want:
+            want = reach_kwh
+            if want < self.min_charge_kwh:
+                return _with(
+                    decision,
+                    **stretch,
+                    window_minutes=best_when,
+                    charge_state=(
+                        f"kun {want:.1f} kWh kan lades fra nettet — under ét "
+                        "minimumstræk"
+                    ),
+                    **short_fields,
+                    reason=(
+                        f"{why}; kun {want:.1f} kWh kan lades fra nettet "
+                        f"{self._when(grid_when)}, inden batteriet tager over "
+                        "— under ét minimumstræk"
+                    ),
+                )
         target_heat = vp_charge + (
             top_gap if top_gap is not None and top_gap > 0 else margin
         )
@@ -803,6 +828,32 @@ class Planner:
                     "— for tæt til at flytte varme på"
                 ),
             )
+        # Spørgsmål 3c: er den samlede gevinst en start værd?
+        #
+        # Den 18. oktober kl. 04:45 lå marginen på 0,07 kr/kWh - over snittet
+        # på 0,05 - og 3,6 kWh lovede 0,25 kr. Opstarten alene kostede ca. 2
+        # kWh varme den morgen, før pumpen og rørene var oppe på 56 grader.
+        # Snittet pr. kWh fanger en forskel der ikke kan skelnes; det her
+        # fanger en forskel der godt kan, men ikke er en kompressorstart
+        # værd. Det står *før* venteudgangene, for de lægger også en blok.
+        expected = grid_gain * (want if need is None else min(want, need))
+        if expected < self.min_saving_kr:
+            return _with(
+                decision,
+                **stretch,
+                window_minutes=best_when,
+                charge_state=(
+                    f"gevinsten er for lille - {expected:.2f} kr, under "
+                    f"{self.min_saving_kr:.2f}"
+                ),
+                **short_fields,
+                reason=(
+                    f"{why}; {want:.1f} kWh fra nettet {self._when(grid_when)} "
+                    f"sparer kun {expected:.2f} kr {self._when(best_when)} — "
+                    f"under {self.min_saving_kr:.2f} kr, ikke en start værd"
+                ),
+            )
+
         # Kommer nu-timen selv fra nettet eller solen, bliver spørgsmålet om
         # *hvornår* stående hos 3b nedenfor, som før. Kun når nu-timen er en
         # batteritime, kan der slet ikke lades nu - så venter planlæggeren på
@@ -989,13 +1040,22 @@ class Planner:
         cop_now: Any,
         cop_later: Any,
         charge_cop_at: Any = None,
-    ) -> tuple[int, float] | None:
+        elapsed: float = 0.0,
+    ) -> tuple[int, float, float] | None:
         """Hvor en blok kan lades fra nettet, og hvad varmen koster der.
 
-        Returnerer (minutter frem til vinduet, opladningens varmepris i det)
-        eller ``None`` hvis der ingen sammenhængende net-halvtimer er inden
-        fristen. Det er det samme opslag ``charge.py`` lægger blokken efter,
-        så planlæggeren og blokken kan ikke sige hver sit.
+        Returnerer (minutter frem til vinduet, opladningens varmepris i det,
+        kWh der kan nås fra nettet) eller ``None`` hvis der ingen
+        sammenhængende net-halvtimer er inden fristen. Det er det samme
+        opslag ``charge.py`` lægger blokken efter, så planlæggeren og blokken
+        kan ikke sige hver sit.
+
+        **Det der kan nås, tælles fra nu.** ``cheapest_window`` regner i hele
+        halvtimer, og den 18. oktober kl. 04:45 så den 30 minutter fra nettet
+        hvor der var 15 tilbage: blokken blev lagt for 3,6 kWh og løftet
+        regnet på dem. Nu tælles nethalvtimerne fra vinduet og frem til den
+        første der tager af batteriet, og står vi i den første, trækkes det
+        der er gået af den, fra.
         """
         if self.charge_kw <= 0 or not _finite(want) or want <= 0:
             return None
@@ -1005,6 +1065,18 @@ class Planner:
         if found is None:
             return None
         offset = found[0]
+        reach = 0.0
+        at = offset
+        while at < window:
+            price = plan.marginal(at, grid=grid if at == 0 else None)
+            if price is None or price.source == BATTERY:
+                break
+            reach += SLOT_MINUTES
+            at += SLOT_MINUTES
+        reach = min(reach, max(0.0, window - offset))
+        if offset == 0:
+            reach = max(0.0, reach - elapsed)
+        reach_kwh = self.charge_kw * reach / 60
         heats: list[float] = []
         for index in range(max(1, math.ceil(needed / SLOT_MINUTES))):
             at = offset + index * SLOT_MINUTES
@@ -1018,7 +1090,7 @@ class Planner:
             )
         if not heats:
             return None
-        return offset, sum(heats) / len(heats)
+        return offset, sum(heats) / len(heats), reach_kwh
 
     def _cheaper_moment_before(
         self,

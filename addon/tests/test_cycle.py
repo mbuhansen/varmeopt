@@ -309,6 +309,58 @@ class CycleTest(unittest.TestCase):
             places=6,
         )
 
+    def _running_block(self, now):
+        """En automatisk blok der har kørt en halv time, mod et stræk om
+        fire timer - længere end mindstekørselstiden."""
+        from varmeopt.charge import Block, slot_start
+
+        base = slot_start(now)
+        self.app.charge_plan.block = Block(
+            dear_from=base + 240 * 60,
+            dear_until=base + 360 * 60,
+            starts_at=base - 30 * 60,
+            ends_at=base + 60 * 60,
+            kwh=3.6,
+            deadline=base + 240 * 60,
+            began_at=base - 30 * 60,
+        )
+
+    def test_a_running_block_stops_on_the_store_even_with_nothing_to_gain(self):
+        """Den 18. oktober: planlæggeren svarede «intet at hente» og regnede
+        ikke manglen ud, så blokken fik et ukendt mål og kørte videre. Her
+        er der ingen Predbat-plan, så planlæggeren regner slet intet - og
+        blokken skal alligevel kunne se at lageret har det dens stræk skal
+        bruge."""
+        import time
+
+        self._fill_tanks()
+        now = time.time()
+        self._running_block(now)
+
+        with mock.patch.object(self.app, "_demand_at", return_value=1.0):
+            self.cycle()
+
+        self.assertIsNone(self.app.charge_plan.block)
+        self.assertIn("nået målet", self.app.charge_plan.note)
+
+    def test_and_runs_on_while_the_store_is_short(self):
+        import time
+
+        o = self.app.options
+        for eid in (
+            o.entity_tank_a_top, o.entity_tank_a_mid, o.entity_tank_a_bottom,
+            o.entity_tank_a_outlet, o.entity_tank_b_top, o.entity_tank_b_mid,
+            o.entity_tank_b_bottom, o.entity_tank_b_outlet,
+        ):
+            self.ha._states[eid] = State(eid, "31", {}, "tank-1")
+        self._running_block(time.time())
+
+        with mock.patch.object(self.app, "_demand_at", return_value=3.0):
+            self.cycle()
+
+        self.assertIsNotNone(self.app.charge_plan.block)
+        self.assertTrue(self.app.charge_plan.charging)
+
     def test_a_tank_that_stops_answering_holds_its_last_reading(self):
         # Natten til den 10. september svarede tank B ikke i ét minut, og
         # lageret halverede sig fra 22,6 til 11,8 kWh. Både opladningen og

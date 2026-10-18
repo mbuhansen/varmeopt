@@ -286,6 +286,10 @@ _DEFAULTS: dict[str, object] = {
     # femte; to betyder at ønsket skal overleve én ny beregning. Den 23.
     # september bandt ét minuts prisskift en blok på 24,5 kWh.
     "charge_confirm_plans": 2,
+    # Det mindste en opladning skal spare i kroner, før kompressoren startes
+    # for den. Den 18. oktober lovede en blok på 3,6 kWh 0,25 kr, og opstarten
+    # kostede mere varme end den hentede. 0 slår gulvet fra.
+    "charge_min_saving_kr": 1.0,
     # Hvor længe varmepumpen skal have kørt, før dens COP læres. De første
     # minutter efter en start fejer fremløbet fra ~41 til ~57 grader, og hver
     # måling lander i en ny celle med en COP der ikke har sat sig - den 20.
@@ -421,6 +425,7 @@ class Options:
     control_confirm_plans: int
     control_warmup_minutes: float
     charge_confirm_plans: int
+    charge_min_saving_kr: float
     cop_learn_warmup_minutes: float
     tank_liters: int
     tank_reference_temp: float
@@ -484,6 +489,7 @@ class Options:
             log_level=str(values["log_level"]),
             cycle_seconds=int(values["cycle_seconds"]),
             charge_confirm_plans=int(values["charge_confirm_plans"]),
+            charge_min_saving_kr=float(values["charge_min_saving_kr"]),
             control_confirm_plans=int(values["control_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
             control_enabled=_as_bool(values["control_enabled"]),

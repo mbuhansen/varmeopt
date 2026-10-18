@@ -1454,6 +1454,16 @@ class BlockTargetTest(unittest.TestCase):
         self.target(stored=20.0, hot=5.0)
         self.assertEqual(self.asked, [(240, 2.0)])
 
+    def test_the_fallback_stretch_is_measured_over_its_whole_span(self):
+        # Gennemgangen: ved planlæggerens relative tilbagefald slutter
+        # spærren med toppen, mens mængden er regnet over hele spændet. Målt
+        # til toppen sagde blokken «nået», mens planlæggeren manglede 28 kWh.
+        from dataclasses import replace
+
+        self.block = replace(self.block, need_until=self.now + 1440 * 60)
+        self.target(stored=20.0, hot=5.0)
+        self.assertEqual(self.asked, [(240, 20.0)])
+
     def test_unknown_tanks_give_an_unknown_target(self):
         self.assertIsNone(self.target(stored=20.0, hot=5.0, known=False))
 
@@ -1514,3 +1524,173 @@ class BatteryMidBlockTest(unittest.TestCase):
         self.step(12, self.BATTERY, "p2")
         self.step(14, self.GRID, "p3")
         self.assertTrue(self.step(17, self.BATTERY, "p4"))
+
+
+class RunCounter:
+    """Tæller kompressorens kørsler og deres længde, minut for minut."""
+
+    def __init__(self):
+        self.runs = []
+        self._since = None
+
+    def see(self, minute, charging):
+        if charging and self._since is None:
+            self._since = minute
+        elif not charging and self._since is not None:
+            self.runs.append(minute - self._since)
+            self._since = None
+
+
+class BatteryStopResumeTest(unittest.TestCase):
+    """Stopper batteriet en blok, må der lægges én blok mere mod strækket.
+
+    Gennemgangen den 18. oktober: et batteristop brændte hele strækket, så de
+    nethalvtimer der kom senere inden fristen, ikke blev brugt. Men det må
+    ikke blive til en ny kort kørsel for hvert skift - højst to blokke pr.
+    stræk, som efteropladningen.
+    """
+
+    # Net 0-30, batteri 30-90, net 90-180, batteri 180-270, dyrt fra 270.
+    ROWS = (
+        [("holdchrg", 154, 10)]
+        + [("exp", 185, 10)] * 2
+        + [("holdchrg", 170, 10)] * 3
+        + [("exp", 185, 10)] * 3
+        + [("holdchrg", 250, 50)] * 4
+    )
+
+    def setUp(self):
+        self.base = slot_start(1_757_000_000.0)
+        self.charge = ChargePlan()
+
+    def step(self, minute, rows, met=False, stamp=None, confirm=1):
+        at = self.base + minute * 60
+        left = max(1, 270 - int((slot_start(at) - self.base) // 60))
+        return self.charge.update(
+            at,
+            FakeDecision(
+                planned_kwh=3.6,
+                window_starts_in=left,
+                window_minutes=left,
+                dear_starts_in=left,
+                dear_span_minutes=120,
+            ),
+            mixed_plan(rows[int((slot_start(at) - self.base) // 1800):]),
+            10.0,
+            heat_kw=10.0,
+            min_runtime_minutes=10,
+            plan_stamp=stamp,
+            confirm_plans=confirm,
+            target_met=met,
+        )
+
+    def test_one_more_block_on_the_later_grid_half_hours_and_no_more(self):
+        runs = RunCounter()
+        notes = []
+        for minute in range(15, 270):
+            runs.see(minute, self.step(minute, self.ROWS))
+            if self.charge.note not in notes:
+                notes.append(self.charge.note)
+
+        self.assertEqual(len(runs.runs), 2, notes)
+        self.assertTrue(all(r >= 10 for r in runs.runs), runs.runs)
+        self.assertTrue(any("batteriet" in n for n in notes), notes)
+        self.assertIn("allerede ladet op", self.charge.note)
+
+    def test_a_predbat_that_flips_every_plan_gives_no_short_runs(self):
+        """Ejerens krav: skifter Predbat plan tit, må pumpen ikke lave små
+        kørsler. Nu-halvtimen skifter mellem net og batteri ved hver ny
+        Predbat-beregning, hvert femte minut, en hel nat."""
+        grid = [("holdchrg", 154, 10)] * 9 + [("holdchrg", 250, 50)] * 4
+        battery = [("exp", 154, 10)] + grid[1:]
+        runs = RunCounter()
+        for minute in range(0, 270):
+            n = minute // 5
+            rows = grid if n % 2 == 0 else battery
+            runs.see(minute, self.step(minute, rows, stamp=f"p{n}", confirm=2))
+        runs.see(270, False)
+
+        self.assertGreaterEqual(len(runs.runs), 1, "uden en kørsel siger testen intet")
+        self.assertLessEqual(len(runs.runs), 2, runs.runs)
+        self.assertTrue(all(r >= 10 for r in runs.runs), runs.runs)
+
+
+class SmallBlockTest(unittest.TestCase):
+    def setUp(self):
+        self.base = slot_start(1_757_000_000.0)
+        self.charge = ChargePlan()
+        self.rows = [("holdchrg", 120, 10)] + [("holdchrg", 154, 10)] * 7 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+
+    def step(self, minute, kwh, rows=None, minrun=20):
+        at = self.base + minute * 60
+        left = max(1, 240 - int((slot_start(at) - self.base) // 60))
+        rows = rows or self.rows
+        return self.charge.update(
+            at,
+            FakeDecision(
+                planned_kwh=kwh,
+                window_starts_in=left,
+                window_minutes=left,
+                dear_starts_in=left,
+                dear_span_minutes=120,
+            ),
+            mixed_plan(rows[int((slot_start(at) - self.base) // 1800):]),
+            10.0,
+            heat_kw=10.0,
+            min_runtime_minutes=minrun,
+            target_met=False,
+        )
+
+    def test_the_cap_does_not_stop_a_small_block_right_after_its_minimum(self):
+        # 0,5 kWh ved 10 kW er tre minutter, men en blok stoppes ikke før
+        # mindstekørselstiden - og så har den leveret over det dobbelte.
+        self.assertTrue(self.step(0, kwh=0.5))
+        for minute in range(1, 26):
+            self.assertTrue(self.step(minute, kwh=0.5), f"minut {minute}")
+
+    def test_a_block_cut_below_the_minimum_runtime_is_not_laid(self):
+        # Kl. :22 er der otte minutter tilbage af nethalvtimen.
+        rows = [("holdchrg", 120, 10)] + [("exp", 185, 10)] * 7 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+        self.assertFalse(self.step(22, kwh=3.6, rows=rows, minrun=15))
+        self.assertIsNone(self.charge.block)
+        self.assertIn("mindstekørselstiden", self.charge.note)
+
+
+class NeedSpanTest(unittest.TestCase):
+    """Blokken husker det spænd mængden blev regnet over."""
+
+    def test_the_fallback_stretch_keeps_its_whole_span(self):
+        now = slot_start(1_757_000_000.0)
+        charge = ChargePlan()
+        decision = FakeDecision(
+            planned_kwh=5.6,
+            window_starts_in=30,
+            window_minutes=420,
+            dear_starts_in=30,
+            dear_span_minutes=1410,
+            dear_ends_in=480,
+        )
+        charge.update(now, decision, plan(*([35] * 6 + [155] * 42)), 16.0)
+
+        block = charge.block
+        self.assertEqual(block.dear_until, now + 480 * 60)
+        self.assertEqual(block.target_until, now + 1440 * 60)
+        restored = ChargePlan.from_raw(charge.to_raw()).block
+        self.assertEqual(restored.target_until, block.target_until)
+
+    def test_a_block_from_before_measures_to_its_stretch(self):
+        from varmeopt.charge import Block
+
+        block = Block(0.0, 3600.0, 0.0, 1800.0, 3.0)
+        self.assertEqual(block.target_until, 3600.0)
+
+
+class BatteryStampsRestartTest(unittest.TestCase):
+    def test_the_count_survives_a_restart(self):
+        charge = ChargePlan()
+        charge._battery_stamps = ["p2"]
+        self.assertEqual(ChargePlan.from_raw(charge.to_raw())._battery_stamps, ["p2"])

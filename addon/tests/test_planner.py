@@ -1594,6 +1594,98 @@ class ChargeFromTheGridTest(unittest.TestCase):
         self.assertIn("spar", d.reason)
 
 
+class GridReachTest(unittest.TestCase):
+    """Kun det der kan lades fra nettet, inden batteriet tager over, tæller.
+
+    Den 18. oktober kl. 04:45 var der 15 minutter tilbage af Predbats sidste
+    nethalvtime. Planlæggeren så 30, lagde 3,6 kWh og regnede løftet på dem.
+    """
+
+    # Net nu, batteriet i tre halvtimer der ikke er dyre, så det dyre stræk.
+    P = ChargeFromTheGridTest.rows(
+        ("chrg", 40, 10),
+        *[("demand", 90, 10)] * 3,
+        *[("holdchrg", 250, 60)] * 8,
+    )
+
+    def decide(self, elapsed, **over):
+        return planner(horizon_minutes=1440, **over).decide(
+            self.P,
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=1.75,
+            elapsed_minutes=elapsed,
+        )
+
+    def test_the_whole_half_hour_left_is_a_charge(self):
+        d = self.decide(0)
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertLessEqual(d.charge_kwh, 16.0 * 30 / 60 + 1e-6)
+
+    def test_what_is_left_of_it_is_what_counts(self):
+        d = self.decide(15)
+
+        self.assertTrue(d.charge, d.reason)
+        self.assertAlmostEqual(d.charge_kwh, 16.0 * 15 / 60, places=6)
+
+    def test_less_than_one_minimum_run_left_is_no_charge(self):
+        d = self.decide(20)
+
+        self.assertFalse(d.charge)
+        self.assertIsNone(d.planned_kwh)
+        self.assertIn("minimumstræk", d.charge_state)
+
+
+class MinSavingTest(unittest.TestCase):
+    """En opladning skal spare et beløb, der er en kompressorstart værd."""
+
+    P = plan(40, 40, 40, 40, 180, 180, 180, 180)
+
+    def decide(self, floor, p=None):
+        return planner(min_saving_kr=floor, horizon_minutes=1440).decide(
+            p or self.P,
+            cop_now=4.4,
+            cop_later=4.4,
+            headroom_kwh=20.0,
+            stored_kwh=0.0,
+            demand_kw=2.0,
+        )
+
+    def test_without_a_floor_it_charges(self):
+        self.assertTrue(self.decide(0.0).charge)
+
+    def test_a_saving_under_the_floor_is_no_charge(self):
+        saving = self.decide(0.0).saving_kr
+
+        d = self.decide(saving + 0.1)
+
+        self.assertFalse(d.charge)
+        self.assertIsNone(d.planned_kwh, "der må heller ikke lægges en blok")
+        self.assertIn("gevinsten er for lille", d.charge_state)
+
+    def test_a_saving_over_the_floor_charges(self):
+        saving = self.decide(0.0).saving_kr
+
+        self.assertTrue(self.decide(saving - 0.1).charge)
+
+    def test_the_floor_also_stops_a_block_that_waits_for_the_grid(self):
+        # Venteudgangene lægger også en blok, så gulvet skal stå før dem.
+        p = ChargeFromTheGridTest.rows(
+            *[("demand", 90, 10)] * 2,
+            *[("chrg", 40, 10)] * 4,
+            *[("holdchrg", 200, 60)] * 8,
+        )
+        self.assertIsNotNone(self.decide(0.0, p).planned_kwh)
+
+        d = self.decide(1000.0, p)
+
+        self.assertIsNone(d.planned_kwh)
+        self.assertIn("gevinsten er for lille", d.charge_state)
+
+
 class HalfHourFrameTest(unittest.TestCase):
     """Minutterne tæller fra halvtimens start, som planens rækker.
 

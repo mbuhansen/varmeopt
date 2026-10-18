@@ -198,6 +198,18 @@ class Block:
     # på at målet kan måles, og forsvinder målingen, skal der være en anden
     # vej ud - se ``update``.
     extended: bool = False
+    # Enden på det spænd mængden blev regnet over. Normalt det samme som
+    # ``dear_until``, men ikke for planlæggerens relative tilbagefald: dér
+    # slutter spærren med den første top, mens mængden er regnet over hele
+    # spændet. Lagerets mål skal måles over det samme spænd som mængden -
+    # ellers siger blokken «nået» mens planlæggeren siger at der mangler.
+    # Nul fra en ældre udgave betyder ``dear_until``.
+    need_until: float = 0.0
+
+    @property
+    def target_until(self) -> float:
+        """Enden på det spænd lagerets mål måles over."""
+        return self.need_until if self.need_until > 0 else self.dear_until
 
     @property
     def began(self) -> float:
@@ -229,6 +241,7 @@ class Block:
             "expected_paid": _rounded(self.expected_paid),
             "expected_alt": _rounded(self.expected_alt),
             "extended": self.extended,
+            "need_until": round(self.need_until, 1),
         }
 
     @classmethod
@@ -258,6 +271,7 @@ class Block:
                 expected_paid=_number(raw.get("expected_paid")),
                 expected_alt=_number(raw.get("expected_alt")),
                 extended=raw.get("extended") is True,
+                need_until=float(raw.get("need_until") or 0.0),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -608,7 +622,11 @@ class ChargePlan:
                 )
                 # Loftet. Lageret afgør, men ikke uden ende - se
                 # ``MAX_DELIVERED_SHARE``.
-                if measured and block.delivered_kwh >= MAX_DELIVERED_SHARE * block.kwh:
+                # Mindst ét minimumstræk: en lille blok kan ikke stoppes før
+                # mindstekørselstiden, og så leverer den altid mindst det.
+                floor = rate_kw * min_runtime_minutes / 60
+                cap = MAX_DELIVERED_SHARE * max(block.kwh, floor)
+                if measured and block.delivered_kwh >= cap:
                     return self._finish(
                         now,
                         f"leveret {block.delivered_kwh:.1f} kWh, "
@@ -639,7 +657,11 @@ class ChargePlan:
                 and self._battery_now(plan, grid, plan_stamp, confirm_plans)
                 and not young
             ):
-                return self._finish(now, "Predbat tager nu strømmen af batteriet")
+                return self._finish(
+                    now,
+                    "Predbat tager nu strømmen af batteriet",
+                    top_up=self._may_resume(self.block),
+                )
             self._running = True
             # Den leverede mængde står med, for det er den der afgør
             # hvornår blokken er færdig - ikke minutterne alene.
@@ -672,13 +694,25 @@ class ChargePlan:
             )
             missing = self.block.kwh - self.block.delivered_kwh
             if not self.block.manual and target_met is False:
-                # Er fristen ikke nået, er det batteriet der stoppede
-                # forlængelsen - og så skal det stå der.
-                if now < self.block.deadline:
+                # Er det batteriet der stoppede forlængelsen, skal det stå
+                # der - og strækket er ikke klaret: der må lægges én blok
+                # mere, hvis der kommer net-halvtimer før fristen.
+                if (
+                    now < self.block.deadline
+                    and self._grid_reach(plan, now, self.block.deadline, grid) <= now
+                ):
                     return self._finish(
                         now,
                         "strømmen kommer nu fra batteriet — "
                         "lageret nåede ikke målet",
+                        top_up=self._may_resume(self.block),
+                    )
+                # Ellers er det enten fristen, eller at der ikke kunne
+                # forlænges af en anden grund - fx en ladehastighed der ikke
+                # kendes. Noten må ikke sige «fristen», når den ikke er nået.
+                if now < self.block.deadline:
+                    return self._finish(
+                        now, "tiden løb ud — lageret nåede ikke målet"
                     )
                 return self._finish(
                     now, "fristen nået — lageret nåede ikke målet"
@@ -732,7 +766,7 @@ class ChargePlan:
                 self.note = NO_PLAN
             return False
 
-        dear_from, dear_until = self._dear_key(now, decision, window)
+        dear_from, dear_until, need_until = self._dear_key(now, decision, window)
         covered = self.done_until is not None and dear_from < self.done_until
         # **Efteropladningen.** Én undtagelse fra spærren nedenfor, og den er
         # ikke den udgåede om et tømt lager: den gælder *før* strækket, ikke
@@ -888,6 +922,15 @@ class ChargePlan:
                 return False
             minutes = (ends - max(starts, now)) / 60
             want = min(float(want), rate_kw * minutes / 60)
+            # Kortere end mindstekørselstiden er ikke en opladning, det er en
+            # start. Lagt kl. 04:52 mod en nethalvtime der slutter kl. 05:00,
+            # blev det til otte minutter og 1,9 kWh.
+            if minutes < min_runtime_minutes:
+                self.note = (
+                    f"kun {minutes:.0f} min fra nettet inden prisen stiger "
+                    "— under mindstekørselstiden"
+                )
+                return False
         self.block = Block(
             dear_from,
             dear_until,
@@ -897,6 +940,7 @@ class ChargePlan:
             deadline=deadline,
             began_at=max(starts, now),
             top_up=top_up,
+            need_until=need_until,
         )
         # En ny blok har ikke leveret noget, og den forrige cyklus hører til
         # den gamle. Uden nulstillingen ville det første mellemrum blive
@@ -915,7 +959,9 @@ class ChargePlan:
         )
         return False
 
-    def _dear_key(self, now: float, decision: Any, window: int) -> tuple[float, float]:
+    def _dear_key(
+        self, now: float, decision: Any, window: int
+    ) -> tuple[float, float, float]:
         """Det dyre stræk som to absolutte tidspunkter.
 
         Planlæggeren giver strækket som minutter frem; her bliver det til
@@ -948,14 +994,29 @@ class ChargePlan:
                 return (
                     slot_start(base + first * 60),
                     slot_start(base + last * 60),
+                    # Mængden er regnet over hele spændet, også når spærren
+                    # slutter med toppen - se ``Block.need_until``.
+                    slot_start(base + (first + length) * 60),
                 )
         top = slot_start(base + (decision.window_minutes or window) * 60)
-        return top, top + SLOT_SECONDS
+        # Uden et stræk er mængden ikke regnet over noget spænd, og så kan
+        # målet ikke måles: ``need_until`` på starten giver et tomt spænd.
+        return top, top + SLOT_SECONDS, top
 
     def _forget_wish(self) -> None:
         self._wanted_stamps = []
         self._placed_stamp = None
         self._battery_stamps = []
+
+    @staticmethod
+    def _may_resume(block: Block) -> bool:
+        """Må et batteristop lægge én blok mere mod samme stræk?
+
+        Samme regel som efteropladningen: ét dyrt stræk giver én opladning
+        og højst én til. Skifter Predbat plan tit, bliver det ved to blokke -
+        ikke en ny kort kørsel for hvert skift.
+        """
+        return not block.manual and not block.top_up
 
     def _battery_now(
         self, plan: Any, grid: Any, plan_stamp: str | None, confirm_plans: int
@@ -999,9 +1060,11 @@ class ChargePlan:
     def _finish(self, now: float, why: str, top_up: bool = False) -> bool:
         if self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
-            # Hver automatisk blok der slutter, afgør det på ny. Stoppet med
-            # knappen, fuldt lager, pillefyret, tiden der løb ud - ingen af
-            # dem åbner for en blok mere.
+            # Hver automatisk blok der slutter, afgør det på ny. Kun to veje
+            # åbner for én blok mere mod samme stræk: en blok der leverede
+            # sin mængde, målt, og en blok som batteriet stoppede - se
+            # ``_may_resume``. Stoppet med knappen, fuldt lager, pillefyret,
+            # tiden der løb ud: ingen af dem.
             self.top_up_open = top_up
         self.block = None
         self._running = False
@@ -1026,6 +1089,7 @@ class ChargePlan:
             # skal ikke begynde forfra fordi add-on'en blev genstartet.
             "wanted_stamps": list(self._wanted_stamps),
             "placed_stamp": self._placed_stamp,
+            "battery_stamps": list(self._battery_stamps),
         }
 
     @classmethod
@@ -1047,6 +1111,9 @@ class ChargePlan:
             plan._wanted_stamps = [s for s in stamps if isinstance(s, str)][-8:]
         placed = raw.get("placed_stamp")
         plan._placed_stamp = placed if isinstance(placed, str) else None
+        battery = raw.get("battery_stamps")
+        if isinstance(battery, list):
+            plan._battery_stamps = [s for s in battery if isinstance(s, str)][-8:]
         if plan.block is not None:
             plan.note = "genoptager planlagt opladning"
         return plan

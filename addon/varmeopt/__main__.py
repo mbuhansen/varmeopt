@@ -218,7 +218,8 @@ def _block_target(
         return None
     base = slot_start(now)
     starts = max(0, int(round((block.dear_from - base) / 60)))
-    ends = int(round((block.dear_until - base) / 60))
+    # Over det spænd mængden blev regnet over - se ``Block.need_until``.
+    ends = int(round((block.target_until - base) / 60))
     return _covers(planner.store_short(starts, ends - starts, **inputs))
 
 
@@ -297,6 +298,7 @@ class Varmeopt:
             # Begrundelserne skriver klokkeslæt i stedet for minutter.
             # «kl. 13:26» kan læses; «om 510 min» skal regnes.
             clock=_clock_ahead,
+            min_saving_kr=options.charge_min_saving_kr,
         )
         self.status: dict[str, Any] = {"note": "starter", "lookup": None}
         # Ståtabsmålingen. Den måler kun når brugeren selv har åbnet et

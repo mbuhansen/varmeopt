@@ -288,6 +288,7 @@ siges i loggen ved opstart.
 | `control_enabled` | `false` | Må Node-RED følge vores beslutning? Slået fra indtil du kobler den til |
 | `control_min_dwell_minutes` | 15 | Mindste tid en kilde skal stå før den må skifte igen. Gælder også `sensor.varmeopt_beslutning`, ikke kun styringen |
 | `charge_confirm_plans` | 2 | Hvor mange Predbat-beregninger et ønske om at lade op skal holde på, før det bliver til en blok. Add-on'en regner hvert minut, Predbat cirka hvert femte — med 2 skal ønsket overleve én ny beregning, så et enkelt minuts prisskift ikke binder en to-timers opladning. 1 lægger blokken straks |
+| `charge_min_saving_kr` | 1.0 | Det mindste en opladning skal spare i kroner, før kompressoren startes for den — regnet på det der faktisk kan lades fra nettet, inden batteriet tager over. Den 18. oktober lovede en blok på 3,6 kWh 0,25 kr, og opstarten kostede mere varme end den hentede. 0 slår gulvet fra |
 | `cop_learn_warmup_minutes` | 10 | Hvor længe varmepumpen skal have kørt, før dens COP læres. Lige efter en start fejer fremløbet op gennem tabellen med en COP der ikke har sat sig. |
 | `control_confirm_minutes` | 3 | Hvor længe en ny kilde skal holde før den tæller. Uden den gør hviletiden et ét-minuts udsving til et kvarters fejl |
 | `control_confirm_plans` | 2 | Hvor mange Predbat-beregninger en ny kilde skal holde på, før den tæller. Prisen skifter i Predbats takt, cirka hvert femte minut, så tre minutter kan ikke skelne en plan der kun står i fire minutter fra en der bliver stående. 1 slår det fra |
