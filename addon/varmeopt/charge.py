@@ -78,6 +78,18 @@ MAX_INTEGRATION_GAP_SECONDS = 300.0
 # blokken på uret som den altid har gjort.
 MIN_MEASURED_SHARE = 0.5
 
+# Så mange gange sin egen mængde må en automatisk blok levere, før den stoppes
+# - uanset hvad lageret siger.
+#
+# Den 18. oktober blev en blok på 3,6 kWh lagt i den sidste nethalvtime kl.
+# 04:45. Lageret nåede ikke målet, forlængelsen satte enden til fristen kl.
+# 09:00, og bagefter svarede planlæggeren «intet at hente» - uden at regne
+# manglen ud, så målet blev ukendt, og ingen af blokkens udgange kunne fyre.
+# Den leverede 41,6 kWh på batteriets strøm, til den blev stoppet med
+# knappen. Lageret er stadig det der afgør, men et skøn der rammer ved siden
+# af med mere end det dobbelte, er ikke længere et skøn.
+MAX_DELIVERED_SHARE = 2.0
+
 # Hvor stor en del af blokkens egen længde der holdes fri mellem dens ende og
 # fristen.
 #
@@ -182,6 +194,10 @@ class Block:
     expected_kr: float | None = None
     expected_paid: float | None = None
     expected_alt: float | None = None
+    # Forlænget fordi lageret ikke havde nået målet. Så hviler blokkens ende
+    # på at målet kan måles, og forsvinder målingen, skal der være en anden
+    # vej ud - se ``update``.
+    extended: bool = False
 
     @property
     def began(self) -> float:
@@ -212,6 +228,7 @@ class Block:
             "expected_kr": _rounded(self.expected_kr),
             "expected_paid": _rounded(self.expected_paid),
             "expected_alt": _rounded(self.expected_alt),
+            "extended": self.extended,
         }
 
     @classmethod
@@ -240,6 +257,7 @@ class Block:
                 expected_kr=_number(raw.get("expected_kr")),
                 expected_paid=_number(raw.get("expected_paid")),
                 expected_alt=_number(raw.get("expected_alt")),
+                extended=raw.get("extended") is True,
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -407,7 +425,12 @@ class ChargePlan:
         )
 
     def _extend(
-        self, now: float, rate_kw: float, target_met: bool | None = None
+        self,
+        now: float,
+        rate_kw: float,
+        target_met: bool | None = None,
+        plan: Any = None,
+        grid: Any = None,
     ) -> None:
         """Lad blokken køre videre hvis den ikke nåede sin mængde.
 
@@ -426,18 +449,28 @@ class ChargePlan:
 
         En manuel blok forlænges ikke. Den er en ordre på så mange minutter,
         ikke på så mange kilowatt-timer.
+
+        **Og kun gennem halvtimer fra nettet.** Blokken lægges kun hvor
+        Predbat selv tager strømmen fra nettet; forlængelsen må ikke smugle
+        den ud i batteriets timer. Den 18. oktober blev en blok lagt i den
+        sidste nethalvtime kl. 04:45 og forlænget lige til fristen kl. 09:00 -
+        fire timer på batteriet, til 1,85-2,08 kr/kWh.
         """
         block = self.block
         if block is None or block.manual or rate_kw <= 0:
             return
         if now < block.ends_at or block.deadline <= block.ends_at:
             return
+        limit = self._grid_reach(plan, now, block.deadline, grid)
+        if limit <= now:
+            return
         # Lageret går forud for pumpens kWh. Har det ikke nået målet, kører
-        # blokken videre til fristen - og slutter i ``update`` i det minut
-        # målet er nået. Har det nået målet, er der intet at forlænge for.
+        # blokken videre til fristen - eller til den første halvtime fra
+        # batteriet - og slutter i ``update`` i det minut målet er nået. Har
+        # det nået målet, er der intet at forlænge for.
         if target_met is not None:
             if not target_met:
-                self.block = replace(block, ends_at=block.deadline)
+                self.block = replace(block, ends_at=limit, extended=True)
             return
         # Uden måling af en rimelig del af blokken ved vi ikke hvad der gik
         # ind, og så er uret det bedste vi har.
@@ -447,10 +480,36 @@ class ChargePlan:
         missing = block.kwh - block.delivered_kwh
         if missing <= DELIVERED_TOLERANCE_KWH:
             return
-        ends = min(block.deadline, now + missing / rate_kw * 3600)
+        ends = min(limit, now + missing / rate_kw * 3600)
         if ends <= now:
             return
         self.block = replace(block, ends_at=ends)
+
+    @staticmethod
+    def _grid_reach(
+        plan: Any, now: float, until: float, grid: Any, start: float | None = None
+    ) -> float:
+        """Hvor langt frem strømmen kommer fra nettet uden afbrydelse.
+
+        Fra halvtimen ``start`` står i - den vi står i, hvis den ikke er givet
+        - og frem til den første der tager af batteriet, højst til ``until``.
+        Nu-halvtimen prissættes med målingen, ligesom planlæggeren gør. Uden
+        en plan ved vi intet, og så gælder ``until`` som før.
+        """
+        if plan is None:
+            return until
+        from .prices import BATTERY
+
+        base = slot_start(now)
+        index = 0
+        if start is not None:
+            index = max(0, int((slot_start(start) - base) // SLOT_SECONDS))
+        while base + index * SLOT_SECONDS < until:
+            price = plan.marginal(index * 30, grid=grid if index == 0 else None)
+            if price is not None and price.source == BATTERY:
+                return base + index * SLOT_SECONDS
+            index += 1
+        return until
 
     def update(
         self,
@@ -512,7 +571,7 @@ class ChargePlan:
         #    testen blev det til en blok der voksede et minut ad gangen uden
         #    nogensinde at blive færdig. Strækker vi først, er blokken i gang
         #    når minuttet tælles, og det lander hvor det hører hjemme.
-        self._extend(now, rate_kw, target_met)
+        self._extend(now, rate_kw, target_met, plan, grid)
         self._track(now, heat_kw)
 
         # 1. Kører en blok, er den bundet. Kun to ting bryder den.
@@ -537,6 +596,34 @@ class ChargePlan:
             # startet, stoppes ikke af at et termometer krydsede en grænse.
             if target_met and not young and not self.block.manual:
                 return self._finish(now, "lageret har nået målet")
+            if not young and not self.block.manual:
+                block = self.block
+                ran = now - block.began
+                measured = (
+                    ran > 0 and block.measured_seconds >= MIN_MEASURED_SHARE * ran
+                )
+                # Loftet. Lageret afgør, men ikke uden ende - se
+                # ``MAX_DELIVERED_SHARE``.
+                if measured and block.delivered_kwh >= MAX_DELIVERED_SHARE * block.kwh:
+                    return self._finish(
+                        now,
+                        f"leveret {block.delivered_kwh:.1f} kWh, "
+                        f"over {MAX_DELIVERED_SHARE:.0f} gange de {block.kwh:.1f} "
+                        "den blev lagt for",
+                    )
+                # En blok der er forlænget på lagerets mål, men hvor målet nu
+                # ikke kendes: planlæggeren regner ikke manglen ud, når der
+                # intet er at hente. Så er pumpens kWh det bedste vi har -
+                # ellers er der ingen udgang tilbage, kun fristen.
+                if (
+                    block.extended
+                    and target_met is None
+                    and measured
+                    and block.kwh - block.delivered_kwh <= DELIVERED_TOLERANCE_KWH
+                ):
+                    return self._finish(
+                        now, "leveret sin mængde — lagerets mål kendes ikke længere"
+                    )
             if chosen == "pillefyr" and not young and not self.block.manual:
                 return self._finish(now, "pillefyret blev billigere")
             self._running = True
@@ -571,6 +658,14 @@ class ChargePlan:
             )
             missing = self.block.kwh - self.block.delivered_kwh
             if not self.block.manual and target_met is False:
+                # Er fristen ikke nået, er det batteriet der stoppede
+                # forlængelsen - og så skal det stå der.
+                if now < self.block.deadline:
+                    return self._finish(
+                        now,
+                        "strømmen kommer nu fra batteriet — "
+                        "lageret nåede ikke målet",
+                    )
                 return self._finish(
                     now, "fristen nået — lageret nåede ikke målet"
                 )
@@ -767,8 +862,13 @@ class ChargePlan:
         # kl. 17:00, og en blok på 60 minutter der starter nu, sluttede før
         # kl. 17:17 - sytten minutter inde i den halvtime den skulle undgå.
         deadline = slot_start(now) + window * 60
-        if ends > deadline:
-            ends = deadline
+        # Og den må ikke løbe ud af nettets halvtimer. ``cheapest_window``
+        # tæller hele halvtimer fra halvtimens start, men en blok der starter
+        # nu, måles fra nu: lagt kl. 04:45 med 22 minutter slutter den kl.
+        # 05:07, syv minutter inde i en halvtime på batteriet.
+        stop = min(deadline, self._grid_reach(plan, now, deadline, grid, starts))
+        if ends > stop:
+            ends = stop
             if ends <= max(starts, now):
                 self.note = f"ingen plads til {minutes:.0f} min inden prisen stiger"
                 return False

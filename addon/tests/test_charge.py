@@ -1260,9 +1260,11 @@ class StoreTargetTest(unittest.TestCase):
         self.assertTrue(self.step(5, met=True))
 
     def test_the_deadline_still_closes_it(self):
+        # Pumpen leverer under loftet på dobbelt mængde - ellers er det
+        # loftet og ikke fristen der lukker blokken.
         until = int(round((self.block.deadline - self.now) / 60))
         for minute in range(1, until + 2):
-            self.step(minute, met=False)
+            self.step(minute, met=False, heat_kw=8.0)
             if self.charge.block is None:
                 break
 
@@ -1292,3 +1294,106 @@ class StoreCoversTest(unittest.TestCase):
         self.assertTrue(_store_covers(D(0.0, 0.1)))
         self.assertFalse(_store_covers(D(3.3, 0.0)))
         self.assertFalse(_store_covers(D(0.0, 1.0)))
+
+
+class RunawayBlockTest(unittest.TestCase):
+    """Den 18. oktober: en blok på 3,6 kWh der leverede 41,6.
+
+    Lagt kl. 04:45 i den sidste halvtime Predbat ladede fra nettet. Kl. 05:00
+    havde lageret ikke nået målet, og forlængelsen satte enden til fristen kl.
+    09:00 - fire timer på batteriet. Bagefter svarede planlæggeren «intet at
+    hente» uden at regne manglen ud, så målet blev ukendt, og blokken havde
+    ingen udgang tilbage. Den blev stoppet med knappen kl. 08:12.
+    """
+
+    def setUp(self):
+        self.base = slot_start(1_757_000_000.0)
+        self.charge = ChargePlan()
+
+    def step(self, minute, rows, met, heat_kw=10.0, kwh=3.6):
+        at = self.base + minute * 60
+        left = max(1, 270 - int((slot_start(at) - self.base) // 60))
+        return self.charge.update(
+            at,
+            FakeDecision(
+                planned_kwh=kwh,
+                window_starts_in=left,
+                window_minutes=left,
+                dear_starts_in=left,
+                dear_span_minutes=120,
+            ),
+            mixed_plan(rows[int((slot_start(at) - self.base) // 1800):]),
+            10.0,
+            heat_kw=heat_kw,
+            min_runtime_minutes=10,
+            target_met=met,
+        )
+
+    def test_the_extension_does_not_run_onto_the_battery(self):
+        # Én nethalvtime, så batteri til fristen.
+        rows = [("holdchrg", 154, 10)] + [("exp", 185, 10)] * 8 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+        self.assertTrue(self.step(15, rows, met=False), "blokken lægges kl. :15")
+
+        note = None
+        for minute in range(16, 60):
+            charging = self.step(minute, rows, met=False)
+            if not charging and self.charge.block is None:
+                note = self.charge.note
+                break
+
+        self.assertIsNotNone(note, "blokken skal slutte ved halvtimen")
+        self.assertEqual(minute, 30)
+        self.assertIn("batteriet", note)
+
+    def test_it_still_extends_through_grid_half_hours(self):
+        # Modtesten: kommer strømmen fra nettet, forlænges der som før.
+        rows = (
+            [("holdchrg", 154, 10)]
+            + [("holdchrg", 170, 10)] * 3
+            + [("exp", 185, 10)] * 5
+            + [("holdchrg", 250, 50)] * 4
+        )
+        self.step(15, rows, met=False)
+        for minute in range(16, 40):
+            self.step(minute, rows, met=False)
+
+        self.assertTrue(self.charge.charging)
+        self.assertEqual(self.charge.block.ends_at, self.base + 120 * 60)
+
+    def test_an_unknown_target_lets_the_kwh_end_an_extended_block(self):
+        rows = [("holdchrg", 154, 10)] + [("holdchrg", 170, 10)] * 8 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+        self.step(15, rows, met=False)
+        for minute in range(16, 40):
+            self.step(minute, rows, met=False)
+        self.assertTrue(self.charge.block.extended)
+
+        self.assertFalse(self.step(40, rows, met=None))
+        self.assertIn("leveret sin mængde", self.charge.note)
+
+    def test_a_block_never_delivers_more_than_twice_its_kwh(self):
+        rows = [("holdchrg", 154, 10)] + [("holdchrg", 170, 10)] * 8 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+        self.step(15, rows, met=False)
+        for minute in range(16, 270):
+            if not self.step(minute, rows, met=False):
+                break
+
+        self.assertIsNone(self.charge.block)
+        self.assertIn("over 2 gange", self.charge.note)
+        # 3,6 kWh ved 10 kW: dobbelt op er nået efter godt 43 minutter.
+        self.assertLess(minute, 15 + 50)
+
+    def test_the_extended_flag_survives_a_restart(self):
+        rows = [("holdchrg", 154, 10)] + [("holdchrg", 170, 10)] * 8 + [
+            ("holdchrg", 250, 50)
+        ] * 4
+        self.step(15, rows, met=False)
+        for minute in range(16, 40):
+            self.step(minute, rows, met=False)
+
+        self.assertTrue(ChargePlan.from_raw(self.charge.to_raw()).block.extended)
