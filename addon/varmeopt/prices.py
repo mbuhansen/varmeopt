@@ -191,6 +191,37 @@ def _stamp(value: Any) -> float | None:
         return None
 
 
+Limits = tuple[tuple[float, float], ...]
+
+
+def limit_series(attributes: Any) -> Limits | None:
+    """Predbats grænse pr. tidspunkt, læst af ``results``.
+
+    ``predbat.best_charge_limit`` og ``predbat.best_export_limit`` bærer
+    begge en trappe: et tidsstempel og den ladetilstand der gælder derfra og
+    til det næste. Ladegrænsen er hvor hold charge slår til - 0 betyder
+    intet hold, og så må der aflades til anlæggets nulpunkt. Eksportgrænsen
+    er hvor langt der sælges ned til - 100 betyder at der ikke sælges.
+
+    Kun procent. Melder entiteten noget andet, kan den ikke sammenlignes med
+    planens ``soc_percent``, og så er svaret ingenting.
+    """
+    if not isinstance(attributes, dict):
+        return None
+    unit = str(attributes.get("unit_of_measurement", "")).strip().lower()
+    if unit not in ("", "%", "percent"):
+        return None
+    results = attributes.get("results")
+    if not isinstance(results, dict):
+        return None
+    steps = []
+    for key, value in results.items():
+        at, percent = _stamp(key), _number(value)
+        if at is not None and percent is not None:
+            steps.append((at, percent))
+    return tuple(sorted(steps)) or None
+
+
 def _first_half_hour(attributes: Any, rows: Any) -> float | None:
     """Hvornår række 0 i Predbats plan begynder.
 
@@ -388,11 +419,18 @@ class Plan:
         export_floor: float = EXPORT_FLOOR,
         empty_percent: float = BATTERY_EMPTY_PERCENT,
         starts_at: float | None = None,
+        charge_limits: Limits | None = None,
+        export_limits: Limits | None = None,
     ) -> None:
         self.slots = slots
         # Hvornår række 0 begynder, som epoch-sekunder - halvtimen Predbat
         # stod i da den regnede. ``None`` når planen ikke siger det.
         self.starts_at = starts_at
+        # Predbats egne grænser pr. tidspunkt - se ``limit_series``. Når de
+        # kendes, er det dem gulvet og salget måles mod, og reserven nedenfor
+        # er kun tilbagefaldet.
+        self.charge_limits = charge_limits
+        self.export_limits = export_limits
         # Hvornår batteriet er tomt. Anlæggets tal, ikke Predbats reserve.
         self.empty_percent = empty_percent
         self.round_trip = trip if 0 < trip <= 1 else BATTERY_ROUND_TRIP
@@ -455,6 +493,8 @@ class Plan:
         trip: float = BATTERY_ROUND_TRIP,
         export_floor: float = EXPORT_FLOOR,
         empty_percent: float = BATTERY_EMPTY_PERCENT,
+        charge_limits: Limits | None = None,
+        export_limits: Limits | None = None,
     ) -> Plan:
         """Læs ``predbat.plan_html``'s ``raw.rows``.
 
@@ -488,8 +528,10 @@ class Plan:
             export_floor,
             empty_percent,
             starts_at=_first_half_hour(attributes, rows),
+            charge_limits=charge_limits,
+            export_limits=export_limits,
         )
-        unknown = sorted({s.state for s in plan.slots if not s.understood})
+        unknown =sorted({s.state for s in plan.slots if not s.understood})
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
             log.warning(
@@ -523,6 +565,8 @@ class Plan:
             self.export_floor,
             self.empty_percent,
             starts_at=self.starts_at + behind * SLOT_MINUTES * 60,
+            charge_limits=self.charge_limits,
+            export_limits=self.export_limits,
         )
 
     # ------------------------------------------------------------------ opslag
@@ -543,6 +587,8 @@ class Plan:
                     "import": s.import_price,
                     "export": s.export_price,
                     "soc": s.soc_percent,
+                    "floor": self._floor(s),
+                    "export_limit": self._limit_at(self.export_limits, s),
                 }
                 for s in self.slots
             ],
@@ -619,18 +665,57 @@ class Plan:
     def _depleted(self, slot: Slot) -> bool:
         """Er planen nået ned til sit gulv i den halvtime?
 
-        Gulvet er Predbats reserve når den kan læses af planen, ellers
-        anlæggets eget nulpunkt. Forskellen på den her og ``_at_bottom`` er
-        hvem der spørger: ``_at_bottom`` spørger om inverteren kan levere
-        *nu*, og der er 5 % svaret. Den her spørger om planen har mere at
-        give af, og der er reserven svaret - Predbat planlægger ikke at gå
-        under den, så når kurven rammer den, er der ikke mere tilbage af den
-        energi der ligger i batteriet i dag.
+        Gulvet er halvtimens eget - se ``_floor``: Predbats hold-grænse når
+        der er en, ellers anlæggets nulpunkt. Forskellen på den her og
+        ``_at_bottom`` er hvem der spørger: ``_at_bottom`` spørger om
+        inverteren kan levere *nu*, og der er 5 % svaret. Den her spørger om
+        planen har mere at give af - når kurven rammer gulvet, er der ikke
+        mere tilbage af den energi der ligger i batteriet i dag.
         """
         if slot.soc_percent is None:
             return False
-        floor = self.reserve if self.reserve is not None else self.empty_percent
-        return slot.soc_percent <= floor + FLOOR_TOLERANCE
+        return slot.soc_percent <= self._floor(slot) + FLOOR_TOLERANCE
+
+    def _limit_at(self, limits: Limits | None, slot: Slot) -> float | None:
+        """Grænsen der gælder når halvtimen begynder, eller ``None``.
+
+        Trappen gælder fra hvert tidsstempel til det næste. Ligger halvtimen
+        før det første trin, eller kender planen ikke sin egen tid, er der
+        intet at slå op.
+        """
+        if limits is None or self.starts_at is None:
+            return None
+        at = self.starts_at + slot.index * SLOT_MINUTES * 60
+        value = None
+        for stamp, percent in limits:
+            if stamp > at:
+                break
+            value = percent
+        return value
+
+    def _floor(self, slot: Slot) -> float:
+        """Hvor langt planen aflader i den halvtime - Predbats ord for det.
+
+        ``best_charge_limit`` er ladetilstanden hvor hold charge slår til.
+        Står den over 0, er det gulvet; står den på 0, er der intet hold, og
+        så må inverteren aflade til anlæggets nulpunkt. Under en rigtig
+        ladning er tallet målet og ikke et gulv, og så gælder nulpunktet også.
+
+        Her stod reserven, fundet på kurven alene, og den 18. oktober
+        udnævnte den 21 % til bund - det sted hvor solen begyndte at bære
+        huset kl. 09. Strømmen kl. 06-09 blev «købt tilbage» til 3,02 i
+        stedet for at lades om natten til 1,80, og huset kørte pillefyr.
+        Predbats grænse stod hele formiddagen på 0. Kurven kan ikke skelne en
+        reserve fra en solopgang; grænsen kan.
+
+        Kun uden grænsen falder vi tilbage på reserven fra kurven.
+        """
+        limit = self._limit_at(self.charge_limits, slot)
+        if limit is None:
+            return self.reserve if self.reserve is not None else self.empty_percent
+        if limit > 0 and not slot.refills:
+            return max(limit, self.empty_percent)
+        return self.empty_percent
 
     def _runs_dry(self, slot: Slot) -> Slot | None:
         """Hvornår planen bruger den energi der ligger i batteriet nu.
@@ -937,7 +1022,15 @@ class Plan:
         # Her stod ``MIN_SOC_FOR_EXPORT = 40`` som skøn, og de 40 % slog
         # netop værdisættelsen fra når batteriet var lavt: så blev energien
         # *billigere* af at være knap.
-        floor_for_sale = self.reserve if self.reserve is not None else self.empty_percent
+        #
+        # Kender vi Predbats eksportgrænse, er det den: ``best_export_limit``
+        # er hvor langt der sælges ned til i salgets halvtime. Reserven fra
+        # kurven er kun tilbagefaldet.
+        floor_for_sale = self._limit_at(self.export_limits, export)
+        if floor_for_sale is None:
+            floor_for_sale = (
+                self.reserve if self.reserve is not None else self.empty_percent
+            )
         if soc <= floor_for_sale:
             return None
         minutes = export.minutes_ahead - slot.minutes_ahead
@@ -972,11 +1065,11 @@ class Plan:
         # den halvtime hvor planen når sit gulv, og den køber vi fra nettet
         # til den halvtimes importpris.
         #
-        # Gulvet er planens eget - reserven - og ikke anlæggets nulpunkt på
-        # 5 %. Det er ikke en mur under varmepumpen, som det ville være hvis
-        # den stod i ``_at_bottom``: den siger stadig at inverteren gerne må
-        # aflade ned til 5 %. Den siger kun hvornår planen ikke har mere at
-        # give af, og det er dér den manglende kilowatt-time bliver købt.
+        # Gulvet er halvtimens eget - Predbats hold-grænse, ellers anlæggets
+        # nulpunkt på 5 % - se ``_floor``. Det er ikke en mur under
+        # varmepumpen i den halvtime vi står i; det siger kun hvornår planen
+        # ikke har mere at give af, og det er dér den manglende kilowatt-time
+        # bliver købt.
         #
         # Tømmes batteriet undervejs af en planlagt eksport, er det salget der
         # gælder - det afgøres i ``_battery_price``, før genkøbet overhovedet

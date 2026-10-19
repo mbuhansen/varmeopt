@@ -60,7 +60,9 @@ from .prices import (
     INVERTER_LOSS,
     LOCKED,
     Grid,
+    Limits,
     Plan,
+    limit_series,
     round_trip,
 )
 from .solar import SUSPICIOUS, DayTracker, SolarModel
@@ -329,6 +331,7 @@ class Varmeopt:
         # Sig det én gang pr. ny uenighed, ikke hvert minut.
         self._last_status_warning: str | None = None
         self._warned_limit_unit = False
+        self._warned_limits: set[str] = set()
         self._warned_horizon = False
         self._warned_losses = False
         self._warned_hp_cop = False
@@ -1190,6 +1193,25 @@ class Varmeopt:
             return None
         return value
 
+    async def _limits(self, ha: HomeAssistant, entity_id: str) -> Limits | None:
+        """Predbats grænse som trappe over tid - se ``limit_series``.
+
+        Uden den falder planen tilbage på reserven fra kurven, og det er
+        værd at vide: sig det én gang pr. entitet.
+        """
+        if not entity_id:
+            return None
+        state = await self._state(ha, entity_id)
+        series = limit_series(state.attributes) if state is not None else None
+        if series is None and entity_id not in self._warned_limits:
+            self._warned_limits.add(entity_id)
+            log.warning(
+                "%s har ingen grænser i procent under «results» - "
+                "reserven findes på kurven i stedet",
+                entity_id,
+            )
+        return series
+
     @classmethod
     async def _binary(cls, ha: HomeAssistant, entity_id: str) -> bool | None:
         state = await cls._state(ha, entity_id)
@@ -1421,6 +1443,8 @@ class Varmeopt:
             state.attributes,
             trip=await self._round_trip(ha),
             empty_percent=self.options.battery_empty_percent,
+            charge_limits=await self._limits(ha, self.options.entity_predbat_charge_limit),
+            export_limits=await self._limits(ha, self.options.entity_predbat_export_limit),
         ).aligned(slot_start(time.time()))
         if not len(plan):
             log.warning(

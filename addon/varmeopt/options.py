@@ -90,6 +90,11 @@ _DEFAULTS: dict[str, object] = {
     # til. Uden den ser et hold ud som en total låsning, og de point ned til
     # gulvet ville blive købt fra nettet selv om de står i batteriet.
     "entity_predbat_charge_limit": "predbat.best_charge_limit",
+    # Hvor langt Predbat sælger ned til, pr. tidspunkt i ``results``. 100
+    # betyder at der ikke sælges. Det er gulvet for et salg: energi under
+    # den bliver aldrig solgt, og så er salget ikke et alternativ til at
+    # bruge den.
+    "entity_predbat_export_limit": "predbat.best_export_limit",
     # Hvornår batteriet er tomt. Det er anlæggets eget nulpunkt og ikke
     # Predbats reserve: reserven på 12-15 % er energi der er gemt til
     # uplanlagt forbrug, og en varmepumpe der starter, er uplanlagt forbrug.
@@ -330,6 +335,7 @@ class Options:
     entity_predbat_status: str
     entity_prices_locked: str
     entity_predbat_charge_limit: str
+    entity_predbat_export_limit: str
     battery_empty_percent: float
     plan_max_age_minutes: float
     entity_battery_power: str

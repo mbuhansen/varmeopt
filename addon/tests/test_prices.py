@@ -12,7 +12,10 @@ from varmeopt.prices import (
     Grid,
     Plan,
     Slot,
+    limit_series,
 )
+
+EXPORT_REASON = "eksport"
 
 
 def row(state="", import_rate=200, export_rate=80, soc=50):
@@ -209,6 +212,111 @@ class FreezeChargeTest(unittest.TestCase):
         self.assertFalse(charging)
         self.assertIsNone(charge.block)
         self.assertIn("fra nettet", charge.note)
+
+
+class PredbatLimitsTest(unittest.TestCase):
+    """Gulvet og salget læses af Predbats egne grænser, ikke af kurven.
+
+    Planen er den fra den 18. oktober kl. 21, skåret ned: hold charge natten
+    over, demand fra kl. 06, bunden på 21 % kl. 09 hvor solen tager over, og
+    næste ladning natten til tirsdag til 1,80. Kurven udnævnte 21 % til
+    reserve, og strømmen kl. 06-09 blev «købt tilbage» til 3,02 - huset kørte
+    pillefyr. ``best_charge_limit`` stod på 0 fra kl. 06: intet hold, og
+    batteriet må aflade til 5 %.
+    """
+
+    MIDNIGHT = "2026-10-18T00:00:00+0200"
+
+    # Ladetilstanden pr. halvtime fra kl. 21:00, som i planen.
+    SOC = (
+        [40] * 11 + [41] * 7
+        + [41, 37, 32, 28, 24, 22, 21, 21, 22, 24, 26, 30, 34, 37, 41, 45,
+           50, 55, 58, 59, 60, 61, 61, 60, 58, 55, 53, 51, 48, 46, 44, 43,
+           41, 41, 40, 39, 38, 38]
+        + [38, 51] + [53] * 8
+    )
+
+    def rows(self):
+        rows = []
+        for index, soc in enumerate(self.SOC):
+            if index == 10 or index in (56, 57):
+                state = "chrg"
+            elif index < 18 or 54 <= index < 66:
+                state = "holdchrg"
+            else:
+                state = "demand"
+            if 18 <= index < 26:
+                rate = 301.6
+            elif index in (56, 57):
+                rate = 180.3
+            else:
+                rate = 200
+            rows.append(dict(row(state=state, import_rate=rate, soc=soc), slot_minute=1260 + index * 30))
+        return rows
+
+    def predbat(self, **limits):
+        return Plan.from_predbat(
+            {"raw": {"rows": self.rows(), "time": self.MIDNIGHT}}, **limits
+        )
+
+    CHARGE = {
+        "unit_of_measurement": "%",
+        "results": {
+            "2026-10-18T00:00:00+0200": 0,
+            "2026-10-18T21:00:00+0200": 38,
+            "2026-10-19T06:00:00+0200": 0,
+            "2026-10-20T00:00:00+0200": 32,
+            "2026-10-20T01:00:00+0200": 53,
+        },
+    }
+
+    def test_the_curve_alone_makes_the_sunrise_a_reserve(self):
+        # Tilbagefaldet, og fejlen: uden Predbats grænse er 21 % bunden.
+        p = self.predbat()
+
+        self.assertEqual(p.reserve, 21)
+        self.assertEqual(p.marginal(540).reason, "købes tilbage")
+
+    def test_the_charge_limit_says_there_is_no_bottom_at_nine(self):
+        p = self.predbat(charge_limits=limit_series(self.CHARGE))
+
+        morning = p.marginal(540)
+        self.assertEqual(morning.reason, BATTERY)
+        self.assertAlmostEqual(morning.kr_per_kwh, 1.803 / BATTERY_ROUND_TRIP, places=3)
+
+    def test_the_floor_is_the_hold_limit_where_there_is_one(self):
+        p = self.predbat(charge_limits=limit_series(self.CHARGE))
+
+        # Kl. 21: hold ned til 38 %.
+        self.assertEqual(p._floor(p.slots[0]), 38)
+        # Kl. 02 lades der, og så er tallet målet og ikke et gulv.
+        self.assertEqual(p._floor(p.slots[10]), 5)
+        # Kl. 09: intet hold, anlæggets nulpunkt.
+        self.assertEqual(p._floor(p.slots[24]), 5)
+
+    def test_the_export_limit_is_the_floor_for_a_sale(self):
+        rows = [
+            dict(row(soc=50), slot_minute=1260),
+            dict(row(state="exp", export_rate=300, soc=50), slot_minute=1290),
+            dict(row(import_rate=100, soc=40), slot_minute=1320),
+        ]
+
+        def sold(limit):
+            export = {"results": {"2026-10-18T21:00:00+0200": limit}}
+            p = Plan.from_predbat(
+                {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+                export_limits=limit_series(export),
+            )
+            return p.marginal(0).reason == EXPORT_REASON
+
+        self.assertTrue(sold(30))
+        self.assertFalse(sold(60))
+        self.assertFalse(sold(100))
+
+    def test_a_series_in_kwh_is_not_read(self):
+        self.assertIsNone(limit_series({"unit_of_measurement": "kWh", "results": {self.MIDNIGHT: 4}}))
+        self.assertIsNone(limit_series({"results": "38"}))
+        self.assertIsNone(limit_series(None))
 
 
 class MarginalTest(unittest.TestCase):
