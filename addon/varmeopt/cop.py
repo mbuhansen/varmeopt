@@ -179,6 +179,7 @@ class CopTable:
         self,
         table: dict[int, dict[int, Cell]] | None = None,
         fallback: CopTable | None = None,
+        setpoint_offset: float = 0.0,
     ) -> None:
         self._table: dict[int, dict[int, Cell]] = table or {}
         # Den tabel der svarer, hvor den her ikke ved nok. Uden et fald er
@@ -186,6 +187,8 @@ class CopTable:
         # det er setpunkt-tabellen, som skal ligge urørt, mens tabellen på
         # varmepumpens eget fremløb, BT12, fyldes op.
         self.fallback = fallback
+        # Hvor meget over UVR'ens setpunkt pumpen kører - se ``lookup``.
+        self.setpoint_offset = setpoint_offset
 
     # ------------------------------------------------------------- indlæsning
 
@@ -280,7 +283,24 @@ class CopTable:
     # ----------------------------------------------------------------- opslag
 
     def lookup(self, flow: float, outdoor: float) -> Lookup:
-        learned = self._learned_at(flow, outdoor)
+        """COP ved et *setpunkt* og en udetemperatur.
+
+        Opslaget står på setpunktet, så det ikke flytter sig mens BT12
+        kravler op under en kørsel. Men tabellen er lært på BT12, og pumpen
+        kører med vilje ``setpoint_offset`` over hvert setpunkt fra UVR'en -
+        1,5 grader på det her anlæg, så den passer med systemets andre
+        følere. Så er det dér tabellen skal slås op.
+
+        Uden forskydningen ramte varmt vand den forkerte række. Den 19.
+        oktober kl. 13:05 stod setpunktet på 56, og BT12 lå stabilt på 57,2-57,8
+        med en målt COP omkring 4,05. Opslaget ramte F56 - fire målinger på
+        3,47-3,59 - i stedet for F57 med 63 målinger på 4,0, gav 3,71, og
+        varmen blev et halvt øre dyrere end pillefyrets grænse: et kvarters
+        pillefyr midt i en varmtvandskørsel.
+
+        Faldet er setpunkt-tabellen og lært på setpunktet; den slås op uden.
+        """
+        learned = self._learned_at(flow + self.setpoint_offset, outdoor)
 
         if learned is not None and learned[1] >= FULL_TRUST_COUNT:
             cop, count, detail = learned
@@ -299,7 +319,7 @@ class CopTable:
                 )
             under = base.cop
         else:
-            under = ta_curve_cop(flow, outdoor)
+            under = ta_curve_cop(flow + self.setpoint_offset, outdoor)
             if learned is None:
                 return Lookup(cop=under, source="curve", detail="TA-kurve")
 

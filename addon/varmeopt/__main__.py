@@ -2228,6 +2228,7 @@ async def run() -> None:
             )
 
         app.table, note = load_cop_table(store)
+        app.table.setpoint_offset = options.hp_flow_offset
         app.status["note"] = note
         log.info(note)
 

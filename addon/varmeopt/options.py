@@ -168,6 +168,11 @@ _DEFAULTS: dict[str, object] = {
     # opladningen sigter efter - to spørgsmål, to indstillinger. De stod
     # som ét i et døgn, og så blev COP'en slået op tre grader for lavt.
     "hp_charge_temp": 56,
+    # Hvor meget over UVR'ens setpunkt varmepumpen kører - et bevidst valg
+    # på pumpen, så den passer med systemets andre følere. Gælder alle
+    # setpunkter, også varmt vand. COP-tabellen er lært på BT12, så det er
+    # setpunktet plus det her den slås op ved.
+    "hp_flow_offset": 1.5,
     # Klokkeslættet lageret skal være fyldt til. Det er en frist på uret
     # og ikke et prisargument: der bades om aftenen, og huset kører på
     # restvarmen natten igennem. Prisrækken kender hverken badetiden eller
@@ -363,6 +368,7 @@ class Options:
     hp_wear_kr_per_kwh: float
     planner_horizon_hours: float
     hp_charge_temp: float
+    hp_flow_offset: float
     store_full_by_hour: float
     pellet_price_per_kg: float
     pellet_kwh_per_kg: float

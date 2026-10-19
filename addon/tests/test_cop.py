@@ -464,6 +464,34 @@ class ContinuityTest(unittest.TestCase):
         self.assertLess(abs(beside - on), 0.005)
 
 
+class SetpointOffsetTest(unittest.TestCase):
+    """Pumpen kører 1,5 grader over hvert setpunkt fra UVR'en, og tabellen er
+    lært på BT12. Den 19. oktober: setpunkt 56, BT12 57,4, målt COP ~4,05 -
+    opslaget ramte den tynde F56-række og gav 3,71."""
+
+    def bt12(self, offset):
+        t = table(
+            f56={10: (3.59, 1), 11: (3.47, 3)},
+            f57={10: (3.98, 22), 11: (4.04, 41)},
+            f58={10: (3.98, 20), 11: (4.04, 40)},
+        )
+        t.setpoint_offset = offset
+        return t
+
+    def test_the_table_is_read_where_the_pump_runs(self):
+        self.assertAlmostEqual(self.bt12(1.5).lookup(56, 10.7).cop, 4.02, places=2)
+
+    def test_without_the_offset_the_thin_row_drags_it_down(self):
+        self.assertLess(self.bt12(0.0).lookup(56, 10.7).cop, 3.9)
+
+    def test_the_setpoint_table_is_read_at_the_setpoint(self):
+        # Faldet er lært på setpunktet, så det slås op uden forskydningen.
+        old = table(f56={10: (3.6, 50)}, f58={10: (4.4, 50)})
+        new = CopTable(fallback=old, setpoint_offset=1.5)
+
+        self.assertAlmostEqual(new.lookup(56, 10).cop, 3.6)
+
+
 class FallbackTest(unittest.TestCase):
     """BT12-tabellen starter tom og står på setpunkt-tabellens skuldre.
 
