@@ -152,6 +152,10 @@ _STATES: dict[str, str] = {
 # pris sprang fra 1,08 til 2,50 «købes tilbage».
 _HELD_IN_PLAN = frozenset({"frzchrg"})
 
+# Ordene for hold charge: der hvor ``best_charge_limit`` er et gulv - se
+# ``Plan._floor``.
+_HOLD_WORDS = frozenset({"holdchrg", "hold"})
+
 # Bemærk hvad der *ikke* står der. Predbat har flere ord - "ecoo" (Eco, no
 # discharge) og "idle" blandt dem - men de forekommer ikke på det her
 # anlæg, og hvad de præcis betyder, ville være et gæt. Et gæt i den
@@ -531,7 +535,7 @@ class Plan:
             charge_limits=charge_limits,
             export_limits=export_limits,
         )
-        unknown =sorted({s.state for s in plan.slots if not s.understood})
+        unknown = sorted({s.state for s in plan.slots if not s.understood})
         if unknown:
             # Sig det én gang pr. plan, ikke én gang pr. halvtime.
             log.warning(
@@ -696,10 +700,17 @@ class Plan:
     def _floor(self, slot: Slot) -> float:
         """Hvor langt planen aflader i den halvtime - Predbats ord for det.
 
-        ``best_charge_limit`` er ladetilstanden hvor hold charge slår til.
-        Står den over 0, er det gulvet; står den på 0, er der intet hold, og
-        så må inverteren aflade til anlæggets nulpunkt. Under en rigtig
-        ladning er tallet målet og ikke et gulv, og så gælder nulpunktet også.
+        ``best_charge_limit`` er ladetilstanden hvor hold charge slår til -
+        Predbats sikkerhedsgulv. Planen bygger på en solprognose, og bruges
+        der mere end ventet, når batteriet grænsen tidligere; så stopper
+        Predbat det, og resten købes fra nettet, så energien gemmes til de
+        dyre timer. En kilowatt-time brugt før, er altså købt dér.
+
+        Grænsen er kun et gulv i en hold-halvtime. I alle andre er tallet
+        enten 0 (intet hold), målet for en ladning eller et trin der står
+        tilbage efter planens sidste vindue - og så må inverteren aflade til
+        anlæggets nulpunkt. Det samme gælder før seriens første trin: findes
+        serien, er der intet hold dér.
 
         Her stod reserven, fundet på kurven alene, og den 18. oktober
         udnævnte den 21 % til bund - det sted hvor solen begyndte at bære
@@ -708,12 +719,21 @@ class Plan:
         Predbats grænse stod hele formiddagen på 0. Kurven kan ikke skelne en
         reserve fra en solopgang; grænsen kan.
 
-        Kun uden grænsen falder vi tilbage på reserven fra kurven.
+        Kun uden serien falder vi tilbage på reserven fra kurven.
         """
-        limit = self._limit_at(self.charge_limits, slot)
-        if limit is None:
+        if self.charge_limits is None or self.starts_at is None:
             return self.reserve if self.reserve is not None else self.empty_percent
-        if limit > 0 and not slot.refills:
+        # Et hold står *på* sin grænse eller over den - ellers ville Predbat
+        # lade og ikke holde. En grænse over planens ladetilstand er derfor
+        # ikke et gulv men et trin der står tilbage, og 100 % over et
+        # batteri på 38 % ville gøre hver nat til en bund.
+        limit = self._limit_at(self.charge_limits, slot)
+        if (
+            slot.word in _HOLD_WORDS
+            and limit is not None
+            and limit > 0
+            and (slot.soc_percent is None or limit <= slot.soc_percent + FLOOR_TOLERANCE)
+        ):
             return max(limit, self.empty_percent)
         return self.empty_percent
 
@@ -1013,7 +1033,15 @@ class Plan:
         export = self._next_sale(slot.index + 1, next_charge, bottom)
         if export is None or export.export_price is None:
             return None
-        soc = slot.soc_percent if slot.soc_percent is not None else ASSUMED_SOC
+        # Ladetilstanden når salget begynder, ikke nu. Det er dér det afgøres
+        # om der er noget over grænsen at sælge. Her stod halvtimen nu, og et
+        # batteri på 25 % som solen fylder til 80 % før et salg ned til 30 %,
+        # blev regnet for ikke at sælge noget - prisen faldt fra salget til
+        # genkøbet, selv om den kilowatt-time vi bruger nu, er én mindre solgt.
+        soc = next(
+            (s.soc_percent for s in (export, slot) if s.soc_percent is not None),
+            ASSUMED_SOC,
+        )
         # Under bunden bliver energien aldrig solgt, og så er eksporten ikke
         # et alternativ til at bruge den. Bunden er Predbats reserve når den
         # kan læses af planen - Predbat eksporterer ikke derunder - ellers
@@ -1040,7 +1068,9 @@ class Plan:
             max(export.export_price * EXPORT_DISCOUNT, self.export_floor),
             "eksport",
             BATTERY,
-            detail=f"sælges ellers om {minutes} min (SOC {soc:.0f} %)",
+            detail=f"sælges ellers om {minutes} min (SOC "
+            + (f"{slot.soc_percent:.0f} % nu, " if slot.soc_percent is not None else "")
+            + f"{soc:.0f} % ved salget)",
         )
 
     def _replacement_price(

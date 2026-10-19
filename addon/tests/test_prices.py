@@ -294,6 +294,62 @@ class PredbatLimitsTest(unittest.TestCase):
         # Kl. 09: intet hold, anlæggets nulpunkt.
         self.assertEqual(p._floor(p.slots[24]), 5)
 
+    def test_before_the_first_step_there_is_no_hold(self):
+        # Findes serien, er der intet hold før dens første trin - ikke
+        # kurvens reserve, som ellers gjorde 21 % til bund igen.
+        late = {"results": {"2026-10-19T10:00:00+0200": 0}}
+        p = self.predbat(charge_limits=limit_series(late))
+
+        self.assertEqual(p.marginal(540).reason, BATTERY)
+
+    def test_a_target_left_standing_is_not_a_floor_in_demand(self):
+        # Et trin på 100 uden et lukkende 0 er et ladningsmål. I de
+        # demand-halvtimer der følger, må inverteren aflade til 5 %.
+        target = {"results": {"2026-10-18T21:00:00+0200": 0, "2026-10-19T08:00:00+0200": 100}}
+        p = self.predbat(charge_limits=limit_series(target))
+
+        self.assertEqual(p._floor(p.slots[22]), 5)
+        self.assertEqual(p.marginal(540).reason, BATTERY)
+
+    def test_a_hold_at_its_limit_is_where_the_extra_is_bought(self):
+        # Predbats sikkerhedsgulv: bruges der mere end ventet, når batteriet
+        # hold-grænsen tidligere, og så købes resten fra nettet dér - til
+        # halvtimens importpris, uden rundturstab. Ejeren, 19. oktober.
+        rows = [
+            dict(row(soc=30), slot_minute=1260),
+            dict(row(soc=27), slot_minute=1290),
+            dict(row(state="holdchrg", import_rate=196, soc=24), slot_minute=1320),
+            dict(row(state="holdchrg", import_rate=196, soc=24), slot_minute=1350),
+            dict(row(soc=20), slot_minute=1380),
+            dict(row(state="chrg", import_rate=150, soc=20), slot_minute=1410),
+        ]
+        hold = {"results": {"2026-10-18T22:00:00+0200": 24, "2026-10-18T23:00:00+0200": 0}}
+        p = Plan.from_predbat(
+            {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+            charge_limits=limit_series(hold),
+        )
+
+        now = p.marginal(0)
+        self.assertEqual(now.reason, "købes tilbage")
+        self.assertAlmostEqual(now.kr_per_kwh, 1.96, places=3)
+
+    def test_a_sale_is_measured_at_its_own_half_hour(self):
+        # 25 % nu, solen fylder til 80 % før et salg ned til 30 %: den
+        # kilowatt-time vi bruger nu, er én mindre solgt.
+        rows = [
+            dict(row(soc=25), slot_minute=1260),
+            dict(row(soc=60), slot_minute=1290),
+            dict(row(state="exp", export_rate=400, soc=80), slot_minute=1320),
+            dict(row(import_rate=100, soc=30), slot_minute=1350),
+        ]
+        export = {"results": {"2026-10-18T21:00:00+0200": 30}}
+        p = Plan.from_predbat(
+            {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+            export_limits=limit_series(export),
+        )
+
+        self.assertEqual(p.marginal(0).reason, EXPORT_REASON)
+
     def test_the_export_limit_is_the_floor_for_a_sale(self):
         rows = [
             dict(row(soc=50), slot_minute=1260),
