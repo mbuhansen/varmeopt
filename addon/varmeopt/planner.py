@@ -236,13 +236,27 @@ def minutes_until_hour(hour: float | None, now: float) -> int | None:
     return ahead or 24 * 60
 
 
+SOURCES = ("varmepumpe", "pillefyr")
+
+
 def source_now(
-    heat_price: float | None, pellet_price: float, hysteresis: float
+    heat_price: float | None,
+    pellet_price: float,
+    hysteresis: float,
+    current: str | None = None,
 ) -> tuple[str, str]:
     """Spørgsmål 1: hvilken kilde er billigst til behovet nu?
 
-    Ved uafgjort vinder varmepumpen, som Node-RED også gør. Hysteresen er der
-    for at valget ikke vipper frem og tilbage på nogle ører.
+    Hysteresen er der for at valget ikke vipper frem og tilbage på nogle
+    ører, og derfor skal den kende den kilde der står nu: inden for båndet
+    bliver ``current`` stående. Kun uden en kendt kilde - ved opstart -
+    vinder varmepumpen et tæt løb, som Node-RED også gør.
+
+    Her var båndet uden hukommelse, og så var det ikke en hysterese men et
+    forspring til varmepumpen på hele båndets bredde. Den 29. oktober skiftede
+    projektionen fra pillefyr til varmepumpe kl. 18:00 midt i salget, da
+    eksportprisen faldt til 3,44: VP 0,74 mod pille 0,71 - tre øre dyrere,
+    og alligevel valgt.
     """
     if heat_price is None:
         return "varmepumpe", "ingen COP — antager varmepumpe"
@@ -253,6 +267,11 @@ def source_now(
         return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
     if heat_price < pellet_price - hysteresis:
         return "varmepumpe", f"VP {heat_price:.2f} < pille {pellet_price:.2f}"
+    if current in SOURCES:
+        return current, (
+            f"tæt løb — bliver på {current} "
+            f"(VP {heat_price:.2f}, pille {pellet_price:.2f})"
+        )
     return "varmepumpe", "tæt løb — varmepumpen foretrækkes"
 
 
@@ -380,6 +399,7 @@ class Planner:
         deadline_minutes: float | None = None,
         elapsed_minutes: float = 0.0,
         locked_minutes: int | None = None,
+        current_source: str | None = None,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
@@ -438,12 +458,17 @@ class Planner:
         halvtime, og den *skal* med: uden den falder prissætningen af nu-timen
         tilbage på batteriets genanskaffelsespris, og beslutningen ville så
         bruge en anden pris end den sensoren viser.
+
+        ``current_source`` er den kilde vagten står ved. Den afgør et tæt løb
+        - se ``source_now``.
         """
         price_now = plan.marginal(0, grid=grid) if plan is not None else None
         now = price_now.kr_per_kwh if price_now is not None else None
 
         vp_now = self.heat_price(now, cop_now)
-        source, why = source_now(vp_now, self.pellet_price, self.hysteresis)
+        source, why = source_now(
+            vp_now, self.pellet_price, self.hysteresis, current=current_source
+        )
 
         decision = Decision(
             source=source,
@@ -1617,6 +1642,7 @@ class Planner:
         target_minutes: int | None = None,
         grid: Any = None,
         charge_window: tuple[int, int] | None = None,
+        current_source: str | None = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
 
@@ -1624,11 +1650,15 @@ class Planner:
         vejrudsigt. Over nogle timer flytter prisen sig langt mere end COP'en,
         så rangordenen mellem timerne holder — men de absolutte varmepriser
         længst ude skal læses med det forbehold.
+
+        Hysteresen følger rækkerne: et tæt løb afgøres af rækken før, og
+        første række af ``current_source``, den kilde der står nu.
         """
         if plan is None:
             return []
 
         rows: list[Projection] = []
+        source = current_source
         for minutes in range(0, self.horizon_minutes + 1, SLOT_MINUTES):
             # Måleren gælder kun nu-timen; marginal() ser selv bort fra den
             # for alt andet, men vi sender den kun hvor den hører hjemme.
@@ -1638,7 +1668,9 @@ class Planner:
             slot = plan.at(minutes)
             cop = cop_now if minutes == 0 else self._cop_for(minutes, cop_now, cop_later)
             heat = self.heat_price(price.kr_per_kwh, cop)
-            source, note = source_now(heat, self.pellet_price, self.hysteresis)
+            source, note = source_now(
+                heat, self.pellet_price, self.hysteresis, current=source
+            )
             rows.append(
                 Projection(
                     minutes=minutes,

@@ -587,6 +587,9 @@ class Varmeopt:
             # Så langt frem priserne er endelige. Toppen, besparelsen og
             # låsen må ikke hvile på en prognose - se ``Planner.decide``.
             locked_minutes=locked_minutes,
+            # Den kilde vagten står ved. Et tæt løb skal blive på den, ikke
+            # vippe over til varmepumpen - se ``source_now``.
+            current_source=self.guard.committed,
         )
         # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
         # det. Siger den nej, står beslutningen der stadig, men flaget
@@ -682,6 +685,7 @@ class Varmeopt:
             target_minutes=decision.window_minutes,
             grid=prices.get("grid"),
             charge_window=self._charge_window(),
+            current_source=command.source,
         )
 
         self.status.update(

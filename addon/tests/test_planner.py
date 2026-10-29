@@ -45,6 +45,24 @@ class SourceTest(unittest.TestCase):
         self.assertEqual(source, "varmepumpe")
         self.assertIn("tæt", why)
 
+    def test_a_close_race_stays_on_the_running_source(self):
+        # 29. oktober kl. 18:00: VP 0,74 mod pille 0,71. Pillefyret kørte, og
+        # varmepumpen var tre øre dyrere - den må ikke vinde båndet.
+        source, why = source_now(0.738, PELLET, 0.05, current="pillefyr")
+
+        self.assertEqual(source, "pillefyr")
+        self.assertIn("bliver på pillefyr", why)
+
+        source, _ = source_now(PELLET + 0.02, PELLET, 0.05, current="varmepumpe")
+        self.assertEqual(source, "varmepumpe")
+
+    def test_outside_the_band_the_running_source_does_not_matter(self):
+        source, _ = source_now(PELLET - 0.06, PELLET, 0.05, current="pillefyr")
+        self.assertEqual(source, "varmepumpe")
+
+        source, _ = source_now(PELLET + 0.06, PELLET, 0.05, current="varmepumpe")
+        self.assertEqual(source, "pillefyr")
+
     def test_without_a_cop_we_assume_the_heat_pump(self):
         source, why = source_now(None, PELLET, 0.05)
 
@@ -81,6 +99,42 @@ class CheapestHeatTest(unittest.TestCase):
 
     def test_no_cop_falls_back_to_the_boiler(self):
         self.assertAlmostEqual(planner().cheapest_heat(1.20, None), PELLET, places=9)
+
+
+class CloseRaceTest(unittest.TestCase):
+    """Salget den 29. oktober: eksportprisen faldt fra 4,08 til 3,44 og 3,14.
+
+    Ved COP 5,86 blev det VP 0,85, 0,74, 0,69 og 0,61 mod pille 0,71. De to
+    midterste ligger i båndet, og dér skal pillefyret blive stående til
+    varmepumpen er billigere end båndet.
+    """
+
+    RATES = (408.3, 344.3, 313.5, 266.5)
+    COP = 5.86
+
+    def test_the_projection_stays_on_the_boiler_through_the_band(self):
+        rows = planner().project(plan(*self.RATES), self.COP, current_source="pillefyr")
+
+        self.assertEqual(
+            [row.source for row in rows],
+            ["pillefyr", "pillefyr", "pillefyr", "varmepumpe"],
+        )
+
+    def test_the_projection_carries_the_row_before(self):
+        # Ingen kendt kilde nu: første række er klart pillefyr, og så skal
+        # båndet arve den - ikke falde til varmepumpen.
+        rows = planner().project(plan(*self.RATES), self.COP)
+
+        self.assertEqual(rows[1].source, "pillefyr")
+
+    def test_the_decision_keeps_the_source_the_guard_holds(self):
+        p = planner()
+
+        held = p.decide(plan(344.3), cop_now=self.COP, current_source="pillefyr")
+        fresh = p.decide(plan(344.3), cop_now=self.COP)
+
+        self.assertEqual(held.source, "pillefyr")
+        self.assertEqual(fresh.source, "varmepumpe")
 
 
 class DecideTest(unittest.TestCase):
