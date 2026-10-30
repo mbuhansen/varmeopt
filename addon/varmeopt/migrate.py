@@ -40,6 +40,8 @@ LEDGER_FILE = "ledger.json"
 GUARD_FILE = "guard.json"
 # Døgnets forbrug ud af lageret, fire døgn tilbage. Se ``usage``.
 USAGE_FILE = "usage.json"
+# Pillefyrets varme som den strøm varmepumpen ville have brugt. Se ``pelletload``.
+PELLET_LOAD_FILE = "pellet_load.json"
 
 
 def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]:

@@ -42,6 +42,7 @@ from .migrate import (
     GUARD_FILE,
     HOUSE_LOAD_FILE,
     LEDGER_FILE,
+    PELLET_LOAD_FILE,
     SOLAR_FILE,
     STANDBY_FILE,
     USAGE_FILE,
@@ -50,6 +51,7 @@ from .migrate import (
     load_solar,
 )
 from .options import Options
+from .pelletload import PelletLoad
 from .planner import Planner, minutes_until_hour
 from .prices import (
     BATTERY,
@@ -95,6 +97,13 @@ SENSOR_USAGE = {
     "spa": "sensor.varmeopt_forbrug_spa",
 }
 SENSOR_USAGE_TOTAL = "sensor.varmeopt_forbrug_i_alt"
+# Pillefyrets varme som den strøm varmepumpen ville have brugt. Tælleren står
+# i Predbats ``load_today`` ved siden af husets måler, effekten i
+# ``load_power`` - så en pilledag ikke læres som et hus der bruger mindre
+# strøm. Predbat henter ``load_power`` i W, derfor W og ikke kW. Se
+# ``pelletload``.
+SENSOR_PELLET_LOAD = "sensor.varmeopt_pille_som_el"
+SENSOR_PELLET_POWER = "sensor.varmeopt_pille_som_el_effekt"
 # Opladningen som sit eget flag. Den står også som attribut på
 # beslutningen, men et flag man kan spørge direkte om, er lettere at koble
 # videre end en attribut man skal grave ud - og en styring der er let at
@@ -314,6 +323,9 @@ class Varmeopt:
         # Døgnets forbrug ud af lageret, delt på varme, varmt vand og spa,
         # fire døgn tilbage - se usage.py.
         self.usage = Usage()
+        # Pillefyrets varme som strøm varmepumpen ville have brugt - se
+        # pelletload.py.
+        self.pellet_load = PelletLoad()
         # Typeskiltet siger 16 kW; maskinen bestemmer selv og lander omkring
         # 12. Raten måles derfor frem for at gættes - se capacity.py.
         self.charge_rate = ChargeRate(nameplate_kw=options.hp_charge_kw)
@@ -507,6 +519,30 @@ class Varmeopt:
         else:
             lookup = None
             learn_note = "ignoreret: mangler temperaturdata"
+
+        # Pillefyrets kg som den strøm pumpen ville have brugt på samme
+        # varme. COP'en er rumvarmens - setpunktet kurven giver nu - også når
+        # fyret dækker varmt vand; det lille undertal dér er valgt.
+        heating_cop = None
+        if outdoor_temp is not None:
+            heating_setpoint = self.curve.predict(outdoor_temp)
+            if heating_setpoint is not None:
+                heating_cop = self.table.lookup(heating_setpoint, outdoor_temp).cop
+        if ha is not None:
+            added = self.pellet_load.observe(
+                time.time(),
+                await self._number(ha, self.options.entity_pellet_kg_today),
+                heating_cop,
+                self.options.pellet_kwh_per_kg,
+                self.options.pellet_efficiency,
+            )
+            self._dirty = True
+            if added > 0:
+                log.info("pillefyr som el: +%.2f kWh | %s", added, self._pellet_note())
+                # Gemt før den udgives. Ellers kan et hårdt stop tabe op til
+                # fem minutters optælling, og den udgivne tæller falder ved
+                # næste start - et fald Predbat ville læse som negativt forbrug.
+                self._maybe_save(force=True)
 
         await self._refresh_forecast(ha)
         prices = await self._read_prices(ha, lookup)
@@ -756,6 +792,7 @@ class Varmeopt:
                 self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
             ),
             learn_note=learn_note,
+            pellet_load=self._pellet_note(),
             last_run=datetime.now(timezone.utc)
             .astimezone()
             .strftime("%Y-%m-%d %H:%M:%S"),
@@ -846,6 +883,8 @@ class Varmeopt:
             await self._safely("behov", self._publish_demand(ha, balance, buffer))
             await self._safely("husforbrug", self._publish_house_load(ha))
             await self._safely("forbrug", self._publish_usage(ha))
+        if ha is not None:
+            await self._safely("pillefyr som el", self._publish_pellet_load(ha))
 
         if prices.get("price_now") is not None and ha is not None:
             price = prices["price_now"]
@@ -1976,6 +2015,16 @@ class Varmeopt:
         starts, ends = slots
         return int((starts - base) / 60), int((ends - base) / 60)
 
+    def _pellet_note(self) -> str:
+        today = self.pellet_load.today
+        if today is None or today.kg <= 0:
+            return "pillefyret har ikke brændt i dag"
+        cop = self.pellet_load.cop
+        return (
+            f"{today.kwh:.2f} kWh i dag ({today.kg:.2f} kg"
+            + (f", COP {cop:.2f})" if cop is not None else ", ingen COP endnu)")
+        )
+
     def _vessel_split(
         self, dhw: bool | None, spa: bool | None, vvb_bottom: float | None
     ) -> tuple[float | None, float | None]:
@@ -2104,6 +2153,47 @@ class Varmeopt:
             },
         )
 
+    async def _publish_pellet_load(self, ha: HomeAssistant) -> None:
+        """Pillefyrets varme som strøm - til Predbats ``load_today`` og ``load_power``.
+
+        Tælleren nulstilles aldrig: Predbat lægger den til husets måler, og
+        et fald ville blive læst som et negativt forbrug. Udgives hver cyklus,
+        så den er tilbage et minut efter en genstart af Home Assistant.
+        """
+        load = self.pellet_load
+        today = load.today
+        yesterday = load.yesterday
+        await ha.set_state(
+            SENSOR_PELLET_LOAD,
+            round(load.total_kwh, 3),
+            {
+                "friendly_name": "Varmeopt pillefyr som el",
+                "unit_of_measurement": "kWh",
+                "device_class": "energy",
+                "state_class": "total_increasing",
+                "icon": "mdi:fire",
+                "i_dag_kwh": None if today is None else round(today.kwh, 2),
+                "i_dag_kg": None if today is None else round(today.kg, 2),
+                "i_går_kwh": None if yesterday is None else round(yesterday.kwh, 2),
+                "i_går_kg": None if yesterday is None else round(yesterday.kg, 2),
+                "cop": _round(load.cop, 2),
+                "virkningsgrad": self.options.pellet_efficiency,
+                "note": "den strøm varmepumpen ville have brugt på pillefyrets varme",
+            },
+        )
+        await ha.set_state(
+            SENSOR_PELLET_POWER,
+            round(load.power_w(time.time())),
+            {
+                "friendly_name": "Varmeopt pillefyr som el, effekt",
+                "unit_of_measurement": "W",
+                "device_class": "power",
+                "state_class": "measurement",
+                "icon": "mdi:fire",
+                "note": "gennemsnit over det seneste kvarter",
+            },
+        )
+
     async def _publish_demand(
         self, ha: HomeAssistant, balance: Balance, buffer: Buffer | None
     ) -> None:
@@ -2172,6 +2262,7 @@ class Varmeopt:
             self.store.save(STANDBY_FILE, self.standby.to_raw())
             self.store.save(HOUSE_LOAD_FILE, self.house_load.to_raw())
             self.store.save(USAGE_FILE, self.usage.to_raw())
+            self.store.save(PELLET_LOAD_FILE, self.pellet_load.to_raw())
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
             self.store.save(LEDGER_FILE, self.ledger.to_raw())
@@ -2266,6 +2357,7 @@ async def run() -> None:
         app.standby = StandbyTest.from_raw(store.load(STANDBY_FILE, {}))
         app.house_load = HouseLoad.from_raw(store.load(HOUSE_LOAD_FILE, {}))
         app.usage = Usage.from_raw(store.load(USAGE_FILE, {}))
+        app.pellet_load = PelletLoad.from_raw(store.load(PELLET_LOAD_FILE, {}))
         app.charge_rate = ChargeRate.from_raw(
             store.load(CAPACITY_FILE, {}), options.hp_charge_kw
         )

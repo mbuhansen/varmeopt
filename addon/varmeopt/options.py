@@ -66,6 +66,10 @@ _DEFAULTS: dict[str, object] = {
     "entity_solar_power": "sensor.solvarme_produktion",
     "entity_element_power": "sensor.my_pv_ac_thor_9s_effekt",
     "entity_boiler_power": "sensor.nbe_boiler_49812_power_kw",
+    # Pillefyrets kg i dag, nulstilles ved midnat. Det regnes om til den
+    # strøm varmepumpen ville have brugt, så Predbat ikke lærer en pilledag
+    # som et hus der bruger mindre strøm - se pelletload.py.
+    "entity_pellet_kg_today": "sensor.nbe_boiler_49812_consumption_daily",
     # Predbats plan, læst direkte fra HA. Vi bruger raw.rows, den
     # strukturerede udgave - ikke HTML-tabellen, som ville være skrøbelig.
     # Home Assistants egen vejrudsigt. Med den får hver time i planen sin
@@ -334,6 +338,7 @@ class Options:
     entity_solar_power: str
     entity_element_power: str
     entity_boiler_power: str
+    entity_pellet_kg_today: str
     entity_weather: str
     forecast_refresh_minutes: float
     entity_predbat_plan: str

@@ -597,6 +597,9 @@ class WebUI:
         ]
         if model.bias_kw is not None:
             cards.append(("Mod flowmåleren", f"{model.bias_kw:+.2f} kW i gennemsnit"))
+        if status.get("pellet_load"):
+            # Det Predbat får lagt til husets måler - se pelletload.py.
+            cards.append(("Pillefyr som el", _esc(status["pellet_load"])))
         dl = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in cards)
 
         body = (
