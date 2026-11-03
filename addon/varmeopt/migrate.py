@@ -42,6 +42,8 @@ GUARD_FILE = "guard.json"
 USAGE_FILE = "usage.json"
 # Pillefyrets varme som den strøm varmepumpen ville have brugt. Se ``pelletload``.
 PELLET_LOAD_FILE = "pellet_load.json"
+# Udsigtens afvigelse fra BT1 og efterprøvningen af den. Se ``outdoorbias``.
+OUTDOOR_BIAS_FILE = "outdoor_bias.json"
 
 
 def load_solar(store: Store, geometry: Any, seed: float) -> tuple[Any, Any, str]:

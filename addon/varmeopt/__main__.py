@@ -42,6 +42,7 @@ from .migrate import (
     GUARD_FILE,
     HOUSE_LOAD_FILE,
     LEDGER_FILE,
+    OUTDOOR_BIAS_FILE,
     PELLET_LOAD_FILE,
     SOLAR_FILE,
     STANDBY_FILE,
@@ -51,6 +52,7 @@ from .migrate import (
     load_solar,
 )
 from .options import Options
+from .outdoorbias import OutdoorBias
 from .pelletload import PelletLoad
 from .planner import Planner, minutes_until_hour
 from .prices import (
@@ -292,6 +294,9 @@ class Varmeopt:
         # Vægurstiden udsigten blev hentet. Dens punkter tæller minutter fra
         # dengang, og den hentes kun hver halve time.
         self._forecast_wall: float | None = None
+        # Udsigten er vejrtjenestens tal; alt der slås op i, er lært på BT1.
+        # Se outdoorbias.py.
+        self.outdoor_bias = OutdoorBias()
         self.guard = Guard(
             enabled=options.control_enabled,
             min_dwell_minutes=options.control_min_dwell_minutes,
@@ -545,6 +550,12 @@ class Varmeopt:
                 self._maybe_save(force=True)
 
         await self._refresh_forecast(ha)
+        # Før priserne: de slår COP op gennem ``_temperature_at``, og den
+        # skal regne med denne cyklus' afvigelse.
+        wall = time.time()
+        self.outdoor_bias.observe(wall, outdoor_temp, self._forecast_from(wall, 0))
+        self.outdoor_bias.note_forecast(wall, lambda m: self._forecast_from(wall, m))
+        self._dirty = True
         prices = await self._read_prices(ha, lookup)
         locked_minutes = await self._locked_minutes(ha)
 
@@ -737,6 +748,8 @@ class Varmeopt:
             decision=decision,
             command=command,
             forecast=self.forecast,
+            outdoor_bias=self.outdoor_bias.to_status(),
+            outdoor_bias_note=self.outdoor_bias.note,
             projection=projection,
             flow_measured=flow_measured,
             hp_flow=hp_flow,
@@ -1348,10 +1361,11 @@ class Varmeopt:
             self.forecast = forecast
             self._forecast_wall = fetched.timestamp()
             log.info(
-                "vejrudsigt: %d timer frem, %.1f til %.1f grader",
+                "vejrudsigt: %d timer frem, %.1f til %.1f grader | korrektion: %s",
                 forecast.horizon_minutes / 60,
                 min(t for _, t in forecast.points),
                 max(t for _, t in forecast.points),
+                self.outdoor_bias.note,
             )
         else:
             # Sig hvad der kom tilbage. Stod der bare "kunne ikke læses",
@@ -1389,9 +1403,20 @@ class Varmeopt:
         af et punkt der lå op til en time forkert: op til en halvtime for hvor
         langt vi er inde i halvtimen, og op til en halvtime for hvor gammel
         udsigten er.
+
+        Og oversat til BT1: alt der slås op med tallet, er lært på
+        BT1-gennemsnittet, ikke på vejrtjenestens temperatur - se
+        outdoorbias.py.
         """
+        temp = self._forecast_from(slot_start(time.time()), minutes)
+        if temp is None:
+            return None
+        return temp + self.outdoor_bias.correction(minutes)
+
+    def _forecast_from(self, wall: float, minutes: float) -> float | None:
+        """Udsigtens rå tal så mange minutter efter vægurstiden ``wall``."""
         if self._forecast_wall is not None:
-            minutes = minutes + (slot_start(time.time()) - self._forecast_wall) / 60
+            minutes = minutes + (wall - self._forecast_wall) / 60
         return self.forecast.temperature_at(minutes)
 
     def _block_target_met(
@@ -2266,6 +2291,7 @@ class Varmeopt:
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
             self.store.save(LEDGER_FILE, self.ledger.to_raw())
+            self.store.save(OUTDOOR_BIAS_FILE, self.outdoor_bias.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
             # binding" kunne aldrig udløses.
@@ -2363,7 +2389,9 @@ async def run() -> None:
         )
         app.charge_plan = ChargePlan.from_raw(store.load(CHARGE_FILE, {}))
         app.ledger = Ledger.from_raw(store.load(LEDGER_FILE, {}))
+        app.outdoor_bias = OutdoorBias.from_raw(store.load(OUTDOOR_BIAS_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
+        log.info("udsigtens korrektion: %s", app.outdoor_bias.note)
         if app.house_load.curve.point_count:
             log.info(
                 "forbrugskurve fra eget lager: %d punkter, %.0f målinger",

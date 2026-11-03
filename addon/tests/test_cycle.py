@@ -966,6 +966,17 @@ class ForecastTest(unittest.TestCase):
         self.assertAlmostEqual(self.app._cop_at(0), 4.6, places=1)
         self.assertAlmostEqual(self.app._cop_at(360), 3.9, places=1)
 
+    def test_the_forecast_is_read_as_bt1(self):
+        # 3. november: BT1 lå langt under udsigten. Udsigten siger 15 nu,
+        # BT1 viser 13 - planen skal slå op på 13, og to grader for varmt
+        # længere ude, hvor kun den faste afvigelse er tilbage.
+        self.ha._states[OUT] = State(OUT, "13.0", {}, "u")
+        asyncio.run(self.app.cycle(self.ha))
+
+        self.assertAlmostEqual(self.app._temperature_at(0), 13.0, delta=0.1)
+        self.assertAlmostEqual(self.app._temperature_at(720), 3.0, delta=0.1)
+        self.assertIn("fast -2.0", self.app.status["outdoor_bias_note"])
+
     def test_without_a_forecast_there_is_no_answer(self):
         self.ha.forecast_response = {}
         asyncio.run(self.app.cycle(self.ha))

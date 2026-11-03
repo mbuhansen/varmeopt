@@ -717,6 +717,7 @@ class WebUI:
         status = self._status()
         now_rows = [
             ("Udetemperatur nu", _fmt(status.get("outdoor_temp"), "°C", 1)),
+            ("Udsigten mod BT1", _esc(status.get("outdoor_bias_note") or "—")),
             ("Setpunkt nu", _fmt(status.get("flow_temp"), "°C", 1)),
             ("Kurven forudsiger", _fmt(status.get("predicted_setpoint"), "°C", 1)),
             ("Målt fremløb, centralvarme", _fmt(status.get("flow_measured"), "°C", 1)),
