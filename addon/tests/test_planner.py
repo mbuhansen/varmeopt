@@ -32,7 +32,7 @@ class SourceTest(unittest.TestCase):
         source, why = source_now(0.30, PELLET, 0.05)
 
         self.assertEqual(source, "varmepumpe")
-        self.assertIn("<", why)
+        self.assertIn("≤", why)
 
     def test_the_boiler_wins_when_the_pump_is_dearer(self):
         source, _ = source_now(1.20, PELLET, 0.05)
@@ -55,6 +55,20 @@ class SourceTest(unittest.TestCase):
 
         source, _ = source_now(PELLET + 0.02, PELLET, 0.05, current="varmepumpe")
         self.assertEqual(source, "varmepumpe")
+
+    def test_the_heat_pump_takes_over_again_at_the_pellet_price(self):
+        # 3. november: VP 0,68 mod pille 0,71 fra kl. 22, og projektionen blev
+        # på pillefyret natten igennem, fordi båndet krævede VP under 0,656.
+        # Strøm købes på nettet; piller skal hentes hos forhandleren.
+        source, why = source_now(PELLET - 0.01, PELLET, 0.05, current="pillefyr")
+        self.assertEqual(source, "varmepumpe")
+        self.assertIn("≤", why)
+
+        source, _ = source_now(PELLET, PELLET, 0.05, current="pillefyr")
+        self.assertEqual(source, "varmepumpe")
+
+        source, _ = source_now(PELLET + 0.01, PELLET, 0.05, current="pillefyr")
+        self.assertEqual(source, "pillefyr")
 
     def test_outside_the_band_the_running_source_does_not_matter(self):
         source, _ = source_now(PELLET - 0.06, PELLET, 0.05, current="pillefyr")
@@ -104,9 +118,10 @@ class CheapestHeatTest(unittest.TestCase):
 class CloseRaceTest(unittest.TestCase):
     """Salget den 29. oktober: eksportprisen faldt fra 4,08 til 3,44 og 3,14.
 
-    Ved COP 5,86 blev det VP 0,85, 0,74, 0,69 og 0,61 mod pille 0,71. De to
-    midterste ligger i båndet, og dér skal pillefyret blive stående til
-    varmepumpen er billigere end båndet.
+    Ved COP 5,86 blev det VP 0,85, 0,74, 0,69 og 0,61 mod pille 0,71. 0,74
+    ligger i båndet over pillefyret, og dér skal pillefyret blive stående.
+    0,69 er under pillefyrets pris, og så tager varmepumpen over igen - båndet
+    giver ikke pillefyret et forspring nedad (3. november).
     """
 
     RATES = (408.3, 344.3, 313.5, 266.5)
@@ -117,7 +132,7 @@ class CloseRaceTest(unittest.TestCase):
 
         self.assertEqual(
             [row.source for row in rows],
-            ["pillefyr", "pillefyr", "pillefyr", "varmepumpe"],
+            ["pillefyr", "pillefyr", "varmepumpe", "varmepumpe"],
         )
 
     def test_the_projection_carries_the_row_before(self):

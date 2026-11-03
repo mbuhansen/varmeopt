@@ -257,6 +257,14 @@ def source_now(
     projektionen fra pillefyr til varmepumpe kl. 18:00 midt i salget, da
     eksportprisen faldt til 3,44: VP 0,74 mod pille 0,71 - tre øre dyrere,
     og alligevel valgt.
+
+    Båndet ligger skævt: det går fra pillefyrets pris og ``hysteresis`` op.
+    Ved lige pris er varmepumpen at foretrække - strømmen kommer af sig selv
+    fra nettet, mens piller skal hentes hos forhandleren. Lå båndet
+    symmetrisk om pillefyret, fik pillefyret et forspring i stedet: den 3.
+    november blev projektionen på pillefyret natten igennem med VP 0,68 mod
+    pille 0,71, fordi varmepumpen skulle under 0,656 for at komme tilbage.
+    Bredden er den samme, så valget vipper stadig ikke på nogle ører.
     """
     if heat_price is None:
         return "varmepumpe", "ingen COP — antager varmepumpe"
@@ -265,8 +273,8 @@ def source_now(
     # hører hjemme i hver eneste linje.
     if heat_price > pellet_price + hysteresis:
         return "pillefyr", f"VP {heat_price:.2f} > pille {pellet_price:.2f}"
-    if heat_price < pellet_price - hysteresis:
-        return "varmepumpe", f"VP {heat_price:.2f} < pille {pellet_price:.2f}"
+    if heat_price <= pellet_price:
+        return "varmepumpe", f"VP {heat_price:.2f} ≤ pille {pellet_price:.2f}"
     if current in SOURCES:
         return current, (
             f"tæt løb — bliver på {current} "
