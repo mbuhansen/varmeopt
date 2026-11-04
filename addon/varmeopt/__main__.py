@@ -26,7 +26,7 @@ from . import VERSION, selfupdate
 from .capacity import ChargeRate
 from .charge import MAX_DELIVERED_SHARE, NO_PLAN, ChargePlan, slot_start
 from .cop import CopTable
-from .curve import HeatCurve
+from .curve import HeatCurve, plausible_outdoor
 from .demand import Balance, Load
 from .forecast import Forecast
 from .guard import Guard
@@ -352,6 +352,7 @@ class Varmeopt:
         self._warned_horizon = False
         self._warned_losses = False
         self._warned_hp_cop = False
+        self._warned_outdoor = False
         self._hp_cop: float | None = None
         self._last_save = 0.0
         self._last_learned_stamp: str | None = None
@@ -379,7 +380,9 @@ class Varmeopt:
             flow_measured = await self._number(ha, self.options.entity_flow_measured)
             hp_flow = await self._number(ha, self.options.entity_hp_flow)
             hp_return = await self._number(ha, self.options.entity_hp_return)
-            outdoor_temp = await self._number(ha, self.options.entity_outdoor_temp)
+            outdoor_temp = self._plausible_outdoor(
+                await self._number(ha, self.options.entity_outdoor_temp)
+            )
             measured = await self._state(ha, self.options.entity_cop_measured)
             if measured is not None:
                 measured_cop = measured.as_float()
@@ -1377,6 +1380,26 @@ class Varmeopt:
                 self.options.entity_weather,
                 keys,
             )
+
+    def _plausible_outdoor(self, value: float | None) -> float | None:
+        """Udetemperaturen, eller None hvis føleren melder en fejlkode.
+
+        Ét sted, så varmekurven, forbrugskurven, COP-læringen og udsigtens
+        korrektion alle står bag den samme grænse. Nibe melder -3276,8 når den
+        ikke har en måling, og det tal blev engang lært som et punkt på kurven.
+        """
+        if value is None or plausible_outdoor(value):
+            self._warned_outdoor = False
+            return value
+        if not self._warned_outdoor:
+            log.warning(
+                "%s melder %.1f °C - det er ikke en udetemperatur, og den "
+                "bruges ikke før føleren melder noget rigtigt igen",
+                self.options.entity_outdoor_temp,
+                value,
+            )
+            self._warned_outdoor = True
+        return None
 
     def _charge_cop_at(self, minutes: int) -> float | None:
         """COP'en ved ladetemperaturen om så mange minutter.

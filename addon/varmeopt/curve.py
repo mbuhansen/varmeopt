@@ -18,9 +18,26 @@ målinger hører ikke til i kurven. De kendes på at ligge på den faste værdi.
 
 from __future__ import annotations
 
+import logging
 import math
 from dataclasses import dataclass
 from typing import Any
+
+log = logging.getLogger(__name__)
+
+# Den udetemperatur der kan stå uden for et hus i Danmark, med god margen.
+# Nibe melder -3276,8 (0x8000/10) når den ikke har en gyldig måling, og én
+# sådan aflæsning blev lært som et punkt ved -3277 °C. Kurven gik derefter fra
+# -3277 til 32 grader: grafen blev en lodret streg, tabellen på web-siden fik
+# en række for hver femte grad derned, og frost under -10 interpolerede mod
+# 39 °C i stedet for at holde sig på 54.
+OUTDOOR_MIN = -40.0
+OUTDOOR_MAX = 45.0
+
+
+def plausible_outdoor(value: Any) -> bool:
+    """Kan det her være en rigtig udetemperatur - ikke en følers fejlkode?"""
+    return _finite(value) and OUTDOOR_MIN <= value <= OUTDOOR_MAX
 
 # Setpunkter inden for dette af varmtvandsværdien regnes som brugsvand eller
 # spa og læres ikke ind i varmekurven.
@@ -47,9 +64,15 @@ DHW_MARGIN_K = 5.0
 # selv er et gæt, skal ikke have vetoret over nye målinger.
 VETO_COUNT = 5.0
 
-# Under så mange observationer flytter en ny måling punktet mærkbart; derover
-# er punktet velbestemt og skal ikke rykke sig på en enkelt aflæsning.
-_SETTLED_COUNT = 10
+# Den mindste vægt en ny måling får. Indtil et punkt har så mange målinger,
+# er det gennemsnittet af dem alle; derefter glemmer det med den hastighed.
+#
+# Her stod 5 % fra tiende måling, og så huskede et punkt reelt kun den sidste
+# time. Natten til 4. november - den første med frost i luften - flyttede 127
+# målinger punktet ved 7 °C fra 41,6 til 43,7, selv om det havde 1.545 bag
+# sig. UVR'ens setpunkt spreder 1,4 K om BT1 (den har sin egen udeføler, og
+# BT1 får sol), og med 5 % slog den spredning direkte igennem i kurven.
+_MIN_ALPHA = 1 / 1000
 
 # Kurvens format. Version 1 blev lært med en fejl: et negativt
 # varmtvandsflag slog værditjekket fra, så 56 °C blev lært som om det var
@@ -75,6 +98,8 @@ class HeatCurve:
     def __init__(self, points: dict[int, Point] | None = None, dhw_setpoint: float = 56.0) -> None:
         self._points: dict[int, Point] = dict(points or {})
         self.dhw_setpoint = dhw_setpoint
+        # Den faldende kurve opslagene står på. Regnes forfra efter læring.
+        self._smoothed: dict[int, Point] | None = None
 
     # ------------------------------------------------------------------ form
 
@@ -134,17 +159,20 @@ class HeatCurve:
         """
         if not _finite(outdoor) or not _finite(setpoint):
             return "ignoreret: mangler data"
+        if not plausible_outdoor(outdoor):
+            return f"ignoreret: umulig udetemperatur ({outdoor:.1f} °C)"
         if dhw or self.is_dhw(setpoint, outdoor):
             return f"ignoreret: varmtvand ({setpoint:.0f} °C)"
 
         key = round(outdoor)
         old = self._points.get(key)
+        self._smoothed = None
         if old is None:
             self._points[key] = Point(setpoint=float(setpoint), count=1.0)
             return f"nyt punkt U{key} = {setpoint:.1f} °C"
 
         count = old.count + 1
-        alpha = 0.15 if count < _SETTLED_COUNT else 0.05
+        alpha = max(1 / count, _MIN_ALPHA)
         blended = old.setpoint * (1 - alpha) + setpoint * alpha
         self._points[key] = Point(setpoint=blended, count=count)
         return f"U{key} = {blended:.1f} °C (n={count:.0f})"
@@ -158,24 +186,37 @@ class HeatCurve:
         at forlænge kurven. Kurven har en reel bund — under en vis
         udetemperatur beder UVR'en ikke om mindre — og en lineær forlængelse
         ville finde på tal anlægget aldrig har vist os.
+
+        Opslaget står på den faldende udgave af punkterne. De lærte punkter
+        kan godt bryde monotonien - den 4. november stod 7 °C på 43,7 over
+        6 °C's 42,9 - og så ville et varmere vejr give et højere fremløb og en
+        lavere COP. ``_enforce_monotone`` vejer efter antal målinger, så et
+        tyndt punkt ikke trækker en velbelagt nabo med sig.
         """
         if not _finite(outdoor) or not self._points:
             return None
 
+        points = self.smoothed_points()
         keys = self.outdoor_temps
         if outdoor <= keys[0]:
-            return self._points[keys[0]].setpoint
+            return points[keys[0]].setpoint
         if outdoor >= keys[-1]:
-            return self._points[keys[-1]].setpoint
+            return points[keys[-1]].setpoint
 
         for low, high in zip(keys, keys[1:]):
             if low <= outdoor <= high:
-                a, b = self._points[low].setpoint, self._points[high].setpoint
+                a, b = points[low].setpoint, points[high].setpoint
                 if high == low:
                     return a
                 ratio = (outdoor - low) / (high - low)
                 return a + (b - a) * ratio
         return None
+
+    def smoothed_points(self) -> dict[int, Point]:
+        """Punkterne som opslagene bruger dem: ikke-stigende i udetemperatur."""
+        if self._smoothed is None:
+            self._smoothed = _enforce_monotone(self._points)
+        return self._smoothed
 
     def confidence(self, outdoor: float) -> float:
         """Hvor meget evidens der står bag forudsigelsen *på det sted*.
@@ -243,6 +284,14 @@ class HeatCurve:
                     setpoint = float(cell["setpoint"])
                     count = float(cell.get("count", 0))
                 except (TypeError, ValueError, KeyError):
+                    continue
+                if not plausible_outdoor(outdoor):
+                    # En fejlkode der blev lært før grænsen fandtes.
+                    log.warning(
+                        "varmekurve: punktet ved %d °C ude er ikke en rigtig "
+                        "udetemperatur og smides væk",
+                        outdoor,
+                    )
                     continue
                 if math.isfinite(setpoint) and math.isfinite(count):
                     points[outdoor] = Point(setpoint=setpoint, count=count)

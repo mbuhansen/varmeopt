@@ -977,6 +977,17 @@ class ForecastTest(unittest.TestCase):
         self.assertAlmostEqual(self.app._temperature_at(720), 3.0, delta=0.1)
         self.assertIn("fast -2.0", self.app.status["outdoor_bias_note"])
 
+    def test_an_error_code_from_bt1_is_not_an_outdoor_temperature(self):
+        # Nibes -3276,8: ingen udetemperatur denne cyklus, og intet lært.
+        self.ha._states[OUT] = State(OUT, "-3276.8", {}, "u")
+        with self.assertLogs("varmeopt", "WARNING") as logs:
+            asyncio.run(self.app.cycle(self.ha))
+
+        self.assertIsNone(self.app.status["outdoor_temp"])
+        self.assertNotIn(-3277, self.app.curve.outdoor_temps)
+        self.assertIsNone(self.app.outdoor_bias.fixed)
+        self.assertTrue(any("-3276.8" in line for line in logs.output))
+
     def test_without_a_forecast_there_is_no_answer(self):
         self.ha.forecast_response = {}
         asyncio.run(self.app.cycle(self.ha))

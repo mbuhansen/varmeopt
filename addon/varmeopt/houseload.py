@@ -49,6 +49,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+from .curve import plausible_outdoor
+
 # Vinduet der regnes over. En halv time er langt nok til at faldet er
 # halvtreds gange følerstøjen, og kort nok til at et tal fra det stadig
 # beskriver huset som det er nu.
@@ -169,6 +171,11 @@ class LoadCurve:
     def learn(self, outdoor: float, kw: float) -> str:
         if not _finite(outdoor) or not _finite(kw) or kw < 0:
             return "ignoreret: mangler data"
+        # Her ville en fejlkode gøre mere skade end i varmekurven: uden for
+        # det målte spænd forlænges linjen, og et punkt ved -3277 °C ville
+        # trække den med sig hele vejen ind.
+        if not plausible_outdoor(outdoor):
+            return f"ignoreret: umulig udetemperatur ({outdoor:.1f} °C)"
 
         key = round(outdoor)
         old = self._points.get(key)
@@ -247,6 +254,8 @@ class LoadCurve:
                     kw = float(cell["kw"])
                     count = float(cell.get("count", 0))
                 except (TypeError, ValueError, KeyError):
+                    continue
+                if not plausible_outdoor(outdoor):
                     continue
                 if math.isfinite(kw) and math.isfinite(count) and kw >= 0:
                     points[outdoor] = Point(kw=kw, count=count)

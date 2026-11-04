@@ -670,7 +670,9 @@ class WebUI:
                 f'opacity=".55">{outdoor}</text>'
             )
 
-        line = " ".join(f"{sx(u):.1f},{sy(curve.point(u).setpoint):.1f}" for u in temps)
+        # Linjen er den kurve opslagene bruger - holdt faldende. Prikkerne er
+        # de lærte punkter, så et punkt der stikker op, stadig kan ses.
+        line = " ".join(f"{sx(u):.1f},{sy(curve.predict(u)):.1f}" for u in temps)
         dots = []
         for outdoor in temps:
             point = curve.point(outdoor)

@@ -8,6 +8,64 @@ def curve(points=None, dhw=56.0):
     return HeatCurve({u: Point(s, n) for u, (s, n) in (points or {}).items()}, dhw_setpoint=dhw)
 
 
+class ErrorCodeTest(unittest.TestCase):
+    """Nibes -3276,8 blev engang lært som et punkt ved -3277 °C."""
+
+    def test_an_error_code_is_not_learned(self):
+        c = curve({5: (44.0, 500.0)})
+
+        note = c.learn(outdoor=-3276.8, setpoint=39.3)
+
+        self.assertEqual(c.outdoor_temps, [5])
+        self.assertIn("umulig", note)
+
+    def test_a_learned_error_code_is_dropped_on_load(self):
+        raw = {
+            "version": 2,
+            "points": {
+                "-3277": {"setpoint": 39.3, "count": 1.0},
+                "-10": {"setpoint": 54.1, "count": 52.0},
+                "5": {"setpoint": 42.9, "count": 2276.0},
+            },
+        }
+        with self.assertLogs("varmeopt.curve", "WARNING"):
+            c = HeatCurve.from_raw(raw)
+
+        self.assertEqual(c.outdoor_temps, [-10, 5])
+        # Frost holder sig på kurvens top i stedet for at falde mod 39.
+        self.assertAlmostEqual(c.predict(-15.0), 54.1, places=6)
+
+
+class LookupMonotoneTest(unittest.TestCase):
+    """Den lærte kurve holdes faldende når der slås op - ikke kun ved opstart."""
+
+    def test_warmer_weather_never_asks_for_a_hotter_flow(self):
+        # Kurven den 4. november kl. 16:25: 7 °C stod over 5 og 6 °C.
+        c = curve(
+            {
+                5: (42.794, 2720.0),
+                6: (42.889, 2601.0),
+                7: (43.665, 1672.0),
+                8: (39.853, 3381.0),
+            }
+        )
+
+        values = [c.predict(u / 2) for u in range(10, 17)]
+        for warmer, colder in zip(values[1:], values):
+            self.assertLessEqual(warmer, colder + 1e-9)
+        # De tre slås sammen, vægtet efter målinger - og 8 °C står urørt.
+        self.assertAlmostEqual(c.predict(6.0), 43.04, delta=0.01)
+        self.assertAlmostEqual(c.predict(8.0), 39.853, places=6)
+
+    def test_learning_reaches_the_lookup(self):
+        # Opslaget må ikke hænge fast i en udglatning fra før læringen.
+        c = curve({5: (44.0, 1.0), 10: (38.0, 1.0)})
+        c.predict(5.0)
+        c.learn(outdoor=5.0, setpoint=46.0)
+
+        self.assertAlmostEqual(c.predict(5.0), 45.0, places=6)
+
+
 class LearnTest(unittest.TestCase):
     def test_first_observation_becomes_the_point(self):
         c = curve()
@@ -26,16 +84,37 @@ class LearnTest(unittest.TestCase):
 
     def test_a_settled_point_barely_moves(self):
         # 500 målinger bag et punkt må ikke rykke sig på én afvigende aflæsning.
+        # Den 501. måling vejer 1/501.
         c = curve({5: (44.0, 500.0)})
         c.learn(outdoor=5.0, setpoint=48.0)
 
-        self.assertAlmostEqual(c.point(5).setpoint, 44.2, places=6)
+        self.assertAlmostEqual(c.point(5).setpoint, 44.0 + 4.0 / 501, places=6)
 
     def test_a_fresh_point_moves_faster(self):
+        # Et ungt punkt er gennemsnittet af sine målinger: den tredje vejer 1/3.
         c = curve({5: (44.0, 2.0)})
         c.learn(outdoor=5.0, setpoint=48.0)
 
-        self.assertAlmostEqual(c.point(5).setpoint, 44.6, places=6)
+        self.assertAlmostEqual(c.point(5).setpoint, 44.0 + 4.0 / 3, places=6)
+
+    def test_a_cold_night_does_not_rewrite_a_well_known_point(self):
+        # Natten til 4. november: 127 målinger på 43,7 ved 7 °C flyttede et
+        # punkt med 1.545 bag sig fra 41,6 til 43,7. Nu må de kun flytte det
+        # en brøkdel af vejen.
+        c = curve({7: (41.6, 1545.0)})
+        for _ in range(127):
+            c.learn(outdoor=7.0, setpoint=43.7)
+
+        self.assertLess(c.point(7).setpoint, 41.9)
+
+    def test_a_point_still_follows_a_lasting_change(self):
+        # Gulvet under vægten: et punkt med titusinder af målinger skal stadig
+        # kunne følge med, hvis UVR'ens kurve bliver stillet om.
+        c = curve({10: (38.0, 11000.0)})
+        for _ in range(3000):
+            c.learn(outdoor=10.0, setpoint=40.0)
+
+        self.assertGreater(c.point(10).setpoint, 39.8)
 
     def test_a_leap_above_a_settled_point_is_hot_water_not_weather(self):
         # Ti grader over et punkt med 500 målinger bag sig er ikke vejret.

@@ -354,6 +354,20 @@ class VesselProfileTest(unittest.TestCase):
 
 
 class CurveTest(unittest.TestCase):
+    def test_an_error_code_is_neither_learned_nor_loaded(self):
+        # Nibes -3276,8. Her forlænges linjen uden for spændet, så et punkt
+        # derude ville trække frostens forbrug med sig.
+        curve = LoadCurve()
+        curve.learn(0.0, 4.0)
+        curve.learn(10.0, 2.0)
+
+        curve.learn(-3276.8, 1.0)
+        self.assertEqual(curve.outdoor_temps, [0, 10])
+
+        raw = curve.to_raw()
+        raw["-3277"] = {"kw": 1.0, "count": 1.0}
+        self.assertEqual(LoadCurve.from_raw(raw).outdoor_temps, [0, 10])
+
     def test_it_learns_a_point_per_degree(self):
         curve = LoadCurve()
 
