@@ -736,6 +736,8 @@ class Varmeopt:
             grid=prices.get("grid"),
             charge_window=self._charge_window(),
             current_source=command.source,
+            # Nu-rækkens COP er slået op på målingen, de andre på udsigten.
+            outdoor_at=lambda m: outdoor_temp if m == 0 else self._temperature_at(m),
         )
 
         self.status.update(

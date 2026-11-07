@@ -289,6 +289,16 @@ class ChargingSlotsTest(unittest.TestCase):
     def test_a_block_that_starts_now_marks_the_row_we_stand_in(self):
         self.assertIn(0, self.marked((0, 45)))
 
+    def test_each_row_carries_its_own_outdoor_temperature(self):
+        rows = planner().project(plan(90, 90, 90), cop_now=4.5, outdoor_at=lambda m: -m / 30)
+
+        self.assertEqual([r.outdoor_temp for r in rows], [0.0, -1.0, -2.0])
+
+    def test_without_a_lookup_the_rows_have_no_temperature(self):
+        rows = planner().project(plan(90, 90), cop_now=4.5)
+
+        self.assertEqual([r.outdoor_temp for r in rows], [None, None])
+
     def test_no_block_marks_nothing(self):
         self.assertEqual(self.marked(None), [])
         self.assertEqual(self.marked((120, 120)), [])

@@ -988,6 +988,37 @@ class ForecastTest(unittest.TestCase):
         self.assertIsNone(self.app.outdoor_bias.fixed)
         self.assertTrue(any("-3276.8" in line for line in logs.output))
 
+    def _with_plan(self):
+        o = self.app.options
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {
+                "raw": {
+                    "rows": [
+                        {"state": "", "import_rate": 100, "export_rate": 50}
+                        for _ in range(24)
+                    ]
+                }
+            },
+            "p",
+        )
+
+    def test_the_plan_rows_show_measured_now_and_forecast_later(self):
+        self._with_plan()
+        # BT1 måler 13, udsigten siger 15: nu-rækken skal vise målingen, de
+        # senere udsigten oversat til BT1 - det COP'en er regnet på.
+        self.ha._states[OUT] = State(OUT, "13.0", {}, "u")
+        asyncio.run(self.app.cycle(self.ha))
+
+        rows = self.app.status["projection"]
+        self.assertGreater(len(rows), 1)
+        self.assertEqual(rows[0].outdoor_temp, 13.0)
+        self.assertAlmostEqual(
+            rows[1].outdoor_temp, self.app._temperature_at(rows[1].minutes), places=6
+        )
+        self.assertLess(rows[-1].outdoor_temp, rows[0].outdoor_temp)
+
     def test_without_a_forecast_there_is_no_answer(self):
         self.ha.forecast_response = {}
         asyncio.run(self.app.cycle(self.ha))

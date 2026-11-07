@@ -94,7 +94,7 @@ class SwitchNoteTest(unittest.TestCase):
         }
 
         self.assertEqual(len(set(notes.values())), 3)
-        self.assertIn("for dyr", notes["net"])
+        self.assertIn("VP er for dyr", notes["net"])
         self.assertIn("sælges", notes["eksport"])
         self.assertIn("batteriet", notes["batteri"])
 
@@ -150,6 +150,19 @@ class PlanTableTest(unittest.TestCase):
         self.assertIn("<th>Predbat</th>", html)
         self.assertIn("holdchrg", html)
         self.assertIn("16 %", html)
+
+    def test_the_outdoor_temperature_stands_between_heat_and_source(self):
+        html = self.html([self.row(outdoor_temp=-3.25)])
+
+        self.assertIn("<th>Varme</th><th>Ude</th><th>Kilde</th>", html)
+        self.assertIn(">-3.2 °<", html)
+        self.assertLess(html.index("0.58"), html.index("-3.2 °"))
+        self.assertLess(html.index("-3.2 °"), html.index("varmepumpe</td>"))
+
+    def test_without_a_temperature_the_cell_is_a_dash(self):
+        html = self.html([self.row(outdoor_temp=None)])
+
+        self.assertIn('<td class="raw">—</td><td style="color:', html)
 
     def test_a_charging_slot_just_says_lad_op(self):
         # Kort, som Predbats egen plan. Hvorfor der lades, står på

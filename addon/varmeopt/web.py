@@ -521,6 +521,7 @@ class WebUI:
                 f"<td class=\"raw\">{_fmt(row.soc_percent, '%', 0)}</td>"
                 f'<td class="raw">{_esc(row.state) or "—"}</td>'
                 f"<td>{_fmt(row.heat_price, '', 2)}</td>"
+                f"<td class=\"raw\">{_fmt(row.outdoor_temp, '°', 1)}</td>"
                 f'<td style="color:{colour};font-weight:600">'
                 f"{_esc(row.source)}</td>"
                 f'<td class="why">{_highlight_basis(why)}</td></tr>'
@@ -529,7 +530,7 @@ class WebUI:
         head = (
             "<thead><tr><th>Tid</th><th>Marginal</th><th>Import</th>"
             "<th>Eksport</th><th>SOC</th><th>Predbat</th><th>Varme</th>"
-            "<th>Kilde</th><th>Hvorfor</th></tr></thead>"
+            "<th>Ude</th><th>Kilde</th><th>Hvorfor</th></tr></thead>"
         )
         summary = _decision_banner(decision, status.get("command"))
         hours = rows[-1].minutes / 60
@@ -537,12 +538,12 @@ class WebUI:
         body = (
             f"{heading}"
             f'<p class="sub">{len(rows)} halvtimer frem, {hours:.0f} timer · '
-            "priserne er Predbats, COP fremad regnes på nuværende udetemperatur</p>"
+            "priserne er Predbats, COP fremad regnes på vejrudsigten</p>"
             f"{summary}"
             f"{self._rules(status, decision)}"
             f'<div class="scroll"><table class="plan">{head}'
             f"<tbody>{''.join(cells)}</tbody></table></div>"
-            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod, og «lad op» de halvtimer opladningen ventes at ligge i — en hensigt der regnes forfra hvert minut, ikke et skema.</p>'
+            '<p class="legend">Alle priser i kr/kWh. <b>Marginal</b> er hvad en ekstra kilowatt-time reelt koster i den time — den er hverken import eller eksport, men den af dem der gælder, og «hvorfor» siger hvilken. <b>SOC</b> og <b>Predbat</b> er planens egne: ladetilstanden og hvad Predbat har tænkt sig, så det kan ses hvorfor strømmen kommer hvor den kommer fra — «holdchrg» er afladning slået fra, og så køber huset fra nettet. <b>Ude</b> er den temperatur COP er regnet på: målt i nu-rækken, ellers vejrudsigten korrigeret til BT1. Jo koldere, jo lavere COP og jo dyrere varme ved samme strømpris, så en billig time kan godt gå til pillefyret, hvis den er kold nok. Bjælken viser marginalen i forhold til den dyreste time i vinduet. «Hertil» markerer den time planlæggeren regner imod, og «lad op» de halvtimer opladningen ventes at ligge i — en hensigt der regnes forfra hvert minut, ikke et skema.</p>'
         )
         return _page("Plan", "plan", body)
 
@@ -1052,7 +1053,7 @@ def _switch_note(row: Any) -> str:
         return "skifter til pillefyr, strømmen sælges hellere"
     if row.power == "batteri":
         return "skifter til pillefyr, batteriet er for dyrt"
-    return "skifter til pillefyr, strømmen er for dyr"
+    return "skifter til pillefyr, VP er for dyr"
 
 
 def _charge_because(target: Any) -> str:

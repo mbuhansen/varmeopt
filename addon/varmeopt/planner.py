@@ -188,6 +188,9 @@ class Projection:
     import_price: float | None = None
     export_price: float | None = None
     heat_price: float | None = None
+    # Temperaturen COP'en i rækken er regnet på. Uden den ligner en billig
+    # halvtime på pillefyr en fejl, når det er frosten der gør varmen dyr.
+    outdoor_temp: float | None = None
     # Predbats egen række: hvad planen siger, og ved hvilken ladetilstand.
     # Uden de to kan man ikke se *hvorfor* kilden er som den er - at der fx
     # står hold charge ved 37 % - uden at gå over i Predbats egen tabel.
@@ -1651,13 +1654,13 @@ class Planner:
         grid: Any = None,
         charge_window: tuple[int, int] | None = None,
         current_source: str | None = None,
+        outdoor_at: Any = None,
     ) -> list[Projection]:
         """Halvtime for halvtime: pris, varmepris og hvilken kilde der vinder.
 
-        COP fremad regnes på den nuværende udetemperatur, fordi vi ikke har en
-        vejrudsigt. Over nogle timer flytter prisen sig langt mere end COP'en,
-        så rangordenen mellem timerne holder — men de absolutte varmepriser
-        længst ude skal læses med det forbehold.
+        COP fremad kommer fra ``cop_later`` og falder tilbage på den vi har
+        nu, når der ingen udsigt er. ``outdoor_at`` er temperaturen bag samme
+        tal; den vises kun og indgår ikke i valget af kilde.
 
         Hysteresen følger rækkerne: et tæt løb afgøres af rækken før, og
         første række af ``current_source``, den kilde der står nu.
@@ -1688,6 +1691,7 @@ class Planner:
                     import_price=slot.import_price if slot else None,
                     export_price=slot.export_price if slot else None,
                     heat_price=heat,
+                    outdoor_temp=outdoor_at(minutes) if outdoor_at else None,
                     state=slot.state if slot else "",
                     soc_percent=slot.soc_percent if slot else None,
                     source=source,
