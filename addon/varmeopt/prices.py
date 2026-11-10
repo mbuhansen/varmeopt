@@ -55,6 +55,17 @@ RESERVE_SLOTS = 2
 # til at afgøre om en halvtime ligger i bund.
 FLOOR_TOLERANCE = 0.5
 
+# Under hold charge er tolerancen større. Planen holder batteriet et par
+# point over Predbats grænse - afrundet til hele procent - og de point er
+# under 1 kWh på anlæggets 42 kWh. En varmepumpe der kører en aften, bruger
+# flere kilowatt-timer end det, og så nås grænsen i den første
+# hold-halvtime, ikke der hvor planen tilfældigvis rammer den på procenten.
+#
+# Den 10. november kl. 09:20 lå planen på 10 % mod en grænse på 8 % fra
+# kl. 21, og først kl. 00 på 9 mod 9. Strømmen kl. 17-21 blev «købt
+# tilbage» til 2,26 ved midnat, mens den reelt manglede kl. 21 til 3,25.
+HOLD_TOLERANCE = 2.5
+
 # Over den her ladetilstand er en flad kurve ikke en reserve. Ligger planen
 # stille på 70 %, er det fordi solen dækker huset. En reserve er et lavt tal.
 MAX_RESERVE = 25.0
@@ -259,6 +270,12 @@ class Slot:
     import_price: float | None
     export_price: float | None
     soc_percent: float | None
+    # Rækkens eget mål - ``state_target`` i Predbats plan. I en
+    # eksporthalvtime er det hvor langt der sælges ned til. Det er det
+    # samme tal som ``best_export_limit``, men den har kun trin på hele
+    # timer, og en enkelt eksporthalvtime kl. 09:30 eller 17:30 stod der
+    # som 100: intet salg. Rækken siger det for hver halvtime.
+    target: float | None = None
 
     @property
     def minutes_ahead(self) -> int:
@@ -524,6 +541,7 @@ class Plan:
                     import_price=import_rate / 100 if import_rate is not None else None,
                     export_price=export_rate / 100 if export_rate is not None else None,
                     soc_percent=_number(row.get("soc_percent")),
+                    target=_number(row.get("state_target")),
                 )
             )
         plan = cls(
@@ -593,6 +611,8 @@ class Plan:
                     "soc": s.soc_percent,
                     "floor": self._floor(s),
                     "export_limit": self._limit_at(self.export_limits, s),
+                    "target": s.target,
+                    "sells": self.sells(s),
                 }
                 for s in self.slots
             ],
@@ -678,7 +698,39 @@ class Plan:
         """
         if slot.soc_percent is None:
             return False
-        return slot.soc_percent <= self._floor(slot) + FLOOR_TOLERANCE
+        floor = self._floor(slot)
+        # Kun et rigtigt hold-gulv får den store tolerance - se
+        # ``HOLD_TOLERANCE``. Er gulvet anlæggets nulpunkt, er det de 5 %.
+        held = slot.word in _HOLD_WORDS and floor > self.empty_percent
+        tolerance = HOLD_TOLERANCE if held else FLOOR_TOLERANCE
+        return slot.soc_percent <= floor + tolerance
+
+    def _sale_floor(self, slot: Slot) -> float:
+        """Hvor langt der sælges ned til i en eksporthalvtime.
+
+        Rækkens eget mål først, så Predbats trappe, og først uden nogen af
+        dem reserven fra kurven eller anlæggets nulpunkt.
+        """
+        if slot.target is not None:
+            return slot.target
+        limit = self._limit_at(self.export_limits, slot)
+        if limit is not None:
+            return limit
+        return self.reserve if self.reserve is not None else self.empty_percent
+
+    def sells(self, slot: Slot) -> bool:
+        """Sælger halvtimen faktisk noget af batteriet?
+
+        «exp» er ikke nok. Står ladetilstanden allerede på eller under
+        grænsen, sælges der intet, og så er halvtimen en almindelig
+        halvtime hvor inverteren dækker huset. Uden ladetilstand kan det
+        ikke afgøres her, og så er ordet svaret.
+        """
+        if not slot.exporting or slot.frozen or slot.export_price is None:
+            return False
+        if slot.soc_percent is None:
+            return True
+        return slot.soc_percent > self._sale_floor(slot)
 
     def _limit_at(self, limits: Limits | None, slot: Slot) -> float | None:
         """Grænsen der gælder når halvtimen begynder, eller ``None``.
@@ -827,7 +879,10 @@ class Plan:
         #    mens batterigrenen med rette værdisatte energien til 3,04 mod
         #    aftenens top - så hvert minut hvor huset tilfældigvis sendte
         #    strøm ud, faldt prisen til under det halve og beslutningen vippede.
-        if slot.exporting and not slot.frozen:
+        #
+        #    Og en eksport der ikke sælger noget, er heller ikke et salg -
+        #    se ``sells``.
+        if self.sells(slot):
             if slot.export_price is not None:
                 return Price(
                     slot.export_price,
@@ -978,7 +1033,12 @@ class Plan:
             if runs_dry is not None and candidate.index > runs_dry.index:
                 break
             price = candidate.export_price
-            selling = candidate.exporting and not candidate.frozen and price is not None
+            # En eksporthalvtime der allerede står på sin grænse, sælger
+            # intet og er ikke et salg. Den 10. november kl. 09:20 var den
+            # næste «blok» én halvtime kl. 09:30 som - læst af den timevise
+            # trappe - stod på 100, og så blev salget kl. 16 til 3,94 aldrig
+            # set: strømmen faldt igennem til genkøbet på 2,26.
+            selling = self.sells(candidate)
             if not selling:
                 # Blokken er slut ved første halvtime der ikke sælger.
                 if best is not None:
@@ -1054,11 +1114,9 @@ class Plan:
         # Kender vi Predbats eksportgrænse, er det den: ``best_export_limit``
         # er hvor langt der sælges ned til i salgets halvtime. Reserven fra
         # kurven er kun tilbagefaldet.
-        floor_for_sale = self._limit_at(self.export_limits, export)
-        if floor_for_sale is None:
-            floor_for_sale = (
-                self.reserve if self.reserve is not None else self.empty_percent
-            )
+        #
+        # Rækkens eget mål går forud for trappen - se ``Slot.target``.
+        floor_for_sale = self._sale_floor(export)
         if soc <= floor_for_sale:
             return None
         minutes = export.minutes_ahead - slot.minutes_ahead

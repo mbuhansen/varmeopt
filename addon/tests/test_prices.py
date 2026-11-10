@@ -375,6 +375,112 @@ class PredbatLimitsTest(unittest.TestCase):
         self.assertIsNone(limit_series(None))
 
 
+class November10Test(unittest.TestCase):
+    """Den 10. november: høje elpriser, Predbat sælger batteriet om
+    eftermiddagen og efterlader kun til huset uden varmepumpe."""
+
+    MIDNIGHT = "2026-11-10T00:00:00+0100"
+
+    def test_the_hold_limit_is_reached_at_the_first_hold(self):
+        # Planen kl. 09:20, fra kl. 17. Batteriet ligger 2 point over
+        # hold-grænsen på 8 % fra kl. 21 og rammer først grænsen på procenten
+        # kl. 00, hvor den er hævet til 9. Strømmen kl. 17 blev «købt
+        # tilbage» dér til 2,26 - men det er under 1 kWh luft, og den
+        # manglende strøm købes kl. 21 til 3,25.
+        demand = [(619, 20), (619, 19), (591, 18), (591, 17),
+                  (530, 15), (530, 14), (494, 13), (494, 11)]
+        rows = [row(state="demand", import_rate=rate, soc=soc) for rate, soc in demand]
+        hold = [(325, 10), (325, 9), (294, 9), (294, 9), (266, 9), (266, 9)]
+        rows += [row(state="holdchrg", import_rate=rate, soc=soc) for rate, soc in hold]
+        rows += [row(state="holdchrg", import_rate=226, soc=9), row(state="chrg", import_rate=214, soc=9)]
+        rows = [dict(r, slot_minute=1020 + 30 * i) for i, r in enumerate(rows)]
+        charge = {"results": {
+            "2026-11-10T00:00:00+0100": 0,
+            "2026-11-10T21:00:00+0100": 8,
+            "2026-11-11T00:00:00+0100": 9,
+            "2026-11-11T00:30:00+0100": 36,
+        }}
+        p = Plan.from_predbat(
+            {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+            charge_limits=limit_series(charge),
+        )
+
+        evening = p.marginal(0)
+        self.assertEqual(evening.reason, "købes tilbage")
+        self.assertAlmostEqual(evening.kr_per_kwh, 3.25, places=3)
+
+    def test_a_hold_at_the_plants_own_floor_keeps_the_small_tolerance(self):
+        # Intet hold-gulv (grænsen 0): gulvet er 5 %, og 7 % er ikke bunden.
+        rows = [
+            dict(row(state="demand", soc=20), slot_minute=1020),
+            dict(row(state="holdchrg", import_rate=325, soc=7), slot_minute=1050),
+            dict(row(state="chrg", import_rate=150, soc=7), slot_minute=1080),
+        ]
+        p = Plan.from_predbat(
+            {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+            charge_limits=limit_series({"results": {self.MIDNIGHT: 0}}),
+        )
+
+        self.assertFalse(p._depleted(p.slots[1]))
+
+    def morning(self, target):
+        # Planen kl. 09:20: en enkelt eksporthalvtime kl. 09:30 ned til 51 %,
+        # og ``best_export_limit`` - som kun har trin på hele timer - står
+        # på 100 hele dagen.
+        rows = [
+            dict(row(state="demand", import_rate=540, export_rate=376, soc=54)),
+            dict(row(state="exp", import_rate=540, export_rate=376, soc=54), state_target=target),
+            dict(row(state="frzexp", import_rate=489, export_rate=336, soc=51)),
+            dict(row(state="frzexp", import_rate=489, export_rate=336, soc=51)),
+            dict(row(state="demand", import_rate=467, export_rate=317, soc=50)),
+            dict(row(state="chrg", import_rate=214, export_rate=138, soc=40)),
+        ]
+        rows = [dict(r, slot_minute=540 + 30 * i) for i, r in enumerate(rows)]
+        return Plan.from_predbat(
+            {"raw": {"rows": rows, "time": self.MIDNIGHT}},
+            export_limits=limit_series({"results": {self.MIDNIGHT: 100}}),
+        )
+
+    def test_the_rows_own_target_makes_a_lone_half_hour_a_sale(self):
+        now = self.morning("51").marginal(0)
+
+        self.assertEqual(now.reason, EXPORT_REASON)
+        self.assertAlmostEqual(now.kr_per_kwh, 3.76 * 0.9, places=3)
+
+    def test_an_empty_target_falls_back_to_the_series(self):
+        # Ikke-eksportrækker har ``state_target`` "" - det er ingenting.
+        p = self.morning("")
+
+        self.assertIsNone(p.slots[1].target)
+        self.assertNotEqual(p.marginal(0).reason, EXPORT_REASON)
+
+    def test_an_export_at_its_limit_is_not_a_sale(self):
+        # «exp» med grænsen over ladetilstanden sælger intet: halvtimen er en
+        # almindelig halvtime, ikke eksportprisen.
+        p = plan(
+            dict(row(state="exp", export_rate=370, soc=28), state_target="30"),
+            row(import_rate=150, soc=27),
+        )
+
+        self.assertNotEqual(p.marginal(0).reason, EXPORT_REASON)
+        self.assertFalse(p.sells(p.slots[0]))
+
+    def test_a_sale_that_sells_nothing_does_not_hide_the_one_after(self):
+        # En billig «exp» der intet sælger, var før den næste blok - og så
+        # blev det dyre salg bagefter aldrig set.
+        p = plan(
+            row(soc=50),
+            dict(row(state="exp", export_rate=100, soc=50), state_target="60"),
+            row(soc=49),
+            dict(row(state="exp", export_rate=400, soc=48), state_target="20"),
+            row(state="chrg", import_rate=100, soc=20),
+        )
+
+        now = p.marginal(0)
+        self.assertEqual(now.reason, EXPORT_REASON)
+        self.assertAlmostEqual(now.kr_per_kwh, 3.60, places=3)
+
+
 class MarginalTest(unittest.TestCase):
     def test_planned_export_costs_the_lost_income(self):
         p = plan(row(state="exp", export_rate=140))

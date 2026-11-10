@@ -1421,7 +1421,9 @@ class Planner:
             slot = plan.at(minutes)
             if slot is None:
                 break
-            if slot.exporting and not slot.frozen:
+            # En eksporthalvtime der står på sin grænse, sælger intet - se
+            # ``Plan.sells``.
+            if plan.sells(slot):
                 if first is None:
                     first = minutes
                 last = minutes
