@@ -22,7 +22,7 @@ from typing import Any
 
 import aiohttp
 
-from . import VERSION, selfupdate
+from . import VERSION, selfupdate, vpforecast
 from .capacity import ChargeRate
 from .charge import MAX_DELIVERED_SHARE, NO_PLAN, ChargePlan, slot_start
 from .cop import CopTable
@@ -106,6 +106,10 @@ SENSOR_USAGE_TOTAL = "sensor.varmeopt_forbrug_i_alt"
 # ``pelletload``.
 SENSOR_PELLET_LOAD = "sensor.varmeopt_pille_som_el"
 SENSOR_PELLET_POWER = "sensor.varmeopt_pille_som_el_effekt"
+# Varmepumpens forventede strøm, til Predbats ``load_forecast`` som
+# ``sensor.varmeopt_vp_prognose$external``. Predbat trækker pumpens målte
+# strøm ud af sin egen historik og lægger den her oveni - se vpforecast.py.
+SENSOR_VP_FORECAST = "sensor.varmeopt_vp_prognose"
 # Opladningen som sit eget flag. Den står også som attribut på
 # beslutningen, men et flag man kan spørge direkte om, er lettere at koble
 # videre end en attribut man skal grave ud - og en styring der er let at
@@ -368,6 +372,14 @@ class Varmeopt:
         # Hvornår kompressoren sidst startede. None når den står stille.
         self._pump_started_at: float | None = None
         self._pump_was_running = False
+        # Kilden pr. halvtime i prognosen til Predbat, husket på tværs af
+        # cyklusser - se ``vpforecast.SourceMemory``. Samme bånd og samme
+        # antal Predbat-beregninger som styringen bruger.
+        self.vp_memory = vpforecast.SourceMemory(
+            band=options.source_hysteresis, confirm=options.control_confirm_plans
+        )
+        self.vp_forecast: vpforecast.Forecast | None = None
+        self._vp_inputs: vpforecast.Inputs | None = None
 
     # ------------------------------------------------------------------ cyklus
 
@@ -739,6 +751,9 @@ class Varmeopt:
             # Nu-rækkens COP er slået op på målingen, de andre på udsigten.
             outdoor_at=lambda m: outdoor_temp if m == 0 else self._temperature_at(m),
         )
+        self._update_vp_forecast(
+            projection, command, prices, balance, lookup, outdoor_temp
+        )
 
         self.status.update(
             flow_temp=flow_temp,
@@ -903,6 +918,7 @@ class Varmeopt:
             await self._safely("forbrug", self._publish_usage(ha))
         if ha is not None:
             await self._safely("pillefyr som el", self._publish_pellet_load(ha))
+            await self._safely("vp-prognose", self._publish_vp_forecast(ha))
 
         if prices.get("price_now") is not None and ha is not None:
             price = prices["price_now"]
@@ -1786,6 +1802,18 @@ class Varmeopt:
             },
         )
 
+        # Til sidst prognosen til Predbat - efter de to flag, der er de
+        # farlige at efterlade. Den står ellers frosset på det sidst udgivne, og
+        # Predbat har ingen aldersgrænse. Varmepumpe overalt er den sikre
+        # side: Node-RED kører pumpen, når vi ikke gør.
+        if self._vp_inputs is not None:
+            try:
+                await self._publish_vp_forecast(
+                    ha, vpforecast.fallback(replace(self._vp_inputs, now=time.time()))
+                )
+            except Exception as err:  # noqa: BLE001 - et stop må ikke fejle her
+                log.warning("kunne ikke skrive tilbagefaldet til vp-prognosen: %s", err)
+
     async def _release_one(
         self, ha: HomeAssistant, entity: str, state: Any, attributes: dict[str, Any]
     ) -> None:
@@ -2211,6 +2239,85 @@ class Varmeopt:
                 "spa_kwh": round(today.spa, 2),
                 "i_går_kwh": None if yesterday is None else round(yesterday.total, 2),
                 "note": "varmen ud af lageret, ikke det varmepumpen lavede",
+            },
+        )
+
+    def _update_vp_forecast(
+        self,
+        projection: Any,
+        command: Any,
+        prices: dict[str, Any],
+        balance: Any,
+        lookup: Any,
+        outdoor_temp: float | None,
+    ) -> None:
+        """Regn prognosen til Predbat - se vpforecast.py.
+
+        Nu-halvtimen står med den kilde vagten faktisk holder, ikke
+        projektionens. Resten går gennem hukommelsen, så en halvtime først
+        skifter når to Predbat-beregninger har sagt det samme. Står
+        styringen ikke til - slået fra, eller i opvarmningen efter en
+        genstart - kører Node-RED pumpen, og så er prognosen varmepumpe
+        overalt.
+        """
+        now = time.time()
+        base = slot_start(now)
+        rows = [
+            (base + row.minutes * 60, row.source, row.heat_price)
+            for row in projection
+            if row.minutes > 0
+        ]
+        sources = self.vp_memory.update(
+            base, rows, self.planner.pellet_price, prices.get("plan_stamp")
+        )
+        if command.source:
+            sources[base] = command.source
+        inputs = vpforecast.Inputs(
+            now=now,
+            sources=sources,
+            demand_kw_at=self._demand_at,
+            cop_at=self._cop_at,
+            charge_cop_at=self._charge_cop_at,
+            vessel_kwh=self.house_load.vessels.kwh_between,
+            acting=bool(command.acting and prices.get("plan") is not None),
+            fallback_demand_kw=self.house_load.kw_at(now, outdoor_temp),
+            cop_now=lookup.cop if lookup is not None else None,
+            hp_power_kw=balance.hp_power_kw if balance is not None else None,
+            charge_window=self._charge_window(),
+            charge_kw=self.charge_rate.effective_kw,
+        )
+        self._vp_inputs = inputs
+        self.vp_forecast = vpforecast.build(inputs)
+        forecast = self.vp_forecast
+        self.status["vp_forecast"] = {
+            "kilde": forecast.reason,
+            "24t_kwh": round(forecast.kwh_within(24), 2),
+            "halvtimer": [
+                [int((at - base) / 60), source, round(kwh, 3)]
+                for at, source, kwh in forecast.slots[:48]
+            ],
+        }
+
+    async def _publish_vp_forecast(
+        self, ha: HomeAssistant, forecast: vpforecast.Forecast | None = None
+    ) -> None:
+        """Prognosen som Predbat læser den: ``$external`` i PredHeats format."""
+        forecast = forecast if forecast is not None else self.vp_forecast
+        if forecast is None:
+            return
+        on_vp = sum(1 for _, source, _ in forecast.slots[:48] if source == vpforecast.VP)
+        await ha.set_state(
+            SENSOR_VP_FORECAST,
+            round(forecast.kwh_within(24), 2),
+            {
+                "friendly_name": "Varmeopt varmepumpe-prognose",
+                "unit_of_measurement": "kWh",
+                "icon": "mdi:heat-pump",
+                "external": forecast.external(),
+                "kilde": forecast.reason,
+                "varmepumpe_halvtimer_24t": on_vp,
+                "note": "varmepumpens forventede strøm de næste 24 t; "
+                "Predbat læser attributten external",
             },
         )
 

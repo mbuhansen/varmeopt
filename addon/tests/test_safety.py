@@ -12,7 +12,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from varmeopt.__main__ import SENSOR_CHARGE, SENSOR_DECISION, Varmeopt
+from varmeopt.__main__ import SENSOR_CHARGE, SENSOR_DECISION, SENSOR_VP_FORECAST, Varmeopt
 from varmeopt.cop import Cell, CopTable
 from varmeopt.ha import HaError, HomeAssistant
 from varmeopt.planner import Planner
@@ -129,7 +129,9 @@ class ReleaseOnShutdownTest(unittest.TestCase):
         asyncio.run(self.app.release_control(self.ha))
 
         published = [entity for entity, _ in self.ha.published]
-        self.assertEqual(published, [SENSOR_CHARGE, SENSOR_DECISION])
+        # Prognosen til Predbat kommer til sidst - efter de to flag, der er
+        # de farlige at efterlade. Se ``release_control``.
+        self.assertEqual(published, [SENSOR_CHARGE, SENSOR_DECISION, SENSOR_VP_FORECAST])
         self.assertIs(self.ha.attributes[SENSOR_DECISION]["styrer"], False)
         self.assertIsNone(self.ha.attributes[SENSOR_DECISION]["styr_til"])
         # Opladningsflaget er det farligste at efterlade tændt: en frossen

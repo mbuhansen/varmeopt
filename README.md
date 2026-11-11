@@ -266,7 +266,7 @@ siges i loggen ved opstart.
 | `entity_hp_power` | `sensor.node_1_input_15` | Varmepumpens elforbrug. Gange målt COP giver dens varmeydelse |
 | `entity_solar_power` | `sensor.solvarme_produktion` | Solvarmens ydelse. **Modelleret**, ikke målt: en flowkurve i UVR'en efter pumpens PWM-signal, uden digital flowmåler |
 | `entity_element_power`, `entity_boiler_power` | ACthor, NBE-fyr | Elpatroner og pillefyr melder selv deres effekt |
-| `entity_pellet_kg_today` | `sensor.nbe_boiler_49812_consumption_daily` | Pillefyrets kg i dag. Regnes om til den strøm varmepumpen ville have brugt (kg × `pellet_kwh_per_kg` × `pellet_efficiency` ÷ rumvarmens COP) og udgives som `sensor.varmeopt_pille_som_el` (kWh, nulstilles aldrig) og `sensor.varmeopt_pille_som_el_effekt` (W). Læg dem ved siden af husets måler i Predbats `apps.yaml`, så en pilledag ikke læres som et hus der bruger mindre strøm: `load_today: [<husets måler>, sensor.varmeopt_pille_som_el]` og `load_power: [<husets effekt>, sensor.varmeopt_pille_som_el_effekt]`. **Vent mindst 8 døgn efter udrulningen** før de tilføjes: Predbat bruger den *yngste* entitets alder for hele listen, og en sensor under et døgn gammel tømmer ML-prognosens hentning. Intet går tabt ved at vente — historikken ligger i Home Assistant og læses bagud, når de kommer på |
+| `entity_pellet_kg_today` | `sensor.nbe_boiler_49812_consumption_daily` | Pillefyrets kg i dag. Regnes om til den strøm varmepumpen ville have brugt (kg × `pellet_kwh_per_kg` × `pellet_efficiency` ÷ rumvarmens COP) og udgives som `sensor.varmeopt_pille_som_el` (kWh, nulstilles aldrig) og `sensor.varmeopt_pille_som_el_effekt` (W). **Læg dem ikke i Predbat længere** — fra 0.99.0 får Predbat i stedet varmepumpens forventede strøm, se «Predbat: varmepumpens strøm» nedenfor. Sensorerne bliver ved med at blive udgivet til statistik |
 | `entity_vvb_top`, `entity_vvb_bottom` | `sensor.node_1_input_7`, `_8` | Varmtvandsbeholderen — eget lager ved siden af buffertankene |
 | `vvb_liters` | 0 | Beholderens rumfang. Nul betyder «regn ikke energi på den» — to temperaturer er mere ærligt end en kWh-værdi bygget på et gæt |
 | `entity_solar_today` | `sensor.solvarme_produktion_idag` | Døgntæller for solvarmen. Sammen med Solcast kalibrerer den skalafaktoren |
@@ -295,6 +295,56 @@ siges i loggen ved opstart.
 | `control_confirm_plans` | 2 | Hvor mange Predbat-beregninger en ny kilde skal holde på, før den tæller. Prisen skifter i Predbats takt, cirka hvert femte minut, så tre minutter kan ikke skelne en plan der kun står i fire minutter fra en der bliver stående. 1 slår det fra |
 | `control_warmup_minutes` | 5 | Efter opstart: lad tabellerne komme på plads før der styres |
 | `auto_update` | `false` | Hent nyeste kode fra master ved hver opstart |
+
+### Predbat: varmepumpens strøm
+
+Predbat planlægger batteriet efter det forbrug den forventer. Varmeopt
+fortæller den hvad varmepumpen faktisk kommer til at bruge, så Predbat
+hverken sælger batteriet tomt før en aften på varmepumpe eller holder strøm
+tilbage til en aften på pillefyr. Det sker i to led, og begge er efterprøvet
+i Predbats kode:
+
+1. **Varmepumpens målte strøm trækkes ud af Predbats historik.** Predbats
+   ML lærer så huset uden varmepumpe. Det gøres med `iboost_energy_today`,
+   som Predbat trækker fra lasten før ML'en træner — også når `iboost_enable`
+   er slået fra (`load_ml_component.py: iboost_subtract_active`). Tælleren
+   skal være kWh og nulstilles hver nat; UVR'ens «VP dagsforbrug» er det.
+2. **Varmeopts prognose lægges oveni.** `sensor.varmeopt_vp_prognose` bærer
+   attributten `external` i PredHeats format: kumuleret kWh pr. halvtime, 50
+   timer frem. Predbat lægger den til ML-prognosen (`fetch.py:
+   fetch_extra_load_forecast`) og ganger med `load_scaling` som resten.
+
+```yaml
+  load_today:
+    - sensor.hostname_scb_5313dd_home_consumption_total
+  load_power:
+    - sensor.hostname_scb_5313dd_home_power
+  iboost_energy_today: sensor.node_1_analog_logging_20
+  load_forecast:
+    - sensor.varmeopt_vp_prognose$external
+```
+
+**Genstart Predbat** efter ændringen. ML'ens egen database kasseres, fordi
+udtrækket skifter (`load_ml_component.py`: «iBoost subtraction mismatch»), og
+ML'en starter forfra på den historik Home Assistant har — omkring ti dage.
+De første dage er Predbats prognose mere usikker.
+
+Prognosen pr. halvtime: på varmepumpe husets varmebehov ÷ COP plus det
+beholderen og spaen tager ud af lageret ÷ COP'en ved ladetemperatur; i en
+opladningsblok blokkens ladeeffekt ÷ lade-COP; på pillefyr kun standby. En
+halvtime skifter først kilde i prognosen, når varmeprisen er krydset helt
+over båndet `source_hysteresis` om pillefyrets pris, og `control_confirm_plans`
+Predbat-beregninger har sagt det samme — ellers skubber de to til hinanden,
+fordi varmeopts valg bygger på Predbats priser og omvendt. Uden plan, med
+styringen slået fra, bag projektionen og når add-on'en stopper, er
+prognosen **varmepumpe overalt**: mangler pumpen i Predbats plan, sælges
+batteriet tomt; står den der for meget, koster det et hold på næsten
+ingenting.
+
+UVR'ens dagsforbrug nulstilles kl. 23:57, lige uden for Predbats
+midnatsvindue (23:58–00:06). På en dag hvor varmepumpen har brugt under
+1 kWh, går op til 1 kWh af næste dags første forbrug tabt i ML'ens historik.
+Kan UVR'en nulstille ved midnat, forsvinder det.
 
 ## Opdatering
 
