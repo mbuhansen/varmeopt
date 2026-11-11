@@ -1092,6 +1092,11 @@ class Varmeopt:
             self._bt12_note = "venter på første måling efter start"
             return self._bt12_note
         if stamp is not None and stamp == self._bt12_stamp:
+            # Ingen ny måling. Står pumpen, siges det - ellers blev noten fra
+            # sidste vindue stående: den 11. november stod der «pumpen har
+            # kørt 6 min» hele eftermiddagen, mens effekten var 0.
+            if not _running(measured_cop):
+                return "ignoreret: pumpen står stille"
             return self._bt12_note
 
         flow = self._bt12_sum / self._bt12_count if self._bt12_count else None
@@ -1643,6 +1648,12 @@ class Varmeopt:
         # det, mens begge sider var enige om at strømmen kom fra batteriet.
         ours = slot.mode
         if ours == LOCKED and getattr(price, "source", None) == BATTERY:
+            ours = DISCHARGE
+        # En frossen eksport - «frzexp», «holdexp» - sælger kun solens
+        # overskud, og inverteren dækker huset fra batteriet. Den prissættes
+        # som afladning, så «Demand» er enig med os. Kl. 08:00 og 14:00 den
+        # 11. november advarede kontrollen om netop det.
+        if ours == EXPORT and getattr(slot, "frozen", False):
             ours = DISCHARGE
         if theirs == ours:
             # Enige igen: næste uenighed skal siges, også med samme tekst.

@@ -135,6 +135,12 @@ _STATES: dict[str, str] = {
     "holdchrg": LOCKED,
     "exp": EXPORT,
     "frzexp": EXPORT,
+    # «holdexp»: Predbat sætter batteriets ladning til 0, så solens overskud
+    # går ud på nettet. Afladningen er ikke slået fra - inverteren dækker
+    # huset som i «demand». Ejeren, 11. november, efter at ordet låste
+    # planen kl. 15:15 som ukendt. Det er samme handling som «frzexp»: en
+    # eksport der ikke sælger batteriet - se ``_FROZEN_EXPORTS``.
+    "holdexp": EXPORT,
     "dischrg": DISCHARGE,
     "discharge": DISCHARGE,
     "charge": LOCKED,
@@ -162,6 +168,11 @@ _STATES: dict[str, str] = {
 # afladning blev fem frzchrg-halvtimer på 22 % til reserven, og aftenens
 # pris sprang fra 1,08 til 2,50 «købes tilbage».
 _HELD_IN_PLAN = frozenset({"frzchrg"})
+
+# Eksporter der ikke sælger batteriet, uden at ordet begynder med «frz».
+# «holdexp» sælger kun solens overskud; batteriet lades ikke, men tømmes
+# heller ikke ud på nettet - se ``Slot.frozen``.
+_FROZEN_EXPORTS = frozenset({"holdexp"})
 
 # Ordene for hold charge: der hvor ``best_charge_limit`` er et gulv - se
 # ``Plan._floor``.
@@ -335,7 +346,11 @@ class Slot:
         Derfor tæller en frossen eksport hverken som salg i sin egen halvtime
         eller som det salg batteriets strøm gemmes til.
         """
-        return self.word.startswith("frz") or "freeze" in self.word
+        return (
+            self.word.startswith("frz")
+            or "freeze" in self.word
+            or self.word in _FROZEN_EXPORTS
+        )
 
 
 @dataclass(frozen=True)

@@ -558,6 +558,20 @@ class CycleTest(unittest.TestCase):
             any("tilstandsstrengene" in line for line in caught.output), caught.output
         )
 
+    def test_a_frozen_export_against_demand_is_not_a_disagreement(self):
+        # Kl. 08:00 og 14:00 den 11. november: status «Demand», række
+        # «frzexp». En frossen eksport sælger kun solens overskud, og vi
+        # prissætter den som afladning - de er enige, og der må ikke advares.
+        for word in ("frzexp", "holdexp"):
+            with self.subTest(word=word):
+                self.with_plan_and_status(word, "Demand")
+                with mock.patch("varmeopt.__main__.log") as fake:
+                    self.cycle()
+                said = [str(c.args[0]) for c in fake.warning.call_args_list if c.args]
+                self.assertFalse(
+                    any("tilstandsstrengene" in line for line in said), said
+                )
+
     def test_a_disagreement_is_said_again_after_they_have_agreed(self):
         warnings = []
 
@@ -912,6 +926,30 @@ class CopWarmupTest(unittest.TestCase):
 
         self.assertEqual(self.app.table.cell_count, 0, "ingen passagepunkter")
         self.assertIn("har kørt", self.app.status["learn_note"])
+
+    def test_a_stopped_pump_does_not_keep_the_warmup_note(self):
+        # Den 11. november stod «pumpen har kørt 6 min» hele eftermiddagen,
+        # mens effekten var 0: COP-føleren meldte ingen ny måling, og noten
+        # fra sidste vindue blev stående.
+        power = self.app.options.entity_hp_power
+
+        def watts(kw):
+            self.ha._states[power] = State(power, str(kw), {"unit_of_measurement": "kW"}, f"p{kw}")
+
+        watts(0.0)
+        self.at(0, 0, "stille", 30.0)
+        watts(1.5)
+        self.at(1, 3.4, "m1", 42.5)
+        self.at(3, 3.4, "m1", 48.0)
+        # Føleren falder til 0, mens kompressoren stadig trækker strøm i
+        # stopfasen: vinduet lukkes, og noten siger «har kørt 5 min».
+        self.at(6, 0, "stop", 50.0)
+        self.assertIn("har kørt", self.app.status["learn_note"])
+        watts(0.0)
+        for minute in (8, 30, 120):
+            self.at(minute, 0, "stop", 10.5)
+
+        self.assertEqual(self.app.status["learn_note"], "ignoreret: pumpen står stille")
 
     def test_a_steady_measurement_after_warmup_is_learned(self):
         self.at(0, 0, "stille", 30.0)

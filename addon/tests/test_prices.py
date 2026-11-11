@@ -687,6 +687,27 @@ class MarginalTest(unittest.TestCase):
         self.assertEqual(frozen.source, BATTERY)
         self.assertAlmostEqual(frozen.kr_per_kwh, p.marginal(0).kr_per_kwh, places=9)
 
+    def test_hold_export_is_a_frozen_export(self):
+        # «holdexp»: ladning sat til 0, solens overskud sælges, batteriet
+        # dækker huset. Ejeren, 11. november - før det låste ordet planen som
+        # ukendt, og halvtimen fik importprisen.
+        slot = Slot(0, "HoldExp", None, None, None)
+        self.assertTrue(slot.understood)
+        self.assertEqual(slot.mode, EXPORT)
+        self.assertTrue(slot.frozen)
+
+        p = plan(
+            row(),
+            row(state="holdexp", export_rate=100),
+            row(),
+            cheapest=0.80,
+        )
+        held = p.marginal(30)
+
+        self.assertNotEqual(held.reason, "eksport")
+        self.assertEqual(held.source, BATTERY)
+        self.assertAlmostEqual(held.kr_per_kwh, p.marginal(0).kr_per_kwh, places=9)
+
     def test_an_empty_battery_under_a_covering_sun_is_the_sun(self):
         # Batteriet er ude af spillet, men panelerne bærer huset og der
         # købes ikke. Så er det solen der leverer den næste kilowatt-time.
