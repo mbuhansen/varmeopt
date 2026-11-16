@@ -275,6 +275,11 @@ _DEFAULTS: dict[str, object] = {
     "pellet_price_per_kg": 2.88,
     "pellet_kwh_per_kg": 4.8,
     "pellet_efficiency": 0.85,
+    # Et tillæg pr. kWh pillevarme ud over brændslet: aske der skal tømmes,
+    # sække der skal bæres, slid på sneglen og tænding. Varmepumpen har sit
+    # eget i hp_wear_kr_per_kwh; uden et modstykke her skiftede anlægget til
+    # pillefyret lidt for tidligt.
+    "pellet_wear_kr_per_kwh": 0.05,
     # Hysterese på kildevalget, så den ikke vipper frem og tilbage på
     # nogle ører. Samme værdi som Node-RED bruger.
     "source_hysteresis": 0.05,
@@ -378,11 +383,12 @@ class Options:
     pellet_price_per_kg: float
     pellet_kwh_per_kg: float
     pellet_efficiency: float
+    pellet_wear_kr_per_kwh: float
     source_hysteresis: float
 
     @property
     def pellet_kwh_price(self) -> float:
-        """Pillevarme i kr pr. kWh leveret varme.
+        """Pillevarme i kr pr. kWh leveret varme, tillægget medregnet.
 
         Ved en umulig konfiguration falder vi tilbage på standardværdierne
         og siger det højt. Der stod 0,0, og gratis pillevarme vinder hver
@@ -400,8 +406,12 @@ class Options:
                 float(_DEFAULTS["pellet_price_per_kg"])
                 / float(_DEFAULTS["pellet_kwh_per_kg"])
                 / float(_DEFAULTS["pellet_efficiency"])
+                + self.pellet_wear_kr_per_kwh
             )
-        return (self.pellet_price_per_kg / self.pellet_kwh_per_kg) / self.pellet_efficiency
+        return (
+            (self.pellet_price_per_kg / self.pellet_kwh_per_kg) / self.pellet_efficiency
+            + self.pellet_wear_kr_per_kwh
+        )
 
     @property
     def min_charge_kwh(self) -> float:

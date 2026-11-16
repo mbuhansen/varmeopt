@@ -278,6 +278,7 @@ siges i loggen ved opstart.
 | `entity_predbat_plan` | `predbat.plan_html` | Predbats plan. Vi læser `raw.rows`, den strukturerede udgave — ikke HTML-tabellen |
 | `entity_inverter_loss`, `entity_battery_loss`, `entity_battery_loss_discharge` | Predbats tre `input_number` | Tabene ind i og ud af batteriet, læst fra Predbat så de kun står ét sted. Tilsammen 0,832 hele vejen rundt. Svarer de ikke, gælder `prices.py`s egne tal |
 | `pellet_*` | 2,88 kr/kg, 4,8 kWh/kg, 85 % | Pillefyrets pris pr. kWh varme |
+| `pellet_wear_kr_per_kwh` | 0,05 | Tillæg pr. kWh pillevarme ud over brændslet — aske, sække, slid. Modstykket til `hp_wear_kr_per_kwh`, så pillefyret ikke vinder for tidligt |
 | `source_hysteresis` | 0,05 | Så valget ikke vipper frem og tilbage på nogle ører |
 | `hp_wear_kr_per_kwh` | 0,15 | At køre varmepumpen koster noget ud over strømmen. Tallet kommer fra den ukoblede `v4`-node, hvor det var en konstant — her kan det efterprøves |
 | `hp_charge_temp` | 56 | Fremløbstemperaturen en blokopladning kører ved. Højere end rumvarmens setpunkt med vilje: varmen skal bagefter også kunne lave et bad. Ikke det samme som `dhw_setpoint`, som er hvad beholderen *kalder* med |

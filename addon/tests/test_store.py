@@ -83,6 +83,32 @@ class OptionsTest(unittest.TestCase):
 
         self.assertEqual(Options.load(path).cycle_seconds, 60)
 
+    def test_pellet_surcharge_is_added_to_the_heat_price(self):
+        path = self.tmp / "options.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "pellet_price_per_kg": 2.88,
+                    "pellet_kwh_per_kg": 4.8,
+                    "pellet_efficiency": 0.85,
+                    "pellet_wear_kr_per_kwh": 0.05,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        # 2,88 / 4,8 / 0,85 = 0,706 for brændslet, plus fem øre.
+        self.assertAlmostEqual(Options.load(path).pellet_kwh_price, 0.756, places=3)
+
+    def test_pellet_surcharge_survives_the_fallback(self):
+        path = self.tmp / "options.json"
+        path.write_text(
+            json.dumps({"pellet_efficiency": 0, "pellet_wear_kr_per_kwh": 0.05}),
+            encoding="utf-8",
+        )
+
+        self.assertAlmostEqual(Options.load(path).pellet_kwh_price, 0.756, places=3)
+
 
 if __name__ == "__main__":
     unittest.main()
