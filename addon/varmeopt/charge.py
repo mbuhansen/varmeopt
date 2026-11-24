@@ -422,6 +422,10 @@ class ChargePlan:
     # 24,5 kWh. Et ønske skal overleve en ny Predbat-beregning, før det bliver
     # til en blok.
     _wanted_stamps: list[str] = field(default_factory=list)
+    # Hvilken slags opladning ønsket gælder - høj eller lav. Stemplerne tæller
+    # kun for den samme slags: ét ønske om den høje og ét om den lave er ikke
+    # to bekræftelser af noget (gennemgangen den 24. november).
+    _wanted_low: bool | None = None
     # Stemplet på den plan en ventende blok senest blev lagt efter. Mellem to
     # Predbat-planer står den stille; der er ingen nye priser at flytte den på.
     _placed_stamp: str | None = None
@@ -464,6 +468,11 @@ class ChargePlan:
         """
         block = self.block
         if block is None or block.manual:
+            return
+        # Kun et løfte af blokkens egen slags. Venter en høj blok mens
+        # planlæggeren i dette minut foretrækker den lave, er den laves
+        # besparelse ikke den høje bloks løfte.
+        if bool(getattr(decision, "low", False)) != block.low:
             return
         if now >= block.began and block.expected_kr is not None:
             return
@@ -943,6 +952,8 @@ class ChargePlan:
             # opladning pr. stræk, uanset hvad den høje har gjort.
             covered = self.low_done_until is not None and dear_from < self.low_done_until
             if covered:
+                if self._keep_other_kind(now, low):
+                    return False
                 self.block = None
                 self._forget_wish()
                 self.rule = "covered_low"
@@ -998,6 +1009,8 @@ class ChargePlan:
             # Alle tre veje er billigere end den undtagelse der udgik.
             #
             # Efteropladningen ovenfor er noget andet - se dér.
+            if self._keep_other_kind(now, low):
+                return False
             self.block = None
             self._forget_wish()
             self.rule = "covered"
@@ -1015,10 +1028,24 @@ class ChargePlan:
                     f"{self.block.minutes_until(now):.0f} min"
                 )
                 return False
-            if self.block is None:
+            # At skifte en ventende blok til den anden slags er et nyt ønske, og
+            # det skal bekræftes som ethvert andet - ellers vender ét minuts
+            # vip i ``choose_charge`` blokken ved første nye Predbat-plan.
+            switching = (
+                self.block is not None
+                and not self.block.manual
+                and self.block.low != low
+            )
+            if self.block is None or switching:
+                if self._wanted_low is not None and self._wanted_low != low:
+                    self._wanted_stamps = []
+                self._wanted_low = low
                 if plan_stamp not in self._wanted_stamps:
                     self._wanted_stamps = (self._wanted_stamps + [plan_stamp])[-8:]
                 if len(self._wanted_stamps) < max(1, int(confirm_plans)):
+                    if switching:
+                        self._keep_other_kind(now, low)
+                        return False
                     self.rule = "waiting_predbat"
                     self.note = "afventer næste Predbat-beregning"
                     return False
@@ -1129,6 +1156,42 @@ class ChargePlan:
         )
         return False
 
+    def may_place(self, now: float, decision: Any) -> bool:
+        """Må en blok af beslutningens slags lægges mod dens stræk?
+
+        De to slags har hver sin kvote - se ``low_done_until``. Valget mellem
+        dem (``planner.choose_charge``) skal kende dem, ellers vælges den høje
+        hver gang der mangler varmt vand, også når dens kvote er brugt - og
+        den lave, der stadig måtte, kommer aldrig til.
+        """
+        window = getattr(decision, "window_starts_in", None)
+        if not window or not _finite(window):
+            return True
+        dear_from, _, _ = self._dear_key(now, decision, int(window))
+        if getattr(decision, "low", False) is True:
+            return not (
+                self.low_done_until is not None and dear_from < self.low_done_until
+            )
+        covered = self.done_until is not None and dear_from < self.done_until
+        return not covered or self.top_up_open
+
+    def _keep_other_kind(self, now: float, low: bool) -> bool:
+        """Står der en ventende blok af den *anden* slags? Så bliver den stående.
+
+        En kvote gælder sin egen slags. Her smed den lave kvote en ventende høj
+        blok væk - og den høje en lav - når valget mellem dem vippede et minut.
+        Det er samme regel som i trin 4: en lagt blok står ved magt.
+        """
+        block = self.block
+        if block is None or block.manual or block.low == low:
+            return False
+        self.rule = "waiting"
+        self.note = (
+            f"venter — {self._label(block)} {block.kwh:.1f} kWh om "
+            f"{block.minutes_until(now):.0f} min"
+        )
+        return True
+
     def _dear_key(
         self, now: float, decision: Any, window: int
     ) -> tuple[float, float, float]:
@@ -1175,6 +1238,7 @@ class ChargePlan:
 
     def _forget_wish(self) -> None:
         self._wanted_stamps = []
+        self._wanted_low = None
         self._placed_stamp = None
         self._battery_stamps = []
 
@@ -1271,6 +1335,7 @@ class ChargePlan:
             # nulstille bekræftelsen - og et ønske der har holdt på én plan,
             # skal ikke begynde forfra fordi add-on'en blev genstartet.
             "wanted_stamps": list(self._wanted_stamps),
+            "wanted_low": self._wanted_low,
             "placed_stamp": self._placed_stamp,
             "battery_stamps": list(self._battery_stamps),
             "last_end": self.last_end,
@@ -1296,6 +1361,8 @@ class ChargePlan:
         stamps = raw.get("wanted_stamps")
         if isinstance(stamps, list):
             plan._wanted_stamps = [s for s in stamps if isinstance(s, str)][-8:]
+        wanted_low = raw.get("wanted_low")
+        plan._wanted_low = wanted_low if isinstance(wanted_low, bool) else None
         placed = raw.get("placed_stamp")
         plan._placed_stamp = placed if isinstance(placed, str) else None
         battery = raw.get("battery_stamps")

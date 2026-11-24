@@ -1158,6 +1158,7 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
     # Blokken afviser selv, hvad planlæggeren beder om.
     refused = c_rule in (
         "covered",
+        "covered_low",
         "below_min_runtime",
         "no_room_minutes",
         "no_grid_minutes",
@@ -1178,6 +1179,11 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
         if d_rule in codes and held:
             return line(text, False, "planen siger nu")
         return line(text, d_rule in codes, value)
+    # Den lave opladning - kører, venter eller er planlæggerens valg nu.
+    low_now = bool(
+        (block is not None and getattr(block, "low", False))
+        or getattr(decision, "low", False)
+    )
     delivered = ""
     if running and block is not None:
         delivered = (
@@ -1198,6 +1204,17 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                     "Rumvarme i det dyre stræk",
                     bool(space and space > 0.01),
                     f"{space:.1f} kWh mangler" if space and space > 0.01 else "",
+                ),
+                line(
+                    "Lavt, ved varmekurvens fremløb (lad op lav)",
+                    low_now,
+                    (
+                        f"{block.temp:.1f}°"
+                        if block is not None
+                        and getattr(block, "low", False)
+                        and _finite_number(getattr(block, "temp", None))
+                        else ""
+                    ),
                 ),
                 (
                     line(
@@ -1242,7 +1259,8 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                 ),
                 plan_says(
                     ("saving_small",),
-                    f"Gevinst under {number('min_saving_kr', '.2f')} kr",
+                    f"Gevinst under "
+                    f"{number('low_min_saving_kr' if low_now else 'min_saving_kr', '.2f')} kr",
                 ),
                 (
                     line(
@@ -1264,6 +1282,10 @@ def _rules_card(decision: Any, charge: Any, settings: dict[str, Any] | None) -> 
                 line(
                     "Allerede ladet op mod strækket — højst én blok til",
                     c_rule == "covered",
+                ),
+                line(
+                    "Allerede ladet lavt op mod strækket — én lav pr. stræk",
+                    c_rule == "covered_low",
                 ),
             ],
         ),
@@ -2012,7 +2034,11 @@ def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
     rows = [("Ordren", _esc(s.get("follow_note") or "—"))]
     if logbook is not None:
         recent = getattr(logbook, "recent", []) or []
-        whole = sum(1 for r in recent if (r.get("dækning") or 0) >= 0.95)
+        whole = sum(
+            1
+            for r in recent
+            if isinstance(r.get("dækning"), (int, float)) and r["dækning"] >= 0.95
+        )
         rows.append((
             "Logbog",
             _esc(

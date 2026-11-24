@@ -86,6 +86,13 @@ class Event:
     flagged: bool = False
     # Hvordan den sluttede: «pumpen startede», «ordren faldt bort» …
     outcome: str | None = None
+    # Det lave ladeflag (``lad_op_lav``) og ikke det høje. Teksten skal nævne
+    # det flag Node-RED faktisk skal følge.
+    low: bool = False
+
+    @property
+    def flag(self) -> str:
+        return "lad op lav" if self.low else "lad op"
 
     @property
     def minutes(self) -> float:
@@ -105,6 +112,7 @@ class Event:
             return None
         if not _finite(event.seen_until) or event.kind not in (NOT_STARTED, AGAINST_PELLET):
             return None
+        event.low = event.low is True
         return event
 
 
@@ -115,12 +123,25 @@ class FollowWatch:
         self.grace_minutes = grace_minutes
         self.open: dict[str, Event] = {}
         self.events: list[Event] = []
-        # Minutter fra flaget tændte til kompressoren gik i gang.
+        # Minutter fra flaget tændte til kompressoren gik i gang - for hvert
+        # flag for sig. UVR'ens «lad til nederste føler» er en anden vej end
+        # 56-graders-opladningen, og de to må ikke blandes i én median.
         self.delays: list[float] = []
+        self.delays_low: list[float] = []
         self._last: float | None = None
         # Starten på en ordre der endnu ikke er nået frem. Den er ikke en
         # hændelse før fristen er gået, men ventetiden måles fra den.
         self._ordered_since: float | None = None
+        # Er ordren afgjort? Sat når pumpen er set køre under den, eller når
+        # vi har mistet overblikket. Bagefter dømmes ordren ikke mere: en
+        # pumpe der stopper midt i en opladning (termostat, pressostat,
+        # anti-pendling), har ikke «ikke startet», og genstarten er ikke en
+        # ventetid (gennemgangen den 24. november).
+        self._settled = False
+        # Hvilket flag den igangværende ordre gælder.
+        self._order_low: bool | None = None
+        # Hvornår pumpens effekt holdt op med at kunne måles.
+        self._unknown_since: float | None = None
 
     # ------------------------------------------------------------- iagttag
 
@@ -132,12 +153,14 @@ class FollowWatch:
         acting: bool,
         running: bool | None,
         source: str | None,
+        low: bool = False,
     ) -> list[str]:
         """Én cyklus. Returnerer de linjer der skal logges som advarsler nu.
 
         ``ordered`` er ladeflaget som det blev udgivet, ``acting`` om
         ``styrer`` stod sandt, ``running`` om kompressoren trækker strøm
-        (``None``: ved ikke), ``source`` den kilde vagten står ved.
+        (``None``: ved ikke), ``source`` den kilde vagten står ved, ``low``
+        om ordren er det lave flag.
         """
         gap = now - self._last if self._last is not None else 0.0
         self._last = now
@@ -146,32 +169,60 @@ class FollowWatch:
             # om, og en ventetid hen over et hul er ikke en ventetid.
             self._close_all("afbrudt: add-on'en var nede")
             self._ordered_since = None
+            self._settled = self._order_low is not None
 
         if running is None:
+            # Et minut uden måling er ingenting. Men et langt stræk er et hul
+            # som ethvert andet: det åbne kan vi ikke sige noget om, og en
+            # ventetid hen over det er ikke en ventetid. Her stod vagten bare
+            # stille, og to timer uden effektføler blev til en ventetid på 121
+            # minutter.
+            if self._unknown_since is None:
+                self._unknown_since = now
+            elif now - self._unknown_since > MAX_GAP_SECONDS:
+                self._close_all("afbrudt: varmepumpens effekt kunne ikke måles")
+                self._ordered_since = None
+                self._settled = self._order_low is not None
             return []
+        self._unknown_since = None
 
         out: list[str] = []
         charge = ordered and acting
 
+        # En ny ordre - eller den samme ordre skiftet til det andet flag - er
+        # en ny ordre og dømmes forfra.
+        if not charge:
+            self._order_low, self._settled = None, False
+        elif self._order_low is not None and self._order_low != low:
+            self._close_not_started(now, "ordren skiftede flag")
+            self._ordered_since, self._settled = None, False
+        if charge:
+            self._order_low = low
+
         # Ladeflaget: startede pumpen?
-        if charge and not running:
+        if charge and not running and not self._settled:
             if self._ordered_since is None:
                 self._ordered_since = now
             event = self.open.get(NOT_STARTED)
             if event is None:
-                event = Event(NOT_STARTED, self._ordered_since, now)
+                event = Event(NOT_STARTED, self._ordered_since, now, low=low)
                 self.open[NOT_STARTED] = event
             event.seen_until = now
             if not event.flagged and event.minutes >= self.grace_minutes:
                 event.flagged = True
                 out.append(
-                    f"lad op har stået tændt i {event.minutes:.0f} min uden at "
+                    f"{event.flag} har stået tændt i {event.minutes:.0f} min uden at "
                     "varmepumpen kører - se Node-RED og UVR'en"
                 )
         else:
-            if charge and running and self._ordered_since is not None:
-                delay = (now - self._ordered_since) / 60
-                self.delays = (self.delays + [round(delay, 1)])[-MAX_DELAYS:]
+            if charge and running and not self._settled:
+                if self._ordered_since is not None:
+                    delay = round((now - self._ordered_since) / 60, 1)
+                    if low:
+                        self.delays_low = (self.delays_low + [delay])[-MAX_DELAYS:]
+                    else:
+                        self.delays = (self.delays + [delay])[-MAX_DELAYS:]
+                self._settled = True
             event = self.open.pop(NOT_STARTED, None)
             if event is not None and event.flagged:
                 event.outcome = (
@@ -205,6 +256,13 @@ class FollowWatch:
 
         return out
 
+    def _close_not_started(self, now: float, outcome: str) -> None:
+        event = self.open.pop(NOT_STARTED, None)
+        if event is not None and event.flagged:
+            event.outcome = outcome
+            event.seen_until = now
+            self._keep(event)
+
     def _close_all(self, outcome: str) -> None:
         for event in self.open.values():
             if event.flagged:
@@ -224,9 +282,9 @@ class FollowWatch:
         if event is not None and event.flagged:
             out.append((
                 "advarsel",
-                f"Lad op er tændt og styrer, men varmepumpen har ikke kørt "
-                f"i {event.minutes:.0f} min. Ordren når ikke frem - se "
-                "Node-RED-flowet og UVR'en.",
+                f"{event.flag.capitalize()} er tændt og styrer, men varmepumpen "
+                f"har ikke kørt i {event.minutes:.0f} min. Ordren når ikke frem - "
+                "se Node-RED-flowet og UVR'en.",
             ))
         event = self.open.get(AGAINST_PELLET)
         if event is not None and event.flagged:
@@ -240,27 +298,31 @@ class FollowWatch:
 
     @property
     def typical_delay(self) -> float | None:
-        """Medianen af de målte startforsinkelser, i minutter."""
-        if not self.delays:
-            return None
-        ordered = sorted(self.delays)
-        mid = len(ordered) // 2
-        if len(ordered) % 2:
-            return ordered[mid]
-        return (ordered[mid - 1] + ordered[mid]) / 2
+        """Medianen af de målte startforsinkelser på det høje flag, i minutter."""
+        return _median(self.delays)
+
+    @property
+    def typical_delay_low(self) -> float | None:
+        """Det samme for det lave flag."""
+        return _median(self.delays_low)
 
     @property
     def note(self) -> str:
         active = self.active()
         if active:
             return active[0][1]
-        delay = self.typical_delay
-        if delay is None:
+        parts = []
+        for name, delay, count in (
+            ("lad op", self.typical_delay, len(self.delays)),
+            ("lad op lav", self.typical_delay_low, len(self.delays_low)),
+        ):
+            if delay is not None:
+                parts.append(
+                    f"pumpen starter typisk {delay:.0f} min efter {name} ({count} starter)"
+                )
+        if not parts:
             return "ingen opladninger set endnu"
-        return (
-            f"ordren følges - pumpen starter typisk {delay:.0f} min efter "
-            f"lad op ({len(self.delays)} starter)"
-        )
+        return "ordren følges - " + "; ".join(parts)
 
     # ---------------------------------------------------------------- disk
 
@@ -268,6 +330,7 @@ class FollowWatch:
         return {
             "events": [e.to_raw() for e in self.events],
             "delays": self.delays,
+            "delays_low": self.delays_low,
         }
 
     @classmethod
@@ -280,7 +343,22 @@ class FollowWatch:
             watch.events = [e for e in (Event.from_raw(r) for r in events) if e is not None][
                 -MAX_EVENTS:
             ]
-        delays = raw.get("delays")
-        if isinstance(delays, list):
-            watch.delays = [float(d) for d in delays if _finite(d) and d >= 0][-MAX_DELAYS:]
+        for key in ("delays", "delays_low"):
+            delays = raw.get(key)
+            if isinstance(delays, list):
+                setattr(
+                    watch,
+                    key,
+                    [float(d) for d in delays if _finite(d) and d >= 0][-MAX_DELAYS:],
+                )
         return watch
+
+
+def _median(values: list[float]) -> float | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2

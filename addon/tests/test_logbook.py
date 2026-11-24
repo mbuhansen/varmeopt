@@ -133,6 +133,36 @@ class LogbookTest(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertFalse(self.path.exists())
 
+    def test_a_disk_error_while_pruning_does_not_write_the_slot_twice(self):
+        from unittest import mock
+
+        book = Logbook(self.path, keep_days=1)
+        with mock.patch("varmeopt.logbook.read_rows", side_effect=OSError("disk")):
+            with self.assertLogs("varmeopt.logbook", level="WARNING"):
+                self.walk(book, range(0, 31))
+            self.walk(book, range(31, 33))
+        ts = [r["t"] for r in read_rows(self.path)]
+        self.assertEqual(ts, sorted(set(ts)), "ingen halvtime to gange")
+
+    def test_a_row_of_the_wrong_shape_is_skipped(self):
+        self.path.write_text(
+            '{"t": 1, "så": [1]}\n{"t": 2, "dækning": "x"}\n'
+            '{"t": 3, "dækning": 1.0, "så": {}, "skete": {}}\n',
+            encoding="utf-8",
+        )
+        self.assertEqual([r["t"] for r in read_rows(self.path)], [3])
+
+    def test_an_unknown_compressor_is_not_standstill(self):
+        book = Logbook(self.path)
+        rows = self.walk(book, range(0, 31), kompressor=None)
+        self.assertIsNone(rows[0]["skete"]["kompressor_min"])
+
+    def test_the_two_charge_flags_are_counted_apart(self):
+        book = Logbook(self.path)
+        rows = self.walk(book, range(0, 31), lad_op=True, lad_op_lav=True)
+        self.assertEqual(rows[0]["skete"]["lad_op_lav_min"], 30.0)
+        self.assertEqual(rows[0]["skete"]["lad_op_min"], 0.0)
+
     def test_compact_plan(self):
         raw = {"round_trip": 0.9, "slots": [
             {"minutes": 0, "state": "Hold", "import": 1.23456, "export": 0.5},

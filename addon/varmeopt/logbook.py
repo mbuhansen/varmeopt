@@ -85,6 +85,8 @@ class Reading:
     ude: float | None = None
     kompressor: bool | None = None
     lad_op: bool = False
+    # Det lave ladeflag for sig - se ``planner.choose_charge``.
+    lad_op_lav: bool = False
     kilde: str | None = None
 
 
@@ -99,7 +101,11 @@ class Logbook:
         self._seconds: dict[str, float] = {}
         self._covered = 0.0
         self._minutes_running = 0.0
+        # Sekunder hvor det overhovedet vides om kompressoren kører. Ukendt er
+        # ikke stilstand.
+        self._seconds_known = 0.0
         self._minutes_charge = 0.0
+        self._minutes_charge_low = 0.0
         self._source_minutes: dict[str, float] = {}
         self._outdoor_sum = 0.0
         self._outdoor_seconds = 0.0
@@ -157,10 +163,15 @@ class Logbook:
             if _finite(value):
                 self._sums[key] = self._sums.get(key, 0.0) + max(0.0, value) * seconds / 3600
                 self._seconds[key] = self._seconds.get(key, 0.0) + seconds
-        if reading.kompressor:
-            self._minutes_running += seconds / 60
+        if reading.kompressor is not None:
+            self._seconds_known += seconds
+            if reading.kompressor:
+                self._minutes_running += seconds / 60
         if reading.lad_op:
-            self._minutes_charge += seconds / 60
+            if reading.lad_op_lav:
+                self._minutes_charge_low += seconds / 60
+            else:
+                self._minutes_charge += seconds / 60
         if reading.kilde:
             self._source_minutes[reading.kilde] = (
                 self._source_minutes.get(reading.kilde, 0.0) + seconds / 60
@@ -181,6 +192,7 @@ class Logbook:
         self._sums, self._seconds = {}, {}
         self._covered = 0.0
         self._minutes_running = self._minutes_charge = 0.0
+        self._minutes_charge_low = self._seconds_known = 0.0
         self._source_minutes = {}
         self._outdoor_sum = self._outdoor_seconds = 0.0
         self._last_store = None
@@ -202,8 +214,14 @@ class Logbook:
             if self._outdoor_seconds > 0
             else None
         )
-        measured["kompressor_min"] = _r(self._minutes_running, 1)
+        # Samme regel som energien: kun når det vidstes det meste af tiden.
+        measured["kompressor_min"] = (
+            _r(self._minutes_running, 1)
+            if self._seconds_known >= 0.8 * self._covered > 0
+            else None
+        )
         measured["lad_op_min"] = _r(self._minutes_charge, 1)
+        measured["lad_op_lav_min"] = _r(self._minutes_charge_low, 1)
         measured["kilde_min"] = {k: _r(v, 1) for k, v in self._source_minutes.items()}
         row = {
             "t": int(self._slot),
@@ -237,14 +255,25 @@ class Logbook:
 
     def prune(self, now: float) -> None:
         """Smid linjer ældre end ``keep_days``. Skrives atomisk."""
-        if self.path is None or not self.path.exists():
+        if self.path is None:
             return
-        cut = now - self.keep_days * 86400
-        rows = read_rows(self.path)
-        kept = [r for r in rows if r.get("t", 0) >= cut]
-        if len(kept) == len(rows):
+        # Hele oprydningen er værnet: en diskfejl her må ikke springe ud af
+        # ``_finish``. Så ville halvtimen ikke være afsluttet, og næste cyklus
+        # skrev den samme linje igen (gennemgangen den 24. november).
+        try:
+            if not self.path.exists():
+                return
+            cut = now - self.keep_days * 86400
+            rows = read_rows(self.path)
+            kept = [r for r in rows if r.get("t", 0) >= cut]
+            if len(kept) == len(rows):
+                return
+            fd, tmp = tempfile.mkstemp(
+                dir=str(self.path.parent), prefix=".logbog.", suffix=".tmp"
+            )
+        except OSError as exc:
+            log.warning("logbogen kunne ikke ryddes: %s", exc)
             return
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".logbog.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 for r in kept:
@@ -303,9 +332,24 @@ def read_rows(path: Path) -> list[dict[str, Any]]:
             row = json.loads(line)
         except ValueError:
             continue
-        if isinstance(row, dict) and _finite(row.get("t")):
+        if _well_formed(row):
             out.append(row)
     return out
+
+
+def _well_formed(row: Any) -> bool:
+    """Har linjen den form siden og debug-filen regner med?
+
+    En halvt skrevet linje er ugyldig JSON og springes over i forvejen. Det
+    her er en gyldig linje med forkerte typer - håndredigeret eller fra en
+    anden udgave - der ellers kunne vælte forsiden i to døgn.
+    """
+    if not isinstance(row, dict) or not _finite(row.get("t")):
+        return False
+    if not isinstance(row.get("så", {}), dict) or not isinstance(row.get("skete", {}), dict):
+        return False
+    cover = row.get("dækning")
+    return cover is None or _finite(cover)
 
 
 def compact_plan(raw: dict[str, Any] | None, rows: int) -> dict[str, Any] | None:

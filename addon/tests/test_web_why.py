@@ -685,6 +685,7 @@ class RulesCardTest(unittest.TestCase):
         "dhw_temp": 55,
         "min_runtime_minutes": 15,
         "min_saving_kr": 1.0,
+        "low_min_saving_kr": 0.4,
         "confirm_plans": 2,
         "max_delivered_share": 2.0,
     }
@@ -833,6 +834,22 @@ class RulesCardTest(unittest.TestCase):
     def test_it_is_there_without_a_plan_too(self):
         self.assertIn("Reglerne", self.html(self.decision(rule="no_dear"), rows=False))
 
+
+    def test_a_low_charge_shows_its_own_floor(self):
+        html = self.html(self.decision(rule="saving_small", low=True))
+        self.assertIn("Gevinst under 0.40 kr", self.marked(html))
+        self.assertIn("Lavt, ved varmekurvens fremløb (lad op lav)", self.marked(html))
+
+    def test_the_low_quota_has_its_own_line(self):
+        from varmeopt.charge import ChargePlan
+
+        charge = ChargePlan()
+        charge.rule = "covered_low"
+        html = self.html(self.decision(rule="charge_now"), charge=charge)
+        self.assertIn(
+            "Allerede ladet lavt op mod strækket — én lav pr. stræk", self.marked(html)
+        )
+        self.assertNotIn("Kun fra nettet, når Predbat lader", self.marked(html))
 
 class BannerClockTest(unittest.TestCase):
     """Banneret fik et minuttal behandlet som tidsstempel: en anden ``_when``

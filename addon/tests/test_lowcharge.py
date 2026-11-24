@@ -181,6 +181,125 @@ class LowQuotaTest(unittest.TestCase):
         self.assertEqual(back.block.temp, 46.5)
 
 
+class KindsDoNotStepOnEachOtherTest(unittest.TestCase):
+    """Gennemgangen den 24. november: en kvote eller et ønske af den ene slags
+    må ikke fjerne eller bekræfte en blok af den anden."""
+
+    def setUp(self):
+        self.now = 1_757_000_000.0
+        self.base = slot_start(self.now)
+        self.plan = charge_plan_rows(*RATES)
+        self.charge = ChargePlan()
+
+    def decision_at(self, t, **over):
+        shift = int((slot_start(t) - self.base) // 60)
+        return FakeDecision(window_starts_in=240 - shift, dear_starts_in=240 - shift, **over)
+
+    def at(self, t, stamp=None, confirm=1, **over):
+        return self.charge.update(
+            t, self.decision_at(t, **over), self.plan, 16.0,
+            plan_stamp=stamp, confirm_plans=confirm,
+        )
+
+    def run_block(self, **kind):
+        self.at(self.now, **kind)
+        block = self.charge.block
+        self.at(block.ends_at, **kind)
+        return block
+
+    def test_the_low_quota_keeps_a_waiting_high_block(self):
+        # Strækket er ladet lavt op; en høj blok til varmt vand venter.
+        self.charge.low_done_until = self.base + 600 * 60
+        self.at(self.now)
+        self.assertFalse(self.charge.block.running(self.now), "blokken skal vente")
+        self.at(self.now + 60, low=True, charge_temp=46.5)  # ét minut vipper valget
+        self.assertIsNotNone(self.charge.block, self.charge.note)
+        self.assertFalse(self.charge.block.low)
+
+    def test_the_high_quota_keeps_a_waiting_low_block(self):
+        # Strækket er ladet højt op; en lav blok venter.
+        self.charge.done_until = self.base + 600 * 60
+        self.at(self.now, low=True, charge_temp=46.5)
+        self.assertTrue(self.charge.block.low)
+        self.assertFalse(self.charge.block.running(self.now), "blokken skal vente")
+        self.at(self.now + 60)
+        self.assertIsNotNone(self.charge.block, self.charge.note)
+        self.assertTrue(self.charge.block.low)
+
+    def test_may_place_knows_each_quota(self):
+        block = self.run_block()
+        t = block.ends_at + 60
+        self.assertFalse(self.charge.may_place(t, self.decision_at(t)))
+        self.assertTrue(self.charge.may_place(t, self.decision_at(t, low=True)))
+
+    def test_a_used_high_quota_lets_the_low_through(self):
+        chosen = choose_charge(
+            decision("charge_now", dhw_short=3.0),
+            decision("charge_now", low=True),
+            high_open=False,
+        )
+        self.assertTrue(chosen.low)
+        self.assertFalse(
+            choose_charge(
+                decision("charge_now"), decision("charge_now", low=True), low_open=False
+            ).low
+        )
+
+    def test_one_wish_of_each_kind_is_not_two_confirmations(self):
+        self.at(self.now, stamp="A", confirm=2)
+        self.at(self.now + 60, stamp="B", confirm=2, low=True, charge_temp=46.5)
+        self.assertIsNone(self.charge.block)
+        self.assertEqual(self.charge.rule, "waiting_predbat")
+
+    def test_switching_a_waiting_block_needs_its_own_confirmation(self):
+        self.at(self.now, stamp="A", confirm=1)
+        self.assertFalse(self.charge.block.low)
+        self.at(self.now + 60, stamp="B", confirm=2, low=True, charge_temp=46.5)
+        self.assertFalse(self.charge.block.low, "ét minuts vip vender ikke blokken")
+        self.at(self.now + 120, stamp="C", confirm=2, low=True, charge_temp=46.5)
+        self.assertTrue(self.charge.block.low)
+
+    def test_a_promise_of_the_other_kind_is_not_written_on_the_block(self):
+        self.at(self.now)
+        other = SimpleNamespace(low=True, charge=True, saving_kr=5.0,
+                                expected_paid=0.5, expected_alt=0.7)
+        self.charge.remember_promise(other, self.now)
+        self.assertIsNone(self.charge.block.expected_kr)
+
+
+class LowCountsHotWaterTest(unittest.TestCase):
+    """Den lave må ikke regne badets del af lageret som rumvarme."""
+
+    def decide(self, **over):
+        values = dict(
+            cop_now=4.0,
+            cop_later=lambda m: 4.0,
+            charge_cop_at=lambda m: 4.0,
+            headroom_kwh=20.0,
+            stored_kwh=6.0,
+            demand_kw=2.0,
+        )
+        values.update(over)
+        return planner(horizon_minutes=420, charge_kw=8.0).decide(
+            plan(*[100] * 4, *[300] * 6, *[100] * 4), **values
+        )
+
+    def test_hot_water_in_the_stretch_is_taken_from_what_the_store_has(self):
+        # 6 kWh over 55 grader, 4 af dem går til bad i strækket: kun 2 er
+        # tilbage til gulvet.
+        d = self.decide(hot_kwh=6.0, dhw_kwh_over=lambda start, hours: 4.0, space_only=True)
+        self.assertAlmostEqual(d.space_have_kwh, 2.0)
+        self.assertEqual(d.dhw_short_kwh, 0.0, "den lave laver ikke varmt vand")
+        self.assertIn(d.rule, PLACING_RULES, d.reason)
+
+    def test_the_low_block_is_judged_on_room_heat_only(self):
+        from varmeopt.__main__ import _covers
+
+        short = SimpleNamespace(dhw_kwh=3.0, space_kwh=0.0)
+        self.assertFalse(_covers(short))
+        self.assertTrue(_covers(short, space_only=True))
+
+
 class LowFlagTest(unittest.TestCase):
     """To flag til UVR'en, og aldrig begge tændt."""
 
@@ -209,6 +328,28 @@ class LowFlagTest(unittest.TestCase):
         self.assertEqual(published[SENSOR_CHARGE], "on")
         self.assertEqual(published[SENSOR_CHARGE_LOW], "off")
         self.assertIs(self.ha.attributes[SENSOR_DECISION]["lad_op"], True)
+
+    def test_the_flag_to_turn_off_is_written_first(self):
+        d = replace(decision("charge_now", low=True), charge=True, charge_temp=46.5)
+        asyncio.run(self.app._publish_charge(self.ha, d, self.command))
+        self.assertEqual(
+            [e for e, _ in self.ha.published], [SENSOR_CHARGE, SENSOR_CHARGE_LOW]
+        )
+
+    def test_a_failing_low_write_still_turns_the_high_flag_off(self):
+        # Lå de to i ét forsøg, nåede det høje flag aldrig at blive slukket.
+        self.ha.fail_on = SENSOR_CHARGE_LOW
+        d = decision("no_dear")
+        asyncio.run(self.app._publish_charge(self.ha, d, self.command))
+        self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
+
+    def test_no_flag_is_raised_while_the_other_cannot_be_lowered(self):
+        # Kan det lave ikke slukkes, må det høje ikke tændes - ellers står
+        # begge tændt i HA.
+        self.ha.fail_on = SENSOR_CHARGE_LOW
+        d = replace(decision("charge_now"), charge=True, charge_temp=56.0)
+        asyncio.run(self.app._publish_charge(self.ha, d, self.command))
+        self.assertNotIn(SENSOR_CHARGE, dict(self.ha.published))
 
     def test_the_running_block_decides_the_flag(self):
         # En lav blok kører; planlæggeren ville i dette minut hellere have den

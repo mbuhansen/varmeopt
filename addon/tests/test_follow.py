@@ -101,6 +101,38 @@ class FollowWatchTest(unittest.TestCase):
         self.assertEqual(watch.events[-1].kind, AGAINST_PELLET)
         self.assertEqual(watch.events[-1].outcome, "pumpen stoppede")
 
+    def test_a_long_stretch_without_power_is_a_gap(self):
+        # To timer uden effektmåling, så starter pumpen. Det er ikke en
+        # ventetid på 121 min.
+        watch = FollowWatch(grace_minutes=20)
+        self.run_minutes(watch, 0, 1, **self.charge(False))
+        self.run_minutes(watch, 1, 120, **self.charge(None))
+        self.run_minutes(watch, 121, 2, **self.charge(True))
+        self.assertEqual(watch.delays, [])
+        self.assertEqual(watch.active(), [])
+
+    def test_a_stop_mid_charge_is_not_a_failed_start(self):
+        # Pumpen starter, kører 10 min og stopper på sin egen termostat mens
+        # flaget står. Det er ikke «startede ikke», og genstarten er ikke en
+        # ventetid.
+        watch = FollowWatch(grace_minutes=20)
+        self.run_minutes(watch, 0, 3, **self.charge(False))
+        self.run_minutes(watch, 3, 10, **self.charge(True))
+        lines = self.run_minutes(watch, 13, 30, **self.charge(False))
+        self.run_minutes(watch, 43, 2, **self.charge(True))
+        self.assertEqual(lines, [])
+        self.assertEqual(watch.delays, [3.0])
+
+    def test_the_low_flag_is_named_and_timed_on_its_own(self):
+        watch = FollowWatch(grace_minutes=20)
+        low = dict(ordered=True, acting=True, source="varmepumpe", low=True)
+        lines = self.run_minutes(watch, 0, 25, running=False, **low)
+        self.assertIn("lad op lav", lines[0])
+        self.assertIn("Lad op lav", watch.active()[0][1])
+        self.run_minutes(watch, 25, 1, running=True, **low)
+        self.assertEqual(watch.delays_low, [25.0])
+        self.assertEqual(watch.delays, [])
+
     def test_round_trip(self):
         watch = FollowWatch(grace_minutes=20)
         self.run_minutes(watch, 0, 25, **self.charge(False))

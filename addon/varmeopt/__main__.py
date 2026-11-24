@@ -228,14 +228,18 @@ def _store_covers(decision: Any) -> bool | None:
     ) <= STORE_TARGET_TOLERANCE_KWH
 
 
-def _covers(short: Any) -> bool | None:
-    """Mangler lageret intet til nogen af de to - målt på tankene?"""
+def _covers(short: Any, space_only: bool = False) -> bool | None:
+    """Mangler lageret intet til nogen af de to - målt på tankene?
+
+    ``space_only``: den lave blok måles kun på rumvarmen. Varmt vand kan den
+    ikke lave, og målte man den på det, ville den aldrig nå målet.
+    """
     if short is None:
         return None
-    return (
-        short.dhw_kwh <= STORE_TARGET_TOLERANCE_KWH
-        and short.space_kwh <= STORE_TARGET_TOLERANCE_KWH
-    )
+    space_ok = short.space_kwh <= STORE_TARGET_TOLERANCE_KWH
+    if space_only:
+        return space_ok
+    return short.dhw_kwh <= STORE_TARGET_TOLERANCE_KWH and space_ok
 
 
 def _block_target(
@@ -257,7 +261,10 @@ def _block_target(
     starts = max(0, int(round((block.dear_from - base) / 60)))
     # Over det spænd mængden blev regnet over - se ``Block.need_until``.
     ends = int(round((block.target_until - base) / 60))
-    return _covers(planner.store_short(starts, ends - starts, **inputs))
+    return _covers(
+        planner.store_short(starts, ends - starts, **inputs),
+        space_only=bool(getattr(block, "low", False)),
+    )
 
 
 def _stretch_of(decision: Any, now: float) -> tuple[float, float] | None:
@@ -703,13 +710,24 @@ class Varmeopt:
                 **common,
                 charge_cop_at=self._cop_at,
                 headroom_kwh=store.room_to(low_temp),
-                hot_kwh=None,
-                dhw_kwh_over=None,
+                # Varmtvandet tælles, så badets del af lageret ikke regnes som
+                # rumvarme - men den lave dimensioneres ikke efter det. Se
+                # ``space_only``.
+                hot_kwh=hot_kwh,
+                dhw_kwh_over=dhw_kwh_over,
                 dhw_input_for=None,
+                space_only=True,
                 min_saving_kr=self.options.low_charge_min_saving_kr,
             )
             low = replace(low, low=True, charge_temp=round(low_temp, 1))
-        decision = choose_charge(high, low)
+        decision = choose_charge(
+            high,
+            low,
+            high_open=self.charge_plan.may_place(time.time(), high),
+            low_open=low is not None and self.charge_plan.may_place(time.time(), low),
+        )
+        # Planlæggerens valg, før blokken retter beslutningen ind - til logbogen.
+        chosen_low = decision.low
         # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
         # det. Siger den nej, står beslutningen der stadig, men flaget
         # siger nej, og Node-RED bruger sin egen logik.
@@ -780,11 +798,17 @@ class Varmeopt:
         # løfte der skal stå på posten, ikke blokkens note.
         now_at = time.time()
         price_now = prices.get("price_now")
+        running_block = self.charge_plan.block if self.charge_plan.running(now_at) else None
         self.ledger.observe(
             now_at,
-            self.charge_plan.block if self.charge_plan.running(now_at) else None,
+            running_block,
             stretch=_stretch_of(decision, now_at),
-            expected_kr=decision.saving_kr,
+            # Kun et løfte af blokkens egen slags - se ``remember_promise``.
+            expected_kr=(
+                decision.saving_kr
+                if running_block is None or running_block.low == decision.low
+                else None
+            ),
             price_kr=price_now.kr_per_kwh if price_now is not None else None,
             el_kw=balance.hp_power_kw if balance is not None else None,
             heat_kw=balance.heatpump_kw if balance is not None else None,
@@ -882,6 +906,7 @@ class Varmeopt:
                 "dhw_temp": self.options.dhw_usable_temp,
                 "min_runtime_minutes": self.options.hp_min_runtime_minutes,
                 "min_saving_kr": self.options.charge_min_saving_kr,
+                "low_min_saving_kr": self.options.low_charge_min_saving_kr,
                 "confirm_plans": self.options.charge_confirm_plans,
                 "max_delivered_share": MAX_DELIVERED_SHARE,
             },
@@ -945,6 +970,7 @@ class Varmeopt:
                 acting=command.acting,
                 running=running_now if power_known else None,
                 source=command.source or decision.source,
+                low=decision.low,
             ):
                 log.warning("ordren følges ikke: %s", line)
             self.status["follow"] = self.follow.active()
@@ -963,11 +989,12 @@ class Varmeopt:
                 ude=outdoor_temp,
                 kompressor=running_now if power_known else None,
                 lad_op=bool(decision.charge and command.acting),
+                lad_op_lav=bool(decision.charge and decision.low and command.acting),
                 kilde=command.source or decision.source,
             ),
             lambda: self._logbook_seen(
                 decision, command, prices, store, hot_kwh, locked_minutes,
-                solar, outdoor_temp, balance,
+                solar, outdoor_temp, balance, chosen_low,
             ),
         )
 
@@ -1541,6 +1568,7 @@ class Varmeopt:
         solar: dict[str, Any],
         outdoor_temp: float | None,
         balance: Balance | None,
+        chosen_low: bool = False,
     ) -> dict[str, Any]:
         """Det planen så ved halvtimens start - logbogens første halvdel.
 
@@ -1565,7 +1593,10 @@ class Varmeopt:
             "rå_kilde": decision.source,
             "styrer": command.acting,
             "lad_op": decision.charge,
+            # «lav» er den blok der kører, «lav_valgt» hvad planlæggeren valgte
+            # i minuttet - de to er forskellige mens en lav blok venter.
             "lav": decision.low,
+            "lav_valgt": chosen_low,
             "lade_temp": _round(decision.charge_temp, 1),
             "lad_kwh": _round(decision.charge_kwh, 2),
             "lovet_kr": _round(decision.saving_kr, 2),
@@ -1663,18 +1694,17 @@ class Varmeopt:
         block = self.charge_plan.block
         if block is None or block.manual:
             return _store_covers(decision)
-        # Den lave lader kun til rumvarmen. Varmt vand kan den ikke lave, og
-        # målte man den på det, ville den aldrig nå målet.
-        low = block.low
+        # Den lave måles kun på rumvarmen, men varmtvandet tælles stadig, så
+        # badets del af lageret ikke regnes som rumvarme - se ``_covers``.
         return _block_target(
             self.planner,
             block,
             time.time(),
             store is not None,
             stored_kwh=store.stored_kwh if store is not None else None,
-            hot_kwh=None if low else hot_kwh,
-            dhw_kwh_over=None if low else dhw_kwh_over,
-            dhw_input_for=None if low else dhw_input_for,
+            hot_kwh=hot_kwh,
+            dhw_kwh_over=dhw_kwh_over,
+            dhw_input_for=None if block.low else dhw_input_for,
             demand_kw=demand_kw,
             demand_kw_at=self._demand_at,
         )
@@ -2056,43 +2086,63 @@ class Varmeopt:
         """
         high = decision.charge and not decision.low
         low = decision.charge and decision.low
-        await ha.set_state(
-            SENSOR_CHARGE_LOW,
-            "on" if low else "off",
-            {
-                "friendly_name": "Varmeopt lad op lav",
-                "icon": "mdi:battery-charging-medium",
-                "styrer": command.acting,
-                "begrundelse": decision.reason,
-                # Til UVR'ens «lad til nederste føler ved aktuelt fremløb».
-                # Temperaturen står her så det kan ses hvad planen regnede
-                # med; UVR'en bruger sin egen kurve.
-                "mål_temp": _round(decision.charge_temp, 1) if low else None,
-                "lad_kwh": _round(decision.charge_kwh, 1) if low else None,
-                "plan": self.charge_plan.note,
-            },
-        )
-        await ha.set_state(
-            SENSOR_CHARGE,
-            "on" if high else "off",
-            {
-                "friendly_name": "Varmeopt lad op",
-                "icon": "mdi:battery-charging-high",
-                # Samme port som på beslutningen. Uden den ville flaget se
-                # ud som en ordre selv når ingen har lov at give den.
-                "styrer": command.acting,
-                "begrundelse": decision.reason,
-                "lad_kwh": _round(decision.charge_kwh, 1),
-                "besparelse_kr": _round(decision.saving_kr, 2),
-                "vindue_min": _round(self._from_now(decision.window_minutes), 0),
-                # Blokken: hvornår den ligger, og hvor meget den er sat til.
-                # Opladningen er planlagt én gang og køres én gang - se
-                # charge.py - så det her er et skema og ikke et øjebliksbud.
-                "plan": self.charge_plan.note,
-                "starter_om_min": _round(self._charge_minutes()[0], 0),
-                "slutter_om_min": _round(self._charge_minutes()[1], 0),
-            },
-        )
+        writes = [
+            (
+                SENSOR_CHARGE_LOW,
+                low,
+                {
+                    "friendly_name": "Varmeopt lad op lav",
+                    "icon": "mdi:battery-charging-medium",
+                    "styrer": command.acting,
+                    "begrundelse": decision.reason,
+                    # Til UVR'ens «lad til nederste føler ved aktuelt fremløb».
+                    # Temperaturen står her så det kan ses hvad planen regnede
+                    # med; UVR'en bruger sin egen kurve.
+                    "mål_temp": _round(decision.charge_temp, 1) if low else None,
+                    "lad_kwh": _round(decision.charge_kwh, 1) if low else None,
+                    "plan": self.charge_plan.note,
+                },
+            ),
+            (
+                SENSOR_CHARGE,
+                high,
+                {
+                    "friendly_name": "Varmeopt lad op",
+                    "icon": "mdi:battery-charging-high",
+                    # Samme port som på beslutningen. Uden den ville flaget se
+                    # ud som en ordre selv når ingen har lov at give den.
+                    "styrer": command.acting,
+                    "begrundelse": decision.reason,
+                    "lad_kwh": _round(decision.charge_kwh, 1) if high else None,
+                    "besparelse_kr": _round(decision.saving_kr, 2) if high else None,
+                    "vindue_min": _round(self._from_now(decision.window_minutes), 0),
+                    # Blokken: hvornår den ligger, og hvor meget den er sat til.
+                    # Opladningen er planlagt én gang og køres én gang - se
+                    # charge.py - så det her er et skema og ikke et øjebliksbud.
+                    "plan": self.charge_plan.note,
+                    "starter_om_min": _round(self._charge_minutes()[0], 0),
+                    "slutter_om_min": _round(self._charge_minutes()[1], 0),
+                },
+            ),
+        ]
+        # **Det flag der skal slukkes, skrives først, og hvert for sig.** Lå
+        # de i ét forsøg, kunne en fejl på det første efterlade det andet
+        # tændt - og i en uheldig rækkefølge stå med begge tændt i HA. Kan et
+        # flag ikke slukkes, tændes det andet ikke: hellere ingen opladning
+        # i et minut end to ordrer til UVR'en på én gang.
+        failed_off = False
+        for entity, on, attributes in sorted(writes, key=lambda w: w[1]):
+            if on and failed_off:
+                log.warning(
+                    "tænder ikke %s - det andet ladeflag kunne ikke slukkes", entity
+                )
+                continue
+            try:
+                await ha.set_state(entity, "on" if on else "off", attributes)
+            except HaError as exc:
+                log.warning("kunne ikke udgive %s: %s", entity, exc)
+                if not on:
+                    failed_off = True
 
     @staticmethod
     def _held_reason(decision: Any, command: Any) -> str:

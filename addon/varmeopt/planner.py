@@ -222,7 +222,12 @@ class Projection:
 PLACING_RULES = frozenset({"charge_now", "wait_cheaper", "wait_grid"})
 
 
-def choose_charge(high: Decision, low: Decision | None) -> Decision:
+def choose_charge(
+    high: Decision,
+    low: Decision | None,
+    high_open: bool = True,
+    low_open: bool = True,
+) -> Decision:
     """Den høje opladning eller den lave - én blok, ikke to.
 
     Den høje lader til ``hp_charge_temp``, 56 grader, og er den eneste der
@@ -243,10 +248,15 @@ def choose_charge(high: Decision, low: Decision | None) -> Decision:
     * Ellers den lave, hvis den kan lægge en blok. Samme behov, billigere varme.
     * Ellers den høje som den er - også når den ikke lægger noget, for så er
       det dens svar der skal stå på siden.
+
+    ``high_open``/``low_open`` er kvoterne fra ``ChargePlan.may_place``. En
+    slags hvis kvote er brugt, lægger ikke noget - og så må den ikke tage
+    pladsen fra den anden. Uden det valgtes den høje hver gang der manglede
+    varmt vand, også når den var brugt, og den lave kom aldrig til.
     """
-    if low is None or low.rule not in PLACING_RULES:
+    if low is None or not low_open or low.rule not in PLACING_RULES:
         return high
-    if high.rule in PLACING_RULES and (high.dhw_short_kwh or 0.0) > 0:
+    if high_open and high.rule in PLACING_RULES and (high.dhw_short_kwh or 0.0) > 0:
         return high
     return low
 
@@ -452,6 +462,7 @@ class Planner:
         locked_minutes: int | None = None,
         current_source: str | None = None,
         min_saving_kr: float | None = None,
+        space_only: bool = False,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
@@ -518,6 +529,11 @@ class Planner:
         beslutning. Den lave opladning har sit eget: den er ikke en ekstra
         start, men en start UVR'en ellers ville have lavet senere - se
         ``choose_charge``.
+
+        ``space_only`` er den lave opladning: varmtvandet i strækket *tælles*,
+        så den del af lageret der går til bad ikke regnes med som rumvarme,
+        men opladningen dimensioneres kun til rumvarmens mangel - den kan ikke
+        lave varmt vand ved kurvens fremløb.
         """
         floor_kr = self.min_saving_kr if min_saving_kr is None else min_saving_kr
         price_now = plan.marginal(0, grid=grid) if plan is not None else None
@@ -765,6 +781,14 @@ class Planner:
             short = self._shortfall(
                 displaced, stored_kwh, hot_kwh, dhw_kwh, dhw_input_for
             )
+            if space_only:
+                # Varmtvandet er trukket fra rumvarmens «har» i
+                # ``_shortfall``; dets egen mangel kan den lave ikke dække.
+                short = replace(
+                    short,
+                    dhw_kwh=0.0,
+                    driver=" til rumvarme" if short.space_kwh > 0 else "",
+                )
             need, driver = short.total, short.driver
             # Under ét minimumstræk er det ikke en opladning - det er en
             # start. Her stod `need <= 0`, og mængden blev derefter løftet op
