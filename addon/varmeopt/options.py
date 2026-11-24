@@ -321,6 +321,10 @@ _DEFAULTS: dict[str, object] = {
     # kan først regnes med ti minutter efter start.
     "cop_learn_warmup_minutes": 10,
     "auto_update": False,
+    # Selvtræningen - se demandfix.py og selftune.py. Begge samler data fra
+    # første dag og virker først når der er nok; de kan slås fra her.
+    "demand_correction_enabled": True,
+    "self_tune_enabled": True,
 }
 
 
@@ -451,6 +455,8 @@ class Options:
     entity_tank_b_bottom: str
     entity_tank_b_outlet: str
     auto_update: bool
+    demand_correction_enabled: bool
+    self_tune_enabled: bool
     control_enabled: bool
     control_min_dwell_minutes: float
     control_confirm_minutes: float
@@ -526,6 +532,8 @@ class Options:
             low_charge_min_saving_kr=float(values["low_charge_min_saving_kr"]),
             control_confirm_plans=int(values["control_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
+            demand_correction_enabled=_as_bool(values["demand_correction_enabled"]),
+            self_tune_enabled=_as_bool(values["self_tune_enabled"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),

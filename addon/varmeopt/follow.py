@@ -57,6 +57,14 @@ PELLET_MARGIN_MINUTES = 10.0
 # add-on'en været nede, ved vi ikke hvad der skete imens.
 MAX_GAP_SECONDS = 300.0
 
+# Fristen følger de målte starter, når der er nok af dem: den længste af de
+# seneste plus en margin, inden for et loft og en bund. Starter pumpen altid
+# inden for 6 minutter, er 20 minutter for længe at vente på en fejl.
+LEARN_AFTER_STARTS = 5
+LEARN_MARGIN_MINUTES = 10.0
+LEARN_MIN_MINUTES, LEARN_MAX_MINUTES = 15.0, 45.0
+LEARN_FROM_LAST = 10
+
 # Så mange afsluttede hændelser og startforsinkelser huskes.
 MAX_EVENTS = 30
 MAX_DELAYS = 20
@@ -208,7 +216,7 @@ class FollowWatch:
                 event = Event(NOT_STARTED, self._ordered_since, now, low=low)
                 self.open[NOT_STARTED] = event
             event.seen_until = now
-            if not event.flagged and event.minutes >= self.grace_minutes:
+            if not event.flagged and event.minutes >= self.grace(low):
                 event.flagged = True
                 out.append(
                     f"{event.flag} har stået tændt i {event.minutes:.0f} min uden at "
@@ -255,6 +263,16 @@ class FollowWatch:
                 self._keep(event)
 
         return out
+
+    def grace(self, low: bool = False) -> float:
+        """Fristen for flaget: lært af de målte starter, eller den faste."""
+        delays = (self.delays_low if low else self.delays)[-LEARN_FROM_LAST:]
+        if len(delays) < LEARN_AFTER_STARTS:
+            return self.grace_minutes
+        return min(
+            LEARN_MAX_MINUTES,
+            max(LEARN_MIN_MINUTES, max(delays) + LEARN_MARGIN_MINUTES),
+        )
 
     def _close_not_started(self, now: float, outcome: str) -> None:
         event = self.open.pop(NOT_STARTED, None)
@@ -317,8 +335,11 @@ class FollowWatch:
             ("lad op lav", self.typical_delay_low, len(self.delays_low)),
         ):
             if delay is not None:
+                low = name.endswith("lav")
+                learned = count >= LEARN_AFTER_STARTS
                 parts.append(
-                    f"pumpen starter typisk {delay:.0f} min efter {name} ({count} starter)"
+                    f"pumpen starter typisk {delay:.0f} min efter {name} ({count} starter, "
+                    f"frist {self.grace(low):.0f} min{' lært' if learned else ''})"
                 )
         if not parts:
             return "ingen opladninger set endnu"

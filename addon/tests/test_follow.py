@@ -133,6 +133,28 @@ class FollowWatchTest(unittest.TestCase):
         self.assertEqual(watch.delays_low, [25.0])
         self.assertEqual(watch.delays, [])
 
+    def test_the_grace_follows_the_measured_starts(self):
+        # Fem starter på 3-6 min: fristen bliver 6 + 10 = 16 min, ikke 20.
+        watch = FollowWatch(grace_minutes=20)
+        t = 0
+        for wait in (3, 4, 6, 5, 3):
+            self.run_minutes(watch, t, wait, **self.charge(False))
+            self.run_minutes(watch, t + wait, 5, **self.charge(True))
+            self.run_minutes(watch, t + wait + 5, 1, ordered=False, acting=True,
+                             running=False, source="varmepumpe")
+            t += wait + 10
+        self.assertEqual(watch.grace(), 16.0)
+        lines = self.run_minutes(watch, t, 17, **self.charge(False))
+        self.assertEqual(len(lines), 1, "advarslen kommer efter 16 min, ikke 20")
+        self.assertEqual(watch.grace(low=True), 20, "det lave flag har sine egne")
+
+    def test_the_learned_grace_has_a_floor_and_a_ceiling(self):
+        watch = FollowWatch(grace_minutes=20)
+        watch.delays = [1.0] * 5
+        self.assertEqual(watch.grace(), 15.0)
+        watch.delays = [50.0] * 5
+        self.assertEqual(watch.grace(), 45.0)
+
     def test_round_trip(self):
         watch = FollowWatch(grace_minutes=20)
         self.run_minutes(watch, 0, 25, **self.charge(False))

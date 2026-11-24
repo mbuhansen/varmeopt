@@ -457,7 +457,15 @@ class CycleTest(unittest.TestCase):
             self.cycle()
         seen = self.app.logbook._seen
         self.assertEqual(seen["kilde"], self.app.status["command"].source or seen["rå_kilde"])
-        self.assertEqual(seen["plan"]["rækker"][0][1], "holdchrg")
+        self.assertEqual(seen["plan"]["rækker"][0][0], "holdchrg")
+        # Planen skal kunne bygges op igen med samme pris - det er hele
+        # grunden til at den står i logbogen.
+        from varmeopt.prices import Plan
+
+        again = Plan.from_replay(seen["plan"])
+        self.assertAlmostEqual(
+            again.marginal(0).kr_per_kwh, self.app.status["plan"].marginal(0).kr_per_kwh
+        )
         rows = int(o.planner_horizon_hours * 2)
         self.assertEqual(len(seen["frem"]["minutter"]), rows)
         self.assertEqual(len(seen["frem"]["behov_kw"]), rows)

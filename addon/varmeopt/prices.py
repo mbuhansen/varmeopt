@@ -516,6 +516,65 @@ class Plan:
     def __len__(self) -> int:
         return len(self.slots)
 
+    # ------------------------------------------------------ genafspilning
+
+    def to_replay(self, rows: int | None = None) -> dict[str, Any]:
+        """Planen som den kan bygges op igen - til logbogen.
+
+        ``to_raw`` er et udtræk til skærmen; der mangler grænsernes trapper, og
+        en genafspilning ville regne andre priser end dem beslutningen blev
+        truffet på. Her står præcis det ``__init__`` tager, så
+        ``from_replay(to_replay())`` giver den samme marginalpris i hver række.
+        """
+        slots = self.slots if rows is None else self.slots[:rows]
+        return {
+            "rækker": [
+                [s.state, s.import_price, s.export_price, s.soc_percent, s.target]
+                for s in slots
+            ],
+            "tur": self.round_trip,
+            "eksportgulv": self.export_floor,
+            "tom": self.empty_percent,
+            "start": self.starts_at,
+            "ladegrænser": [list(x) for x in self.charge_limits] if self.charge_limits else None,
+            "salgsgrænser": [list(x) for x in self.export_limits] if self.export_limits else None,
+        }
+
+    @classmethod
+    def from_replay(cls, raw: Any) -> Plan | None:
+        """Planen fra logbogen. ``None`` når linjen ikke kan læses."""
+        if not isinstance(raw, dict) or not isinstance(raw.get("rækker"), list):
+            return None
+        try:
+            slots = tuple(
+                Slot(
+                    index=i,
+                    state=str(r[0]),
+                    import_price=_number(r[1]),
+                    export_price=_number(r[2]),
+                    soc_percent=_number(r[3]),
+                    target=_number(r[4]),
+                )
+                for i, r in enumerate(raw["rækker"])
+            )
+
+            def limits(value: Any) -> Limits | None:
+                if not isinstance(value, list) or not value:
+                    return None
+                return tuple((float(a), float(b)) for a, b in value)
+
+            return cls(
+                slots,
+                trip=float(raw.get("tur") or BATTERY_ROUND_TRIP),
+                export_floor=float(raw.get("eksportgulv") or EXPORT_FLOOR),
+                empty_percent=float(raw.get("tom") or BATTERY_EMPTY_PERCENT),
+                starts_at=_number(raw.get("start")),
+                charge_limits=limits(raw.get("ladegrænser")),
+                export_limits=limits(raw.get("salgsgrænser")),
+            )
+        except (TypeError, ValueError, IndexError):
+            return None
+
     @property
     def horizon_minutes(self) -> int:
         return len(self.slots) * SLOT_MINUTES

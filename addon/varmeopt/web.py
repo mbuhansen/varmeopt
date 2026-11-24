@@ -234,7 +234,9 @@ class WebUI:
         on_charge: Callable[[bool], str] | None = None,
         follow: Callable[[], Any] | None = None,
         logbook: Callable[[], Any] | None = None,
+        selftrain: Callable[[], Any] | None = None,
     ) -> None:
+        self._selftrain = selftrain
         self._charge_plan = charge_plan
         self._ledger = ledger
         self._follow = follow
@@ -793,6 +795,8 @@ class WebUI:
             payload["ordre"] = self._follow().to_raw()
         if self._logbook is not None:
             payload["logbog"] = self._logbook().light()
+        if self._selftrain is not None:
+            payload["selvtræning"] = self._selftrain()
 
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M")
         return web.Response(
@@ -2047,6 +2051,10 @@ def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
                 else "samler - første linje skrives når halvtimen skifter"
             ),
         ))
+    if s.get("demand_note"):
+        rows.append(("Behovets faktor", _esc(s["demand_note"])))
+    if s.get("tune_note"):
+        rows.append(("Nattens justering", _esc(s["tune_note"])))
     dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
     return f'<h2>Selvkontrol</h2><div class="card">{items}<dl>{dl}</dl></div>'
 

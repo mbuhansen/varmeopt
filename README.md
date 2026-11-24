@@ -148,6 +148,27 @@ Hvad der virker nu:
   rammer ved siden af, og til en senere genafspilning af planlæggeren på det
   den vidste dengang. Debug-filen har nu også regnskabet, ordrevagten og
   logbogens sidste døgn.
+- **Træner sig selv, når der er data nok** — og kun da. Tre ting samler fra
+  første dag og virker af sig selv bagefter:
+  - *Ordretjekkets frist* følger de målte starter, når der er fem for et flag:
+    den længste af de seneste plus 10 minutter, mellem 15 og 45.
+  - *Behovets faktor* (`demandfix.py`): hver nat holdes logbogens udsigt, lavet
+    1-12 timer før, op mod husets målte træk. Rammer den skævt, ganges
+    behovet med en faktor mellem 0,8 og 1,3 — først efter 14 brugbare dage,
+    og en femtedel af vejen pr. nat. En faktor og ikke en margin: den retter
+    en skævhed, men gør ikke hver opladning større.
+  - *Nattens justering* (`replay.py`, `selftune.py`): planlæggeren og blokken
+    genafspilles på logbogens dage, og `source_hysteresis`,
+    `charge_min_saving_kr` og `low_charge_min_saving_kr` prøves på nabo-værdier.
+    Den justerer kun når simulatoren har bestået en prøve — med de beslutninger
+    der faktisk blev truffet, skal den ramme pumpens og fyrets varme og
+    lagerets døgnforløb — og kun ét skridt pr. nat, inden for faste grænser,
+    når en anden værdi var klart billigere over mindst 5 dage og ikke dyrere på
+    de 3 nyeste, som holdes ude af valget. Mindstekørsel, antal blokke,
+    bekræftelser, temperaturer og slitage rører den aldrig.
+  Status står i Selvkontrol-boksen på forsiden og i `debug.json` under
+  `selvtræning`. Begge kan slås fra med `demand_correction_enabled` og
+  `self_tune_enabled`.
 - Web-UI gennem HA's ingress: aktuel COP med hele begrundelseskæden, et
   varmekort over den indlærte tabel hvor huller i dækningen er synlige, og en
   lagerside der tegner begge tanke lag for lag.
@@ -321,6 +342,8 @@ siges i loggen ved opstart.
 | `charge_confirm_plans` | 2 | Hvor mange Predbat-beregninger et ønske om at lade op skal holde på, før det bliver til en blok. Add-on'en regner hvert minut, Predbat cirka hvert femte — med 2 skal ønsket overleve én ny beregning, så et enkelt minuts prisskift ikke binder en to-timers opladning. 1 lægger blokken straks |
 | `charge_min_saving_kr` | 1.0 | Det mindste en opladning skal spare i kroner, før kompressoren startes for den — regnet på det der faktisk kan lades fra nettet, inden batteriet tager over. Den 18. oktober lovede en blok på 3,6 kWh 0,25 kr, og opstarten kostede mere varme end den hentede. 0 slår gulvet fra |
 | `low_charge_min_saving_kr` | 1.0 | Samme gulv for den lave opladning (`binary_sensor.varmeopt_lad_op_lav`). Den er ikke en ekstra start, men en start UVR'en ellers ville have lavet senere, så opstartstabet bag `charge_min_saving_kr` gælder ikke på samme måde. Morgenen den 24. november ville have sparet ~0,7 kr — under 1,0 |
+| `demand_correction_enabled` | true | Ret behovsudsigten med den faktor logbogen viser — virker først efter 14 dage |
+| `self_tune_enabled` | true | Nattens justering af de tre knapper ovenfor — kun med bestået prøve, ét skridt pr. nat |
 | `cop_learn_warmup_minutes` | 10 | Hvor længe varmepumpen skal have kørt, før dens COP læres. Lige efter en start fejer fremløbet op gennem tabellen med en COP der ikke har sat sig. |
 | `control_confirm_minutes` | 3 | Hvor længe en ny kilde skal holde før den tæller. Uden den gør hviletiden et ét-minuts udsving til et kvarters fejl |
 | `control_confirm_plans` | 2 | Hvor mange Predbat-beregninger en ny kilde skal holde på, før den tæller. Prisen skifter i Predbats takt, cirka hvert femte minut, så tre minutter kan ikke skelne en plan der kun står i fire minutter fra en der bliver stående. 1 slår det fra |
@@ -448,6 +471,9 @@ VARMEOPT_DATA_DIR=./data python -m varmeopt
 | `journal.py` | De sidste loglinjer, til fejlsøgningsfilen |
 | `follow.py` | Følges ladeflaget — starter kompressoren? Ren, testet |
 | `logbook.py` | Hvad planen så, og hvad der skete, pr. halvtime. Testet |
+| `demandfix.py` | Behovsudsigtens faktor, lært af logbogen. Ren, testet |
+| `replay.py` | Genafspilning: UVR-model, simulator og prøven. Testet |
+| `selftune.py` | Nattens justering af tre knapper, med værn. Testet |
 | `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
