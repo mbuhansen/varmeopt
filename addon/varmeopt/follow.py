@@ -24,10 +24,12 @@ udført, og det har et svar.
   pumpen inden, er det bare en start, og ventetiden gemmes - så det kan ses
   hvor lang tid kæden faktisk tager, og fristen kan sættes efter det.
 * ``kører_mod_pille`` - kilden er pillefyr og styrer, der er ingen
-  opladning, men kompressoren kører alligevel. Kun en bemærkning: det kan
-  være spaen eller varmt vand, hvis Node-RED lader pumpen tage dem uanset
-  kilden. Optræder den hver dag på samme tid, er det sådan flowet er bygget;
-  optræder den tilfældigt, er det værd at se på.
+  opladning, men kompressoren kører alligevel. UVR'en lader med vilje
+  pumpen køre op til 20 minutter efter et skift til pillefyr, mens fyret
+  varmer op, så en varmtvandsproduktion ikke falder. Det er
+  ``PELLET_OVERLAP_MINUTES``, og først når pumpen har kørt længere end det
+  plus en margin, er det en bemærkning. Kun en bemærkning: det er ikke
+  sikkert det er en fejl, men det er værd at se på.
 
 Kendes pumpens effekt ikke i en cyklus, dømmes der ikke: tavshed er ikke et
 bevis for at den står stille.
@@ -43,6 +45,13 @@ from typing import Any
 # fejl. NIBE-pumpen har sin egen startforsinkelse efter et stop, og den skal
 # kunne nå at løbe ud.
 GRACE_MINUTES = 20.0
+
+# Så længe lader UVR'en varmepumpen køre videre efter et skift til
+# pillefyr - fyrets opvarmningstid. En gammel funktion brugeren har beholdt,
+# så varmt vand der er i gang ikke falder. Plus en margin, så en pumpe der
+# slutter præcis på minuttet ikke bliver til en bemærkning.
+PELLET_OVERLAP_MINUTES = 20.0
+PELLET_MARGIN_MINUTES = 10.0
 
 # Længste spring mellem to cyklusser der tæller som sammenhængende. Har
 # add-on'en været nede, ved vi ikke hvad der skete imens.
@@ -183,7 +192,9 @@ class FollowWatch:
                 event = Event(AGAINST_PELLET, now, now)
                 self.open[AGAINST_PELLET] = event
             event.seen_until = now
-            if not event.flagged and event.minutes >= self.grace_minutes:
+            if not event.flagged and event.minutes >= (
+                PELLET_OVERLAP_MINUTES + PELLET_MARGIN_MINUTES
+            ):
                 event.flagged = True
         else:
             event = self.open.pop(AGAINST_PELLET, None)
@@ -222,8 +233,8 @@ class FollowWatch:
             out.append((
                 "bemærkning",
                 f"Kilden er pillefyr, men varmepumpen har kørt i "
-                f"{event.minutes:.0f} min uden en opladning. Det kan være "
-                "spa eller varmt vand.",
+                f"{event.minutes:.0f} min uden en opladning - længere end "
+                f"UVR'ens {PELLET_OVERLAP_MINUTES:.0f} min mens fyret varmer op.",
             ))
         return out
 

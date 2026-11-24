@@ -125,8 +125,9 @@ Hvad der virker nu:
   er ikke skyggedriften om igen: den spurgte om Node-RED var enig, det her om
   en ordre blev udført. Starter pumpen inden fristen, gemmes ventetiden, så
   det kan ses hvor lang tid kæden faktisk tager. Kører pumpen mens kilden er
-  pillefyr og der ingen opladning er, står det som en bemærkning — det kan
-  være spa eller varmt vand.
+  pillefyr og der ingen opladning er, står det som en bemærkning — men først
+  efter 30 minutter: UVR'en lader med vilje pumpen køre op til 20 minutter
+  efter et skift, mens fyret varmer op, så varmt vand ikke falder.
 - **Fører logbog pr. halvtime** i `/data/logbook.jsonl`, fjorten dage tilbage:
   hvad planen så ved halvtimens start (Predbats plan, låste priser, lagerets
   indhold og udsigten frem for behov, COP og udetemperatur) og hvad der

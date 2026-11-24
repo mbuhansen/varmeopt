@@ -75,15 +75,28 @@ class FollowWatchTest(unittest.TestCase):
         self.assertEqual(lines, [])
         self.assertEqual(watch.active(), [])
 
+    def test_the_uvr_overlap_after_a_switch_to_pellet_is_not_a_remark(self):
+        # UVR'en lader pumpen køre op til 20 min efter skiftet, mens fyret
+        # varmer op - med vilje. Det skal ikke stå på forsiden.
+        watch = FollowWatch(grace_minutes=20)
+        self.run_minutes(
+            watch, 0, 25, ordered=False, acting=True, running=True, source="pillefyr"
+        )
+        self.assertEqual(watch.active(), [])
+        self.run_minutes(
+            watch, 25, 1, ordered=False, acting=True, running=False, source="pillefyr"
+        )
+        self.assertEqual(watch.events, [])
+
     def test_pump_running_on_pellet_is_a_remark(self):
         watch = FollowWatch(grace_minutes=20)
         lines = self.run_minutes(
-            watch, 0, 30, ordered=False, acting=True, running=True, source="pillefyr"
+            watch, 0, 35, ordered=False, acting=True, running=True, source="pillefyr"
         )
         self.assertEqual(lines, [])  # kun en bemærkning, ikke en advarsel i loggen
         self.assertEqual(watch.active()[0][0], "bemærkning")
         self.run_minutes(
-            watch, 30, 1, ordered=False, acting=True, running=False, source="pillefyr"
+            watch, 35, 1, ordered=False, acting=True, running=False, source="pillefyr"
         )
         self.assertEqual(watch.events[-1].kind, AGAINST_PELLET)
         self.assertEqual(watch.events[-1].outcome, "pumpen stoppede")
