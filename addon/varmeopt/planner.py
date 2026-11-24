@@ -129,6 +129,11 @@ class Decision:
     dhw_have_kwh: float | None = None
     space_need_kwh: float | None = None
     space_have_kwh: float | None = None
+    # Den lave opladning: lageret ladet ved varmekurvens fremløb i stedet for
+    # 56 grader - se ``choose_charge``. ``charge_temp`` er den temperatur
+    # opladningen er regnet ved, uanset slags.
+    low: bool = False
+    charge_temp: float | None = None
 
     @property
     def charging_note(self) -> str:
@@ -209,6 +214,41 @@ class Projection:
     @property
     def now(self) -> bool:
         return self.minutes == 0
+
+
+# De svar der lægger en blok: lad nu, eller vent på en billigere halvtime.
+# ``charge.py`` lægger blokken efter ``planned_kwh`` og ``window_starts_in``,
+# og begge dele står kun på de tre.
+PLACING_RULES = frozenset({"charge_now", "wait_cheaper", "wait_grid"})
+
+
+def choose_charge(high: Decision, low: Decision | None) -> Decision:
+    """Den høje opladning eller den lave - én blok, ikke to.
+
+    Den høje lader til ``hp_charge_temp``, 56 grader, og er den eneste der
+    kan lave varmt vand og spa. Den lave lader ved varmekurvens fremløb - det
+    UVR'en alligevel ville have kørt senere - og kan kun dække rumvarmen. Til
+    gengæld har den ingen COP-straf: ved 2 grader ude er COP'en 4,1 ved
+    kurvens 46,5 mod 3,45 ved 57,5.
+
+    Den 24. november var natten 2,17 kr fra nettet og morgenen 2,3-3,1 af
+    batteriet. Lageret løb tørt kl. 6, og pumpen kørte to timer i det dyre.
+    Den høje opladning kunne ikke betale sig - natten ved 56 grader kostede
+    0,63 kr/kWh varme mod morgenens 0,64 - men den lave havde kostet 0,53.
+
+    Reglen:
+
+    * Mangler der varmt vand eller spa, og kan den høje lægge en blok, er det
+      den høje. Kun den kan lave det.
+    * Ellers den lave, hvis den kan lægge en blok. Samme behov, billigere varme.
+    * Ellers den høje som den er - også når den ikke lægger noget, for så er
+      det dens svar der skal stå på siden.
+    """
+    if low is None or low.rule not in PLACING_RULES:
+        return high
+    if high.rule in PLACING_RULES and (high.dhw_short_kwh or 0.0) > 0:
+        return high
+    return low
 
 
 def _finite(value: Any) -> bool:
@@ -411,6 +451,7 @@ class Planner:
         elapsed_minutes: float = 0.0,
         locked_minutes: int | None = None,
         current_source: str | None = None,
+        min_saving_kr: float | None = None,
     ) -> Decision:
         """Hele svaret: kilde nu, og om der skal lades ud over behovet.
 
@@ -472,7 +513,13 @@ class Planner:
 
         ``current_source`` er den kilde vagten står ved. Den afgør et tæt løb
         - se ``source_now``.
+
+        ``min_saving_kr`` erstatter planlæggerens eget gulv for den ene
+        beslutning. Den lave opladning har sit eget: den er ikke en ekstra
+        start, men en start UVR'en ellers ville have lavet senere - se
+        ``choose_charge``.
         """
+        floor_kr = self.min_saving_kr if min_saving_kr is None else min_saving_kr
         price_now = plan.marginal(0, grid=grid) if plan is not None else None
         now = price_now.kr_per_kwh if price_now is not None else None
 
@@ -875,7 +922,7 @@ class Planner:
         # fanger en forskel der godt kan, men ikke er en kompressorstart
         # værd. Det står *før* venteudgangene, for de lægger også en blok.
         expected = grid_gain * (want if need is None else min(want, need))
-        if expected < self.min_saving_kr:
+        if expected < floor_kr:
             return _with(
                 decision,
                 **stretch,
@@ -883,13 +930,13 @@ class Planner:
                 rule="saving_small",
                 charge_state=(
                     f"gevinsten er for lille - {expected:.2f} kr, under "
-                    f"{self.min_saving_kr:.2f}"
+                    f"{floor_kr:.2f}"
                 ),
                 **short_fields,
                 reason=(
                     f"{why}; {want:.1f} kWh fra nettet {self._when(grid_when)} "
                     f"sparer kun {expected:.2f} kr {self._when(best_when)} — "
-                    f"under {self.min_saving_kr:.2f} kr, ikke en start værd"
+                    f"under {floor_kr:.2f} kr, ikke en start værd"
                 ),
             )
 

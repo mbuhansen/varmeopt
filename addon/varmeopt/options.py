@@ -309,6 +309,11 @@ _DEFAULTS: dict[str, object] = {
     # for den. Den 18. oktober lovede en blok på 3,6 kWh 0,25 kr, og opstarten
     # kostede mere varme end den hentede. 0 slår gulvet fra.
     "charge_min_saving_kr": 1.0,
+    # Det samme gulv for den lave opladning - lageret ladet ved varmekurvens
+    # fremløb. Den er ikke en ekstra start, men en start UVR'en ellers ville
+    # have lavet senere, så opstartstabet bag ``charge_min_saving_kr`` gælder
+    # ikke på samme måde. Står på det samme indtil brugeren vælger andet.
+    "low_charge_min_saving_kr": 1.0,
     # Hvor længe varmepumpen skal have kørt, før dens COP læres. De første
     # minutter efter en start fejer fremløbet fra ~41 til ~57 grader, og hver
     # måling lander i en ny celle med en COP der ikke har sat sig - den 20.
@@ -453,6 +458,7 @@ class Options:
     control_warmup_minutes: float
     charge_confirm_plans: int
     charge_min_saving_kr: float
+    low_charge_min_saving_kr: float
     cop_learn_warmup_minutes: float
     tank_liters: int
     tank_reference_temp: float
@@ -517,6 +523,7 @@ class Options:
             cycle_seconds=int(values["cycle_seconds"]),
             charge_confirm_plans=int(values["charge_confirm_plans"]),
             charge_min_saving_kr=float(values["charge_min_saving_kr"]),
+            low_charge_min_saving_kr=float(values["low_charge_min_saving_kr"]),
             control_confirm_plans=int(values["control_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
             control_enabled=_as_bool(values["control_enabled"]),

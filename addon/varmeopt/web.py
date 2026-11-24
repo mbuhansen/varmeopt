@@ -2072,7 +2072,11 @@ def _ledger_body(ledger: Any, now: float) -> str:
 
     body_rows = []
     for entry in reversed(ledger.entries):
-        kind = "manuel" if entry.manual else ("efter" if entry.top_up else "auto")
+        kind = (
+            "manuel" if entry.manual
+            else "lav" if getattr(entry, "low", False)
+            else ("efter" if entry.top_up else "auto")
+        )
         span = _when_at(entry.started) + (
             f"–{_hhmm(entry.ended)}" if entry.ended is not None else "–"
         )

@@ -293,6 +293,12 @@ class Block:
     # ellers siger blokken «nået» mens planlæggeren siger at der mangler.
     # Nul fra en ældre udgave betyder ``dear_until``.
     need_until: float = 0.0
+    # Den lave opladning: ladet ved varmekurvens fremløb, ikke 56 grader. Den
+    # har sit eget flag til UVR'en (``lad_op_lav``), sin egen kvote - én pr.
+    # stræk - og dens lager er fuldt ved ``temp``, ikke ved ``hp_charge_temp``.
+    # Se ``planner.choose_charge``.
+    low: bool = False
+    temp: float | None = None
 
     @property
     def target_until(self) -> float:
@@ -330,6 +336,8 @@ class Block:
             "expected_alt": _rounded(self.expected_alt),
             "extended": self.extended,
             "need_until": round(self.need_until, 1),
+            "low": self.low,
+            "temp": _rounded(self.temp),
         }
 
     @classmethod
@@ -360,6 +368,8 @@ class Block:
                 expected_alt=_number(raw.get("expected_alt")),
                 extended=raw.get("extended") is True,
                 need_until=float(raw.get("need_until") or 0.0),
+                low=raw.get("low") is True,
+                temp=_number(raw.get("temp")),
             )
         except (KeyError, TypeError, ValueError):
             return None
@@ -389,6 +399,12 @@ class ChargePlan:
     # når den forrige leverede sin mængde, målt - se efteropladningen i
     # ``update``.
     top_up_open: bool = False
+    # Enden på det stræk der er ladet *lavt* op imod. Den lave opladning
+    # erstatter en kørsel UVR'en ellers selv ville have lavet senere, og den
+    # tæller derfor ikke i ``done_until``'s kvote - brugerens regel, 24.
+    # november. Men den har sin egen: én pr. stræk, så et Predbat der lægger om
+    # hele natten ikke bliver til flere lave kørsler.
+    low_done_until: float | None = None
     note: str = NO_PLAN
     # Den regel der står bag noten, som en kode - til regelkortet på
     # plan-siden. Noten er en sætning; koden er det siden kan sætte en prik
@@ -921,7 +937,20 @@ class ChargePlan:
             return False
 
         dear_from, dear_until, need_until = self._dear_key(now, decision, window)
-        covered = self.done_until is not None and dear_from < self.done_until
+        low = getattr(decision, "low", False) is True
+        if low:
+            # Den lave har sin egen kvote og ingen efteropladning: én lav
+            # opladning pr. stræk, uanset hvad den høje har gjort.
+            covered = self.low_done_until is not None and dear_from < self.low_done_until
+            if covered:
+                self.block = None
+                self._forget_wish()
+                self.rule = "covered_low"
+                self.note = "allerede ladet lavt op mod det her dyre stræk"
+                return False
+        covered = (
+            not low and self.done_until is not None and dear_from < self.done_until
+        )
         # **Efteropladningen.** Én undtagelse fra spærren nedenfor, og den er
         # ikke den udgåede om et tømt lager: den gælder *før* strækket, ikke
         # inde i det, og kun når blokken leverede den mængde den blev lagt
@@ -1078,6 +1107,8 @@ class ChargePlan:
             began_at=max(starts, now),
             top_up=top_up,
             need_until=need_until,
+            low=low,
+            temp=_number(getattr(decision, "charge_temp", None)),
         )
         # En ny blok har ikke leveret noget, og den forrige cyklus hører til
         # den gamle. Uden nulstillingen ville det første mellemrum blive
@@ -1194,6 +1225,8 @@ class ChargePlan:
     def _label(block: Block) -> str:
         if block.manual:
             return "manuel opladning"
+        if block.low:
+            return "lader lavt"
         return "efteroplader" if block.top_up else "lader"
 
     def _finish(
@@ -1203,7 +1236,10 @@ class ChargePlan:
             # Hvorfor den seneste opladning sluttede - til regelkortet. Det
             # var netop det der var svært at se den 18. oktober.
             self.last_end = {"at": round(now, 1), "code": code, "why": why}
-        if self.block is not None and not self.block.manual:
+        if self.block is not None and self.block.low:
+            # Den lave rører ikke den høje kvote - se ``low_done_until``.
+            self.low_done_until = self.block.dear_until
+        elif self.block is not None and not self.block.manual:
             self.done_until = self.block.dear_until
             # Hver automatisk blok der slutter, afgør det på ny. Kun to veje
             # åbner for én blok mere mod samme stræk: en blok der leverede
@@ -1230,6 +1266,7 @@ class ChargePlan:
             "block": None if self.block is None else self.block.to_raw(),
             "done_until": self.done_until,
             "top_up_open": self.top_up_open,
+            "low_done_until": self.low_done_until,
             # Stemplerne overlever en genstart. Ellers ville hver opdatering
             # nulstille bekræftelsen - og et ønske der har holdt på én plan,
             # skal ikke begynde forfra fordi add-on'en blev genstartet.
@@ -1253,6 +1290,9 @@ class ChargePlan:
         if _finite(until):
             plan.done_until = float(until)
         plan.top_up_open = raw.get("top_up_open") is True
+        low_until = raw.get("low_done_until")
+        if _finite(low_until):
+            plan.low_done_until = float(low_until)
         stamps = raw.get("wanted_stamps")
         if isinstance(stamps, list):
             plan._wanted_stamps = [s for s in stamps if isinstance(s, str)][-8:]

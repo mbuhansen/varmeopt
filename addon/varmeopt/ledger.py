@@ -56,6 +56,10 @@ class Entry:
     ended: float | None = None
     manual: bool = False
     top_up: bool = False
+    # Ladet ved varmekurvens fremløb i stedet for 56 grader - se
+    # ``planner.choose_charge``. Står med, så de to slags kan holdes op mod
+    # hinanden.
+    low: bool = False
     # Det dyre stræk varmen skulle fortrænge. ``None`` når det ikke kendes -
     # en manuel opladning uden et stræk i planen - og så kan der ikke regnes
     # en besparelse, kun en pris.
@@ -241,6 +245,7 @@ class Ledger:
             started=began,
             manual=manual,
             top_up=bool(getattr(block, "top_up", False)),
+            low=getattr(block, "low", False) is True,
             stretch_from=None if stretch is None else float(stretch[0]),
             stretch_until=None if stretch is None else float(stretch[1]),
             expected_kr=(

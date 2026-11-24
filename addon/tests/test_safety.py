@@ -12,7 +12,13 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
-from varmeopt.__main__ import SENSOR_CHARGE, SENSOR_DECISION, SENSOR_VP_FORECAST, Varmeopt
+from varmeopt.__main__ import (
+    SENSOR_CHARGE,
+    SENSOR_CHARGE_LOW,
+    SENSOR_DECISION,
+    SENSOR_VP_FORECAST,
+    Varmeopt,
+)
 from varmeopt.cop import Cell, CopTable
 from varmeopt.ha import HaError, HomeAssistant
 from varmeopt.planner import Planner
@@ -129,14 +135,29 @@ class ReleaseOnShutdownTest(unittest.TestCase):
         asyncio.run(self.app.release_control(self.ha))
 
         published = [entity for entity, _ in self.ha.published]
-        # Prognosen til Predbat kommer til sidst - efter de to flag, der er
-        # de farlige at efterlade. Se ``release_control``.
-        self.assertEqual(published, [SENSOR_CHARGE, SENSOR_DECISION, SENSOR_VP_FORECAST])
+        # Prognosen til Predbat kommer til sidst - efter flagene, der er de
+        # farlige at efterlade. De to opladningsflag først, så kilden. Se
+        # ``release_control``.
+        self.assertEqual(
+            published,
+            [SENSOR_CHARGE_LOW, SENSOR_CHARGE, SENSOR_DECISION, SENSOR_VP_FORECAST],
+        )
         self.assertIs(self.ha.attributes[SENSOR_DECISION]["styrer"], False)
         self.assertIsNone(self.ha.attributes[SENSOR_DECISION]["styr_til"])
         # Opladningsflaget er det farligste at efterlade tændt: en frossen
         # kilde ville bare fortsætte, men det her ville blive ved med at
         # fylde tankene. Derfor slippes det først.
+        self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
+        self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE_LOW], "off")
+
+    def test_a_failing_low_release_still_drops_the_high_flag(self):
+        # Samme regel for det nye flag: fejler det ene, slippes det andet.
+        asyncio.run(self.app.cycle(self.ha))
+        self.ha.published.clear()
+        self.ha.fail_on = SENSOR_CHARGE_LOW
+
+        asyncio.run(self.app.release_control(self.ha))
+
         self.assertEqual(dict(self.ha.published)[SENSOR_CHARGE], "off")
 
     def test_a_failing_decision_release_still_drops_the_charge_flag(self):

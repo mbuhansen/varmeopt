@@ -56,7 +56,7 @@ from .migrate import (
 from .options import Options
 from .outdoorbias import OutdoorBias
 from .pelletload import PelletLoad
-from .planner import Planner, minutes_until_hour
+from .planner import Planner, choose_charge, minutes_until_hour
 from .prices import (
     BATTERY,
     BATTERY_LOSS,
@@ -117,6 +117,15 @@ SENSOR_VP_FORECAST = "sensor.varmeopt_vp_prognose"
 # videre end en attribut man skal grave ud - og en styring der er let at
 # læse rigtigt, bliver oftere læst rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
+# Den lave opladning: lageret ladet ved varmekurvens fremløb i stedet for 56
+# grader. Sit eget flag, fordi UVR'en har sin egen funktion til det - «lad
+# til nederste føler ved aktuelt fremløb» - og Node-RED kobler hvert flag til
+# hver sin. De to er aldrig tændt samtidig. Se ``planner.choose_charge``.
+SENSOR_CHARGE_LOW = "binary_sensor.varmeopt_lad_op_lav"
+
+# Over den ladetemperatur er der ingen lav opladning: kalder kurven på næsten
+# 56 grader, er den lave den høje.
+LOW_CHARGE_MAX_TEMP = 53.0
 
 # Følger anlægget ladeflaget? Se follow.py. Hændelserne og de målte
 # startforsinkelser gemmes; den åbne hændelse ikke - efter en genstart
@@ -630,27 +639,13 @@ class Varmeopt:
             if store is not None
             else None
         )
-        decision = self.planner.decide(
+        # Det de to opladninger har til fælles - se nedenfor.
+        common = dict(
             plan=prices.get("plan"),
             cop_now=lookup.cop if lookup is not None else None,
             cop_later=self._cop_at,
-            charge_cop_at=self._charge_cop_at,
-            # Pladsen måles op til den temperatur blokken lader ved, ikke op
-            # til varmepumpens loft. De sidste grader op til 60 hører til
-            # solvarmen og ACthor, og en blok kan ikke fylde dem.
-            headroom_kwh=(
-                store.room_to(self.options.hp_charge_temp)
-                if store is not None
-                else None
-            ),
             peak_headroom_kwh=store.peak_headroom_kwh if store is not None else None,
             stored_kwh=store.stored_kwh if store is not None else None,
-            # Den del af lageret der er varm nok til at lade beholderen. Uden
-            # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
-            # er varmt vand - og lageret kunne ikke lave et eneste bad.
-            hot_kwh=hot_kwh,
-            dhw_kwh_over=dhw_kwh_over,
-            dhw_input_for=dhw_input_for,
             solar_expected_kwh=solar.get("solar_expected"),
             grid=prices.get("grid"),
             demand_kw=balance.load.kw if balance is not None else None,
@@ -671,6 +666,50 @@ class Varmeopt:
             # vippe over til varmepumpen - se ``source_now``.
             current_source=self.guard.committed,
         )
+        high = self.planner.decide(
+            **common,
+            charge_cop_at=self._charge_cop_at,
+            # Pladsen måles op til den temperatur blokken lader ved, ikke op
+            # til varmepumpens loft. De sidste grader op til 60 hører til
+            # solvarmen og ACthor, og en blok kan ikke fylde dem.
+            headroom_kwh=(
+                store.room_to(self.options.hp_charge_temp)
+                if store is not None
+                else None
+            ),
+            # Den del af lageret der er varm nok til at lade beholderen. Uden
+            # den blev 13 kWh ved 45 grader talt med mod en aften der delvis
+            # er varmt vand - og lageret kunne ikke lave et eneste bad.
+            hot_kwh=hot_kwh,
+            dhw_kwh_over=dhw_kwh_over,
+            dhw_input_for=dhw_input_for,
+        )
+        high = replace(high, charge_temp=self.options.hp_charge_temp)
+        # Den lave opladning: samme spørgsmål, ved varmekurvens fremløb. COP'en
+        # er rumvarmens, pladsen måles op til kurvens setpunkt, og varmt vand
+        # tæller ikke - det kan lageret ikke lave ved 46 grader. Se
+        # ``planner.choose_charge``.
+        low = None
+        low_temp = (
+            self.curve.predict(outdoor_temp) if outdoor_temp is not None else None
+        )
+        if (
+            store is not None
+            and low_temp is not None
+            and math.isfinite(low_temp)
+            and low_temp <= LOW_CHARGE_MAX_TEMP
+        ):
+            low = self.planner.decide(
+                **common,
+                charge_cop_at=self._cop_at,
+                headroom_kwh=store.room_to(low_temp),
+                hot_kwh=None,
+                dhw_kwh_over=None,
+                dhw_input_for=None,
+                min_saving_kr=self.options.low_charge_min_saving_kr,
+            )
+            low = replace(low, low=True, charge_temp=round(low_temp, 1))
+        decision = choose_charge(high, low)
         # Vagten siger ikke hvad der skal gøres - kun om nogen bør gøre
         # det. Siger den nej, står beslutningen der stadig, men flaget
         # siger nej, og Node-RED bruger sin egen logik.
@@ -704,10 +743,11 @@ class Varmeopt:
             # Og «fuldt» må heller ikke afgøres på et halvt lager: det
             # afslutter en kørende blok. Samme loft som pladsen ovenfor -
             # ellers ville planlæggeren sige «ingen plads» mens blokken kunne
-            # køre videre mod et loft den ikke kan nå.
+            # køre videre mod et loft den ikke kan nå. Den lave er fuld ved sin
+            # egen temperatur.
             full=(
                 store is not None
-                and store.room_to(self.options.hp_charge_temp) <= 0.01
+                and store.room_to(self._charge_temp(decision)) <= 0.01
             ),
             source=command.source,
             min_runtime_minutes=self.options.hp_min_runtime_minutes,
@@ -757,6 +797,19 @@ class Varmeopt:
             charging,
             self.charge_plan.note,
             placed=self.charge_plan.block is not None,
+        )
+        # Hvilket flag der tændes, afgøres af den blok der *kører* - ikke af
+        # hvad planlæggeren foretrækker i dette minut. En lav blok kører til
+        # ende som lav, også hvis varmt vand dukker op i behovet undervejs.
+        running = self.charge_plan.block if charging else None
+        decision = replace(
+            decision,
+            low=bool(running is not None and running.low),
+            charge_temp=(
+                running.temp
+                if running is not None and running.low
+                else (decision.charge_temp if not charging else self.options.hp_charge_temp)
+            ),
         )
         projection = self.planner.project(
             prices.get("plan"),
@@ -1512,6 +1565,8 @@ class Varmeopt:
             "rå_kilde": decision.source,
             "styrer": command.acting,
             "lad_op": decision.charge,
+            "lav": decision.low,
+            "lade_temp": _round(decision.charge_temp, 1),
             "lad_kwh": _round(decision.charge_kwh, 2),
             "lovet_kr": _round(decision.saving_kr, 2),
             "ventet_betalt": _round(decision.expected_paid, 3),
@@ -1608,18 +1663,37 @@ class Varmeopt:
         block = self.charge_plan.block
         if block is None or block.manual:
             return _store_covers(decision)
+        # Den lave lader kun til rumvarmen. Varmt vand kan den ikke lave, og
+        # målte man den på det, ville den aldrig nå målet.
+        low = block.low
         return _block_target(
             self.planner,
             block,
             time.time(),
             store is not None,
             stored_kwh=store.stored_kwh if store is not None else None,
-            hot_kwh=hot_kwh,
-            dhw_kwh_over=dhw_kwh_over,
-            dhw_input_for=dhw_input_for,
+            hot_kwh=None if low else hot_kwh,
+            dhw_kwh_over=None if low else dhw_kwh_over,
+            dhw_input_for=None if low else dhw_input_for,
             demand_kw=demand_kw,
             demand_kw_at=self._demand_at,
         )
+
+    def _charge_temp(self, decision: Any) -> float:
+        """Den temperatur lageret lades til - og er fuldt ved.
+
+        Den lagte blok går forud for planlæggerens svar: kører en lav blok,
+        er den fuld ved sin egen temperatur, også hvis planlæggeren i dette
+        minut ville foretrække den høje.
+        """
+        block = self.charge_plan.block
+        if block is not None and not block.manual:
+            if block.low and block.temp is not None:
+                return block.temp
+            return self.options.hp_charge_temp
+        if getattr(decision, "low", False) and decision.charge_temp is not None:
+            return decision.charge_temp
+        return self.options.hp_charge_temp
 
     def _demand_at(self, minutes: int) -> float | None:
         """Hvad huset ventes at trække om så mange minutter.
@@ -1895,6 +1969,17 @@ class Varmeopt:
 
         await self._release_one(
             ha,
+            SENSOR_CHARGE_LOW,
+            "off",
+            {
+                "friendly_name": "Varmeopt lad op lav",
+                "icon": "mdi:battery-charging-medium",
+                "styrer": False,
+                "begrundelse": "add-on'en er stoppet",
+            },
+        )
+        await self._release_one(
+            ha,
             SENSOR_CHARGE,
             "off",
             {
@@ -1969,9 +2054,27 @@ class Varmeopt:
         slået fra, ellers kan man ikke vurdere planen inden man kobler den
         til. Følg det kun når ``styrer`` er sand, præcis som med kilden.
         """
+        high = decision.charge and not decision.low
+        low = decision.charge and decision.low
+        await ha.set_state(
+            SENSOR_CHARGE_LOW,
+            "on" if low else "off",
+            {
+                "friendly_name": "Varmeopt lad op lav",
+                "icon": "mdi:battery-charging-medium",
+                "styrer": command.acting,
+                "begrundelse": decision.reason,
+                # Til UVR'ens «lad til nederste føler ved aktuelt fremløb».
+                # Temperaturen står her så det kan ses hvad planen regnede
+                # med; UVR'en bruger sin egen kurve.
+                "mål_temp": _round(decision.charge_temp, 1) if low else None,
+                "lad_kwh": _round(decision.charge_kwh, 1) if low else None,
+                "plan": self.charge_plan.note,
+            },
+        )
         await ha.set_state(
             SENSOR_CHARGE,
-            "on" if decision.charge else "off",
+            "on" if high else "off",
             {
                 "friendly_name": "Varmeopt lad op",
                 "icon": "mdi:battery-charging-high",
@@ -2031,7 +2134,8 @@ class Varmeopt:
                 "styring_grund": command.reason,
                 "vp_varmepris": _round(decision.heat_price, 3),
                 "pille_varmepris": round(decision.pellet_price, 3),
-                "lad_op": decision.charge,
+                "lad_op": decision.charge and not decision.low,
+                "lad_op_lav": decision.charge and decision.low,
                 "lad_kwh": _round(decision.charge_kwh, 1),
                 "besparelse_kr": _round(decision.saving_kr, 2),
                 "vindue_min": _round(self._from_now(decision.window_minutes), 0),
@@ -2398,18 +2502,31 @@ class Varmeopt:
         )
         if command.source:
             sources[base] = command.source
+        # En lav blok lader ved kurvens fremløb og har rumvarmens COP - ikke
+        # COP'en ved 56 grader, der ville lægge ~18 % for meget strøm i
+        # Predbats prognose. Kun i blokkens egne halvtimer: varmtvandet
+        # udenfor regnes stadig ved ladetemperaturen.
+        window = self._charge_window()
+        block = self.charge_plan.block
+        low_block = block is not None and block.low and window is not None
+
+        def charge_cop_at(minutes: int) -> float | None:
+            if low_block and window[0] <= minutes < window[1]:
+                return self._cop_at(minutes)
+            return self._charge_cop_at(minutes)
+
         inputs = vpforecast.Inputs(
             now=now,
             sources=sources,
             demand_kw_at=self._demand_at,
             cop_at=self._cop_at,
-            charge_cop_at=self._charge_cop_at,
+            charge_cop_at=charge_cop_at,
             vessel_kwh=self.house_load.vessels.kwh_between,
             acting=bool(command.acting and prices.get("plan") is not None),
             fallback_demand_kw=self.house_load.kw_at(now, outdoor_temp),
             cop_now=lookup.cop if lookup is not None else None,
             hp_power_kw=balance.hp_power_kw if balance is not None else None,
-            charge_window=self._charge_window(),
+            charge_window=window,
             charge_kw=self.charge_rate.effective_kw,
         )
         self._vp_inputs = inputs
