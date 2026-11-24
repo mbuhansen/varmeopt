@@ -111,8 +111,6 @@ options:
   control_warmup_minutes: 5
   auto_update: false
   demand_correction_enabled: true
-  self_tune_enabled: true
-  self_tune_apply: false
 schema:
   log_level: list(debug|info|warning|error)
   cycle_seconds: int(30,600)
@@ -210,5 +208,3 @@ schema:
   control_warmup_minutes: float(0,120)
   auto_update: bool
   demand_correction_enabled: bool
-  self_tune_enabled: bool
-  self_tune_apply: bool

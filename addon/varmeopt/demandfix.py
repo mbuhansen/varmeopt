@@ -20,8 +20,10 @@ for lavt, ganges den med 1,15; rammer den rigtigt, er faktoren 1.
 
 * Ingen virkning før ``MIN_DAYS`` dage med nok sammenlignelige halvtimer.
   Indtil da læres faktoren, men udsigten bruges urørt.
-* Den flytter en femtedel af vejen pr. nat, og aldrig uden for
-  ``MIN_FACTOR``-``MAX_FACTOR``.
+* Både den lærte og den *brugte* faktor flytter en femtedel af vejen pr.
+  nat, og aldrig uden for ``MIN_FACTOR``-``MAX_FACTOR``. Den brugte glider
+  også når faktoren bliver aktiv eller holder op med at være det - her
+  sprang den før fra 1,0 til den lærte værdi den nat den blev aktiv.
 * Halvtimer add-on'en kun så en del af, eller hvor husets træk ikke kunne
   måles, er ikke med.
 
@@ -65,6 +67,9 @@ def _finite(value: Any) -> bool:
 class DemandFactor:
     def __init__(self) -> None:
         self.learned = 1.0
+        # Den faktor udsigten faktisk ganges med. Glider mod ``learned`` når
+        # den er aktiv, mod 1 når den ikke er.
+        self.applied = 1.0
         self.days = 0
         self.last_ratio: float | None = None
         self.last_night: str | None = None
@@ -77,7 +82,7 @@ class DemandFactor:
     @property
     def factor(self) -> float:
         """Den faktor udsigten ganges med nu - 1 indtil der er data nok."""
-        return self.learned if self.active else 1.0
+        return self.applied
 
     def nightly(self, rows: list[dict[str, Any]], night: str) -> bool:
         """Én nats gennemgang. Returnerer om faktoren blev regnet."""
@@ -118,19 +123,30 @@ class DemandFactor:
                 raw += forecast / used
                 day = datetime.fromtimestamp(target).strftime("%Y-%m-%d")
                 per_day.setdefault(day, set()).add(target)
-        self.days = sum(1 for slots in per_day.values() if len(slots) >= MIN_SLOTS_PER_DAY)
+        days = sum(1 for slots in per_day.values() if len(slots) >= MIN_SLOTS_PER_DAY)
         if raw <= 0:
+            self.days = days
+            self._glide()
             return False
         ratio = real / raw
         self.last_ratio = round(ratio, 3)
         target = min(MAX_FACTOR, max(MIN_FACTOR, ratio))
         old = self.learned
+        # Den lærte først, så dagene: hovedtråden læser ``factor`` mens den her
+        # kører, og den må ikke se et nyt antal dage med en gammel faktor.
         self.learned = round(min(MAX_FACTOR, max(MIN_FACTOR, old + STEP * (target - old))), 3)
+        self.days = days
+        self._glide()
         self.log = (self.log + [{
             "nat": night, "forhold": self.last_ratio, "faktor": self.learned,
             "dage": self.days, "virker": self.active,
         }])[-30:]
         return True
+
+    def _glide(self) -> None:
+        """Den brugte faktor en femtedel mod målet - den lærte, eller 1."""
+        goal = self.learned if self.active else 1.0
+        self.applied = round(self.applied + STEP * (goal - self.applied), 3)
 
     @property
     def note(self) -> str:
@@ -143,13 +159,14 @@ class DemandFactor:
                 f"({self.days} indtil nu)"
             )
         return (
-            f"virker: behovet ganges med {self.learned:.2f} "
-            f"({self.days} dage, sidst målt {self.last_ratio:.2f})"
+            f"virker: behovet ganges med {self.applied:.2f} på vej mod "
+            f"{self.learned:.2f} ({self.days} dage, sidst målt {self.last_ratio:.2f})"
         )
 
     def to_raw(self) -> dict[str, Any]:
         return {
-            "learned": self.learned, "days": self.days, "last_ratio": self.last_ratio,
+            "learned": self.learned, "applied": self.applied, "days": self.days,
+            "last_ratio": self.last_ratio,
             "last_night": self.last_night, "log": self.log,
         }
 
@@ -160,6 +177,8 @@ class DemandFactor:
             return out
         if _finite(raw.get("learned")):
             out.learned = min(MAX_FACTOR, max(MIN_FACTOR, float(raw["learned"])))
+        if _finite(raw.get("applied")):
+            out.applied = min(MAX_FACTOR, max(MIN_FACTOR, float(raw["applied"])))
         if isinstance(raw.get("days"), int) and raw["days"] >= 0:
             out.days = raw["days"]
         if _finite(raw.get("last_ratio")):

@@ -2053,8 +2053,6 @@ def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
         ))
     if s.get("demand_note"):
         rows.append(("Behovets faktor", _esc(s["demand_note"])))
-    if s.get("tune_note"):
-        rows.append(("Nattens justering", _esc(s["tune_note"])))
     dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
     return f'<h2>Selvkontrol</h2><div class="card">{items}<dl>{dl}</dl></div>'
 

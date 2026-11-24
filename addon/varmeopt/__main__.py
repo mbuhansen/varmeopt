@@ -59,8 +59,6 @@ from .options import Options
 from .outdoorbias import OutdoorBias
 from .pelletload import PelletLoad
 from .planner import Planner, choose_charge, minutes_until_hour
-from .replay import Fixed, Knobs
-from .selftune import Tuner
 from .prices import (
     BATTERY,
     BATTERY_LOSS,
@@ -138,10 +136,8 @@ FOLLOW_FILE = "follow.json"
 # Hvad planen så, og hvad der skete, pr. halvtime - se logbook.py. JSONL,
 # ikke JSON: den vokser en linje ad gangen og skal ikke skrives om hver gang.
 LOGBOOK_FILE = "logbook.jsonl"
-# Selvtræningen: behovets faktor og nattens justering - se demandfix.py og
-# selftune.py.
+# Behovets faktor - se demandfix.py.
 DEMAND_FIX_FILE = "demand_fix.json"
-TUNE_FILE = "tune.json"
 # Nattens gennemgang kører første cyklus efter dette klokkeslæt. Midt om
 # natten, så den ikke falder sammen med en morgenopladning.
 NIGHTLY_HOUR = 3
@@ -385,9 +381,8 @@ class Varmeopt:
         # Én linje pr. halvtime: hvad planen så, og hvad der skete. Uden sti
         # skrives intet - stien sættes i ``run`` når lageret kendes.
         self.logbook = Logbook(None)
-        # Selvtræningen - se demandfix.py og selftune.py.
+        # Behovets faktor - se demandfix.py.
         self.demand = DemandFactor()
-        self.tuner = Tuner()
         self._night: str | None = None
         self._night_task: Any = None
         # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
@@ -543,11 +538,6 @@ class Varmeopt:
         self.planner.min_charge_kwh = (
             self.charge_rate.effective_kw * self.options.hp_min_runtime_minutes / 60
         )
-        # De tre knapper nattens justering må flytte - se selftune.py.
-        knobs = self._knobs()
-        self.planner.hysteresis = knobs.source_hysteresis
-        self.planner.min_saving_kr = knobs.charge_min_saving_kr
-        self.vp_memory.band = knobs.source_hysteresis
 
         curve_note = None
         if flow_temp is not None and outdoor_temp is not None:
@@ -738,7 +728,7 @@ class Varmeopt:
                 dhw_kwh_over=dhw_kwh_over,
                 dhw_input_for=None,
                 space_only=True,
-                min_saving_kr=knobs.low_charge_min_saving_kr,
+                min_saving_kr=self.options.low_charge_min_saving_kr,
             )
             low = replace(low, low=True, charge_temp=round(low_temp, 1))
         decision = choose_charge(
@@ -926,12 +916,8 @@ class Varmeopt:
                 "store_full_by_hour": self.options.store_full_by_hour,
                 "dhw_temp": self.options.dhw_usable_temp,
                 "min_runtime_minutes": self.options.hp_min_runtime_minutes,
-                # De værdier der *gælder* - også når nattens justering har
-                # flyttet dem. Her stod indstillingerne, og så skrev siden
-                # «gevinst under 1,00 kr» mens planlæggeren brugte 0,5.
-                "min_saving_kr": knobs.charge_min_saving_kr,
-                "low_min_saving_kr": knobs.low_charge_min_saving_kr,
-                "hysteresis": knobs.source_hysteresis,
+                "min_saving_kr": self.options.charge_min_saving_kr,
+                "low_min_saving_kr": self.options.low_charge_min_saving_kr,
                 "confirm_plans": self.options.charge_confirm_plans,
                 "max_delivered_share": MAX_DELIVERED_SHARE,
             },
@@ -1094,9 +1080,8 @@ class Varmeopt:
             )
 
         # Nattens gennemgang kører ved siden af. Cyklussen venter ikke på den:
-        # genafspilningen kan tage et halvt minut eller mere, og imens skal
-        # blokkene stadig kunne slutte og flagene skrives (gennemgangen den
-        # 24. november).
+        # logbogen er nogle megabyte, og imens skal blokkene stadig kunne
+        # slutte og flagene skrives.
         if self._night_task is not None and self._night_task.done():
             self._night_task = None
             self._dirty = True
@@ -1108,11 +1093,6 @@ class Varmeopt:
                     asyncio.to_thread(self._nightly, night)
                 )
         self.status["demand_note"] = self.demand.note
-        self.status["tune_note"] = (
-            ("" if self.options.self_tune_apply else "rapport - ") + self.tuner.note
-            if self.options.self_tune_enabled
-            else "slået fra"
-        )
         self._maybe_save()
 
     async def _publish(self, ha: HomeAssistant, lookup: Any) -> None:
@@ -1814,33 +1794,21 @@ class Varmeopt:
         return None if predicted is None else predicted * self.demand_factor
 
     def _house_measured(self, now: float) -> float | None:
-        """Husets forbrug målt på lageret - kun når målingen er frisk."""
+        """Husets forbrug målt på lageret - kun en frisk og *ren* måling.
+
+        Ren som i kurvens: i de vinduer hvor bad eller spa er trukket fra
+        efter skøn, lærer kurven ikke, og så må behovets faktor heller ikke
+        sammenligne med dem. Spaen kører hver dag kl. 12-17, og et skævt skøn
+        ville gå lige ind i faktoren (gennemgangen den 24. november).
+        """
         load = self.house_load
-        if load.kw is None or load.measured_at is None:
+        if load.kw is None or load.measured_at is None or load.modelled:
             return None
         return load.kw if now - load.measured_at <= MAX_AGE_MINUTES * 60 else None
 
     @property
     def demand_factor(self) -> float:
         return self.demand.factor if self.options.demand_correction_enabled else 1.0
-
-    def _configured_knobs(self) -> Knobs:
-        return Knobs(
-            source_hysteresis=self.options.source_hysteresis,
-            charge_min_saving_kr=self.options.charge_min_saving_kr,
-            low_charge_min_saving_kr=self.options.low_charge_min_saving_kr,
-        )
-
-    def _knobs(self) -> Knobs:
-        """De tre knapper som de gælder nu.
-
-        Justeret kun når justeringen både kører og må handle. I rapportform
-        står justeringerne aldrig, så indstillingerne gælder.
-        """
-        configured = self._configured_knobs()
-        if self.options.self_tune_enabled and self.options.self_tune_apply:
-            return self.tuner.knobs(configured)
-        return configured
 
     def _night_due(self, now: float) -> str | None:
         """Er det tid til nattens gennemgang? Første cyklus efter ``NIGHTLY_HOUR``."""
@@ -1857,34 +1825,21 @@ class Varmeopt:
         return night
 
     def _nightly(self, night: str) -> None:
-        """Nattens gennemgang: behovets faktor og justeringen.
+        """Nattens gennemgang: behovets faktor - se demandfix.py.
 
-        Kører i en tråd for sig - genafspilningen tager op mod en halv
-        minut - og efter flagene er skrevet. En fejl her må aldrig vælte
-        cyklussen.
+        Kører i en tråd for sig og efter flagene er skrevet. En fejl her må
+        aldrig vælte cyklussen.
+
+        Den natlige justering af knapperne (genafspilning mod en simulator af
+        lageret) blev bygget og gennemgået to gange den 24. november, og
+        parkeret på branchen ``simulator-parkeret``: gevinsten var få kroner om
+        måneden, og simulatoren var ikke troværdig nok til at handle på.
         """
         path = self.logbook.path
         try:
             rows = read_rows(path)
             self.demand.nightly(rows, night)
             log.info("behovets faktor: %s", self.demand.note)
-            if self.options.self_tune_enabled:
-                self.tuner.nightly(
-                    rows,
-                    night,
-                    self._configured_knobs(),
-                    Fixed(
-                        wear_kr_per_kwh=self.options.hp_wear_kr_per_kwh,
-                        min_runtime_minutes=self.options.hp_min_runtime_minutes,
-                        horizon_minutes=int(self.options.planner_horizon_hours * 60),
-                        dhw_temp=self.options.dhw_usable_temp,
-                        store_full_by_hour=self.options.store_full_by_hour,
-                        low_max_temp=LOW_CHARGE_MAX_TEMP,
-                        min_dwell_minutes=self.options.control_min_dwell_minutes,
-                    ),
-                    apply=self.options.self_tune_apply,
-                )
-                log.info("selvjustering: %s", self.tuner.note)
         except Exception:  # noqa: BLE001 - nattens gennemgang vælter aldrig en cyklus
             log.exception("nattens gennemgang fejlede")
 
@@ -2875,7 +2830,6 @@ class Varmeopt:
             self.store.save(LEDGER_FILE, self.ledger.to_raw())
             self.store.save(FOLLOW_FILE, self.follow.to_raw())
             self.store.save(DEMAND_FIX_FILE, self.demand.to_raw())
-            self.store.save(TUNE_FILE, self.tuner.to_raw())
             self.store.save(OUTDOOR_BIAS_FILE, self.outdoor_bias.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
@@ -2977,8 +2931,7 @@ async def run() -> None:
         app.follow = FollowWatch.from_raw(store.load(FOLLOW_FILE, {}))
         app.logbook = Logbook(store.path(LOGBOOK_FILE))
         app.demand = DemandFactor.from_raw(store.load(DEMAND_FIX_FILE, {}))
-        app.tuner = Tuner.from_raw(store.load(TUNE_FILE, {}))
-        app._night = app.tuner.last_night or app.demand.last_night
+        app._night = app.demand.last_night
         app.outdoor_bias = OutdoorBias.from_raw(store.load(OUTDOOR_BIAS_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
         log.info("udsigtens korrektion: %s", app.outdoor_bias.note)
@@ -3021,7 +2974,7 @@ async def run() -> None:
             charge_plan=lambda: app.charge_plan,
             ledger=lambda: app.ledger,
             follow=lambda: app.follow,
-            selftrain=lambda: {"behov": app.demand.to_raw(), "justering": app.tuner.to_raw()},
+            selftrain=lambda: {"behov": app.demand.to_raw()},
             logbook=lambda: app.logbook,
             on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,

@@ -32,7 +32,28 @@ class DemandFactorTest(unittest.TestCase):
         f.nightly(rows(MIN_DAYS + 2), "n1")
         self.assertTrue(f.active)
         self.assertAlmostEqual(f.learned, 1.0 + 0.2 * 0.15, places=3)
-        self.assertEqual(f.factor, f.learned)
+        # Den brugte glider en femtedel mod den lærte - ikke hele vejen.
+        self.assertAlmostEqual(f.factor, 1.0 + 0.2 * (f.learned - 1.0), places=3)
+
+    def test_no_jump_when_it_becomes_active(self):
+        # Lært i stilhed i 13 dage til 1,3 - den nat den bliver aktiv, må
+        # udsigten ikke springe 30 %.
+        f = DemandFactor()
+        f.learned = 1.3
+        f.nightly(rows(MIN_DAYS + 2, actual_kw=2.6), "n1")
+        self.assertTrue(f.active)
+        self.assertLess(f.factor, 1.07)
+        for n in range(15):
+            f.nightly(rows(MIN_DAYS + 2, actual_kw=2.6), f"m{n}")
+        self.assertGreater(f.factor, 1.25, "men den når derop over nætterne")
+
+    def test_it_glides_back_when_data_runs_out(self):
+        f = DemandFactor()
+        f.learned, f.applied = 1.2, 1.2
+        f.nightly(rows(3), "n1")
+        self.assertFalse(f.active)
+        self.assertGreater(f.factor, 1.1, "ikke tilbage til 1 på én nat")
+        self.assertLess(f.factor, 1.2)
 
     def test_it_is_not_learned_on_top_of_itself(self):
         # Udsigten i logbogen er allerede ganget med 1,15, og den rammer

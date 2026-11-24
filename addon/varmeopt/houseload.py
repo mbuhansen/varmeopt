@@ -624,6 +624,11 @@ class HouseLoad:
         return self.curve.predict(outdoor) if outdoor is not None else None
 
     @property
+    def modelled(self) -> bool:
+        """Er den seneste måling et vindue hvor bad/spa er trukket fra efter skøn?"""
+        return self._modelled
+
+    @property
     def bias_kw(self) -> float | None:
         """Hvor meget målingen i gennemsnit ligger over flowmålerens tal."""
         if self.error_n <= 0:

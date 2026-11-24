@@ -226,11 +226,13 @@ class FollowWatch:
                 )
         else:
             if charge and running and not self._settled:
-                # En start der kom efter en advarsel, var en fejl der blev
-                # rettet - Node-RED der stod, en UVR der blev genstartet. Den
-                # er ikke en ventetid, og den må ikke hæve fristen.
-                flagged = (self.open.get(NOT_STARTED) or Event("", 0, 0)).flagged
-                if self._ordered_since is not None and not flagged:
+                # Alle starter tæller, også dem efter en advarsel. Fristen
+                # bruger den næstlængste, så én fejl - Node-RED der stod i 40
+                # minutter - ikke flytter den alene. Men starter pumpen om
+                # vinteren altid efter 18 minutter mod en lært frist på 15,
+                # skal fristen kunne stige; ellers advarede den ved hver start
+                # for evigt (gennemgangen den 24. november).
+                if self._ordered_since is not None:
                     delay = round((now - self._ordered_since) / 60, 1)
                     if low:
                         self.delays_low = (self.delays_low + [delay])[-MAX_DELAYS:]

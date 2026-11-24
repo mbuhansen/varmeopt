@@ -42,9 +42,7 @@ class FollowWatchTest(unittest.TestCase):
         self.assertEqual(len(watch.events), 1)
         self.assertEqual(watch.events[0].kind, NOT_STARTED)
         self.assertIn("startede efter 25 min", watch.events[0].outcome)
-        # En start efter en advarsel var en fejl der blev rettet - ikke en
-        # ventetid, og den må ikke hæve fristen.
-        self.assertEqual(watch.delays, [])
+        self.assertEqual(watch.delays, [25.0])
 
     def test_order_withdrawn_before_start(self):
         watch = FollowWatch(grace_minutes=20)
@@ -132,12 +130,8 @@ class FollowWatchTest(unittest.TestCase):
         self.assertIn("lad op lav", lines[0])
         self.assertIn("Lad op lav", watch.active()[0][1])
         self.run_minutes(watch, 25, 1, running=True, **low)
-        self.assertEqual(watch.delays_low, [], "efter en advarsel er det ingen ventetid")
-        watch2 = FollowWatch(grace_minutes=20)
-        self.run_minutes(watch2, 0, 7, running=False, **low)
-        self.run_minutes(watch2, 7, 1, running=True, **low)
-        self.assertEqual(watch2.delays_low, [7.0])
-        self.assertEqual(watch2.delays, [])
+        self.assertEqual(watch.delays_low, [25.0])
+        self.assertEqual(watch.delays, [])
 
     def test_the_grace_follows_the_measured_starts(self):
         # Fem starter på 3-6 min: den næstlængste er 5, og 5 + 10 = 15 min.
@@ -153,6 +147,21 @@ class FollowWatchTest(unittest.TestCase):
         lines = self.run_minutes(watch, t, 16, **self.charge(False))
         self.assertEqual(len(lines), 1, "advarslen kommer efter 15 min, ikke 20")
         self.assertEqual(watch.grace(low=True), 20, "det lave flag har sine egne")
+
+    def test_the_grace_can_rise_again(self):
+        # Lært 15 min om efteråret; om vinteren starter pumpen altid efter 18.
+        # Fristen skal følge med, ellers advarer den ved hver start for evigt.
+        watch = FollowWatch(grace_minutes=20)
+        watch.delays = [5.0] * 5
+        self.assertEqual(watch.grace(), 15.0)
+        t = 0
+        for _ in range(3):
+            self.run_minutes(watch, t, 18, **self.charge(False))
+            self.run_minutes(watch, t + 18, 5, **self.charge(True))
+            self.run_minutes(watch, t + 23, 1, ordered=False, acting=True,
+                             running=False, source="varmepumpe")
+            t += 30
+        self.assertEqual(watch.grace(), 28.0)
 
     def test_the_learned_grace_has_a_floor_and_a_ceiling(self):
         watch = FollowWatch(grace_minutes=20)

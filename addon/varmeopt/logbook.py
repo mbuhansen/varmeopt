@@ -83,10 +83,10 @@ class Reading:
     elpatron: float | None = None
     pillefyr: float | None = None
     behov: float | None = None
-    # Husets forbrug som forbrugskurven er lært af - målt på lageret, med
-    # flowmåleren som bagstopper (``houseload``). Det er det behovets faktor
-    # skal sammenlignes med; ``behov`` er flowmåleren alene og falder ud under
-    # dens bund.
+    # Husets forbrug som forbrugskurven er lært af - målt på lageret, kun i
+    # rene vinduer (``houseload``). Det er det behovets faktor skal
+    # sammenlignes med; ``behov`` er flowmåleren alene og falder ud under dens
+    # bund.
     hus: float | None = None
     lager_kwh: float | None = None
     ude: float | None = None
