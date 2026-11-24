@@ -28,12 +28,14 @@ from .charge import MAX_DELIVERED_SHARE, NO_PLAN, ChargePlan, slot_start
 from .cop import CopTable
 from .curve import HeatCurve, plausible_outdoor
 from .demand import Balance, Load
+from .follow import FollowWatch
 from .forecast import Forecast
 from .guard import Guard
 from .houseload import MAX_AGE_MINUTES, HouseLoad
 from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .ledger import Ledger
+from .logbook import Logbook, Reading, compact_plan
 from .migrate import (
     COP_TABLE_BT12_FILE,
     CURVE_FILE,
@@ -115,6 +117,14 @@ SENSOR_VP_FORECAST = "sensor.varmeopt_vp_prognose"
 # videre end en attribut man skal grave ud - og en styring der er let at
 # læse rigtigt, bliver oftere læst rigtigt.
 SENSOR_CHARGE = "binary_sensor.varmeopt_lad_op"
+
+# Følger anlægget ladeflaget? Se follow.py. Hændelserne og de målte
+# startforsinkelser gemmes; den åbne hændelse ikke - efter en genstart
+# begynder tællingen forfra, og det er det rigtige.
+FOLLOW_FILE = "follow.json"
+# Hvad planen så, og hvad der skete, pr. halvtime - se logbook.py. JSONL,
+# ikke JSON: den vokser en linje ad gangen og skal ikke skrives om hver gang.
+LOGBOOK_FILE = "logbook.jsonl"
 
 def _clock_ahead(minutes: float, now: float | None = None) -> str:
     """Så mange minutter frem som et klokkeslæt på væggen.
@@ -343,6 +353,11 @@ class Varmeopt:
         self.charge_plan = ChargePlan()
         # Bagefter-regnestykket for hver opladning - se ledger.py.
         self.ledger = Ledger()
+        # Følges ladeflaget? Se follow.py.
+        self.follow = FollowWatch()
+        # Én linje pr. halvtime: hvad planen så, og hvad der skete. Uden sti
+        # skrives intet - stien sættes i ``run`` når lageret kendes.
+        self.logbook = Logbook(None)
         # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
         # halverer lageret. Kun i hukommelsen: efter en genstart er svaret
         # «ved ikke», og det er det rigtige svar.
@@ -512,6 +527,9 @@ class Varmeopt:
             if hp_power is not None and math.isfinite(hp_power)
             else _running(measured_cop)
         )
+        # Kun en målt effekt kan sige om ordren blev fulgt. COP-føleren melder
+        # først et vindue senere og kan ikke se en start.
+        power_known = hp_power is not None and math.isfinite(hp_power)
         if running_now and not self._pump_was_running:
             self._pump_started_at = time.time()
         if not running_now:
@@ -864,6 +882,41 @@ class Varmeopt:
             await self._safely(
                 "opladningsflag", self._publish_charge(ha, decision, command)
             )
+            # Nåede ordren frem? Flaget er skrevet; nu holdes det op mod
+            # kompressorens strøm. Kun når HA svarer - uden HA er der intet
+            # flag at følge. Kendes pumpens strøm ikke, dømmes der ikke:
+            # COP-føleren melder først et vindue senere og kan ikke se en start.
+            for line in self.follow.observe(
+                time.time(),
+                ordered=decision.charge,
+                acting=command.acting,
+                running=running_now if power_known else None,
+                source=command.source or decision.source,
+            ):
+                log.warning("ordren følges ikke: %s", line)
+            self.status["follow"] = self.follow.active()
+            self.status["follow_note"] = self.follow.note
+
+        self.logbook.observe(
+            time.time(),
+            Reading(
+                vp_el=balance.hp_power_kw if balance is not None else None,
+                vp_varme=balance.heatpump_kw if balance is not None else None,
+                solvarme=balance.solar_kw if balance is not None else None,
+                elpatron=balance.element_kw if balance is not None else None,
+                pillefyr=balance.boiler_kw if balance is not None else None,
+                behov=balance.load.kw if balance is not None else None,
+                lager_kwh=store.heat_kwh if store is not None else None,
+                ude=outdoor_temp,
+                kompressor=running_now if power_known else None,
+                lad_op=bool(decision.charge and command.acting),
+                kilde=command.source or decision.source,
+            ),
+            lambda: self._logbook_seen(
+                decision, command, prices, store, hot_kwh, locked_minutes,
+                solar, outdoor_temp, balance,
+            ),
+        )
 
         if lookup is not None:
             log.info(
@@ -1423,6 +1476,79 @@ class Varmeopt:
             )
             self._warned_outdoor = True
         return None
+
+    def _logbook_seen(
+        self,
+        decision: Any,
+        command: Any,
+        prices: dict[str, Any],
+        store: Buffer | None,
+        hot_kwh: float | None,
+        locked_minutes: int | None,
+        solar: dict[str, Any],
+        outdoor_temp: float | None,
+        balance: Balance | None,
+    ) -> dict[str, Any]:
+        """Det planen så ved halvtimens start - logbogens første halvdel.
+
+        Udsigten frem står som lister, én værdi pr. halvtime i horisonten,
+        slået op *nu* med de modeller der gælder nu. Det er pointen: en
+        genafspilning skal se det beslutningen blev truffet på, ikke det
+        dagens modeller ville have sagt.
+        """
+        rows = max(1, int(self.options.planner_horizon_hours * 2))
+        steps = [i * 30 for i in range(rows)]
+        plan = prices.get("plan")
+        price_now = prices.get("price_now")
+        base = slot_start(time.time())
+
+        def ahead(fn: Any, digits: int) -> list[Any]:
+            return [_round(fn(m), digits) for m in steps]
+
+        return {
+            "set": round(time.time()),
+            "version": VERSION,
+            "kilde": command.source or decision.source,
+            "rå_kilde": decision.source,
+            "styrer": command.acting,
+            "lad_op": decision.charge,
+            "lad_kwh": _round(decision.charge_kwh, 2),
+            "lovet_kr": _round(decision.saving_kr, 2),
+            "ventet_betalt": _round(decision.expected_paid, 3),
+            "ventet_ellers": _round(decision.expected_alt, 3),
+            "dyrt_om_min": decision.dear_starts_in,
+            "dyrt_min": decision.dear_span_minutes,
+            "blok": self.charge_plan.note,
+            "begrundelse": decision.reason,
+            "el_kr": _round(price_now.kr_per_kwh, 4) if price_now is not None else None,
+            "vp_varmepris": _round(decision.heat_price, 4),
+            "pille_varmepris": _round(decision.pellet_price, 4),
+            "låst_min": locked_minutes,
+            "plan_stempel": prices.get("plan_stamp"),
+            "lager_kwh": _round(store.heat_kwh, 2) if store is not None else None,
+            "lager_plads_kwh": (
+                _round(store.room_to(self.options.hp_charge_temp), 2)
+                if store is not None
+                else None
+            ),
+            "lager_varmt_kwh": _round(hot_kwh, 2),
+            "lager_middel": _round(store.mean_temp, 1) if store is not None else None,
+            "ude": _round(outdoor_temp, 1),
+            "behov_kw": _round(balance.load.kw, 2) if balance is not None else None,
+            "sol_forventet_kwh": _round(solar.get("solar_expected"), 2),
+            "frem": {
+                "minutter": steps,
+                "ude": ahead(self._temperature_at, 1),
+                "behov_kw": ahead(self._demand_at, 2),
+                "cop": ahead(self._cop_at, 2),
+                "lade_cop": ahead(self._charge_cop_at, 2),
+                "vvb_kwh": ahead(
+                    lambda m: self.house_load.vessels.kwh_between(base + m * 60, 0.5),
+                    2,
+                ),
+            },
+            "plan": compact_plan(plan.to_raw() if plan is not None else None, rows),
+        }
 
     def _charge_cop_at(self, minutes: int) -> float | None:
         """COP'en ved ladetemperaturen om så mange minutter.
@@ -2434,6 +2560,7 @@ class Varmeopt:
             self.store.save(CAPACITY_FILE, self.charge_rate.to_raw())
             self.store.save(CHARGE_FILE, self.charge_plan.to_raw())
             self.store.save(LEDGER_FILE, self.ledger.to_raw())
+            self.store.save(FOLLOW_FILE, self.follow.to_raw())
             self.store.save(OUTDOOR_BIAS_FILE, self.outdoor_bias.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
@@ -2532,6 +2659,8 @@ async def run() -> None:
         )
         app.charge_plan = ChargePlan.from_raw(store.load(CHARGE_FILE, {}))
         app.ledger = Ledger.from_raw(store.load(LEDGER_FILE, {}))
+        app.follow = FollowWatch.from_raw(store.load(FOLLOW_FILE, {}))
+        app.logbook = Logbook(store.path(LOGBOOK_FILE))
         app.outdoor_bias = OutdoorBias.from_raw(store.load(OUTDOOR_BIAS_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
         log.info("udsigtens korrektion: %s", app.outdoor_bias.note)
@@ -2573,6 +2702,8 @@ async def run() -> None:
             on_standby=lambda arm: _toggle_standby(app, arm),
             charge_plan=lambda: app.charge_plan,
             ledger=lambda: app.ledger,
+            follow=lambda: app.follow,
+            logbook=lambda: app.logbook,
             on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,
             usage=lambda: app.usage,

@@ -232,9 +232,13 @@ class WebUI:
         charge_plan: Callable[[], Any] | None = None,
         ledger: Callable[[], Any] | None = None,
         on_charge: Callable[[bool], str] | None = None,
+        follow: Callable[[], Any] | None = None,
+        logbook: Callable[[], Any] | None = None,
     ) -> None:
         self._charge_plan = charge_plan
         self._ledger = ledger
+        self._follow = follow
+        self._logbook = logbook
         self._on_charge = on_charge
         self._status = status
         self._table = table
@@ -315,7 +319,8 @@ class WebUI:
             f'<p class="sub">{_esc(s.get("note", ""))}</p>'
             f'<div class="card"><div class="big">{lookup.cop:.2f}</div>'
             f'<div class="sub" style="margin:0">{_esc(label)} · {_esc(lookup.detail)}</div></div>'
-            f'<h2>Detaljer</h2><div class="card"><dl>{dl}</dl></div>'
+            + _selfcheck_section(s, self._logbook() if self._logbook else None)
+            + f'<h2>Detaljer</h2><div class="card"><dl>{dl}</dl></div>'
             + _price_section(s)
         )
         return _page("Nu", "now", body)
@@ -778,6 +783,16 @@ class WebUI:
             payload["indstillinger"] = _plain(self._options)
         if self._journal is not None:
             payload["log"] = self._journal.dump()
+        # Regnskabet, ordrevagten og logbogens sidste døgn. Regnskabet stod
+        # kun i /data på boksen og kunne ikke hentes uden at skrabe siden.
+        if self._ledger is not None:
+            ledger = self._ledger()
+            if ledger is not None:
+                payload["regnskab"] = ledger.to_raw()
+        if self._follow is not None:
+            payload["ordre"] = self._follow().to_raw()
+        if self._logbook is not None:
+            payload["logbog"] = self._logbook().light()
 
         stamp = datetime.now().astimezone().strftime("%Y%m%d-%H%M")
         return web.Response(
@@ -1980,6 +1995,34 @@ def _forecast_vs_measured(ledger: Any, now: float) -> tuple[str, str] | None:
         "Ellers, ventet mod målt",
         f"{expected:.2f} mod {measured:.2f} kr over {len(pairs)} opladninger",
     )
+
+
+def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
+    """Selvkontrollen: følges ordren, og samler logbogen?
+
+    Én boks på forsiden, så en advarsel ikke gemmer sig på en fane man ikke
+    åbner. Står der intet galt, er den én linje.
+    """
+    active = s.get("follow") or []
+    items = "".join(
+        f'<p class="{"warn" if level == "advarsel" else "sub"}" style="margin:0 0 6px">'
+        f"<b>{_esc(level.capitalize())}:</b> {_esc(text)}</p>"
+        for level, text in active
+    )
+    rows = [("Ordren", _esc(s.get("follow_note") or "—"))]
+    if logbook is not None:
+        recent = getattr(logbook, "recent", []) or []
+        whole = sum(1 for r in recent if (r.get("dækning") or 0) >= 0.95)
+        rows.append((
+            "Logbog",
+            _esc(
+                f"{len(recent)} halvtimer i hukommelsen, {whole} hele"
+                if recent
+                else "samler - første linje skrives når halvtimen skifter"
+            ),
+        ))
+    dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+    return f'<h2>Selvkontrol</h2><div class="card">{items}<dl>{dl}</dl></div>'
 
 
 def _ledger_body(ledger: Any, now: float) -> str:

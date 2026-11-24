@@ -435,6 +435,34 @@ class CycleTest(unittest.TestCase):
             status["decision"].source,
         )
 
+    def test_the_logbook_sees_the_plan_and_the_order_is_watched(self):
+        # Logbogen sluger sine egne fejl, så en cyklus ikke vælter på den.
+        # Derfor skal det prøves her at det den læser, faktisk kan læses -
+        # ellers ville en fejl i ``_logbook_seen`` give tomme linjer i ugevis.
+        o = self.app.options
+        self.ha._states[o.entity_predbat_plan] = State(
+            o.entity_predbat_plan,
+            "ok",
+            {
+                "raw": {
+                    "rows": [
+                        {"state": "holdchrg", "import_rate": 180, "export_rate": 60},
+                        {"state": "", "import_rate": 40, "export_rate": 55},
+                    ]
+                }
+            },
+            "plan-1",
+        )
+        with self.assertNoLogs("varmeopt.logbook", level="ERROR"):
+            self.cycle()
+        seen = self.app.logbook._seen
+        self.assertEqual(seen["kilde"], self.app.status["command"].source or seen["rå_kilde"])
+        self.assertEqual(seen["plan"]["rækker"][0][1], "holdchrg")
+        rows = int(o.planner_horizon_hours * 2)
+        self.assertEqual(len(seen["frem"]["minutter"]), rows)
+        self.assertEqual(len(seen["frem"]["behov_kw"]), rows)
+        self.assertIn("follow_note", self.app.status)
+
     def test_a_missing_predbat_plan_is_not_fatal(self):
         # Predbat kan være nede eller endnu ikke have lagt en plan. Cyklussen
         # skal køre videre - COP-læringen afhænger ikke af priser.

@@ -119,6 +119,22 @@ Hvad der virker nu:
   planlæggeren igen hvert minut og bruger kun svaret for nu. Men uden
   fremskrivningen kan man ikke se hvorfor den svarer som den gør — og så er
   den umulig at stole på.
+- **Holder øje med om ladeflaget følges.** Står «lad op» tændt med
+  `styrer` sand, men kompressoren trækker ikke strøm efter 20 minutter, siger
+  forsiden og loggen det — ordren når ikke frem gennem Node-RED og UVR'en. Det
+  er ikke skyggedriften om igen: den spurgte om Node-RED var enig, det her om
+  en ordre blev udført. Starter pumpen inden fristen, gemmes ventetiden, så
+  det kan ses hvor lang tid kæden faktisk tager. Kører pumpen mens kilden er
+  pillefyr og der ingen opladning er, står det som en bemærkning — det kan
+  være spa eller varmt vand.
+- **Fører logbog pr. halvtime** i `/data/logbook.jsonl`, fjorten dage tilbage:
+  hvad planen så ved halvtimens start (Predbats plan, låste priser, lagerets
+  indhold og udsigten frem for behov, COP og udetemperatur) og hvad der
+  faktisk skete (strøm og varme pr. kilde, husets træk, lageret ved
+  slutningen). Det er råmaterialet til at måle hvor meget behovsudsigten
+  rammer ved siden af, og til en senere genafspilning af planlæggeren på det
+  den vidste dengang. Debug-filen har nu også regnskabet, ordrevagten og
+  logbogens sidste døgn.
 - Web-UI gennem HA's ingress: aktuel COP med hele begrundelseskæden, et
   varmekort over den indlærte tabel hvor huller i dækningen er synlige, og en
   lagerside der tegner begge tanke lag for lag.
@@ -416,6 +432,8 @@ VARMEOPT_DATA_DIR=./data python -m varmeopt
 | `guard.py` | Om beslutningen må handles på. Ren, testet |
 | `forecast.py` | Udetemperatur time for time fra HA's vejrudsigt. Ren, testet |
 | `journal.py` | De sidste loglinjer, til fejlsøgningsfilen |
+| `follow.py` | Følges ladeflaget — starter kompressoren? Ren, testet |
+| `logbook.py` | Hvad planen så, og hvad der skete, pr. halvtime. Testet |
 | `planner.py` | Kilde nu, og om der skal lades ud over behovet. Ren, testet |
 | `solar.py` | Solvarmeprognose af Solcast: geometri regnet, skalafaktor lært |
 | `tank.py` | Lagerets fysik: lagdeling, energi, plads. Ren, testet |
