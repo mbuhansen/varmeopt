@@ -56,7 +56,12 @@ MAX_GAP_SECONDS = 300.0
 RECENT_ROWS = 96
 
 # Det der summeres over halvtimen, som kW -> kWh.
-ENERGY_KEYS = ("vp_el", "vp_varme", "solvarme", "elpatron", "pillefyr", "behov", "hus")
+ENERGY_KEYS = (
+    "vp_el", "vp_varme", "solvarme", "elpatron", "pillefyr", "behov", "hus",
+    "vp_el_rum",
+)
+# Det der midles over halvtimen - radiatorernes skyggemåling, se radiator.py.
+MEAN_KEYS = ("ventil_max", "ventil_anden", "frem_hus")
 
 
 def _finite(value: Any) -> bool:
@@ -88,6 +93,10 @@ class Reading:
     # sammenlignes med; ``behov`` er flowmåleren alene og falder ud under dens
     # bund.
     hus: float | None = None
+    # Varmepumpens strøm mens den varmer huset efter kurven - 0 under varmt
+    # vand, spa og opladning, ``None`` når strømmen ikke kendes. Det er den
+    # del en lavere kurve ville spare på.
+    vp_el_rum: float | None = None
     lager_kwh: float | None = None
     ude: float | None = None
     kompressor: bool | None = None
@@ -95,6 +104,14 @@ class Reading:
     # Det lave ladeflag for sig - se ``planner.choose_charge``.
     lad_op_lav: bool = False
     kilde: str | None = None
+    # Radiatorerne: den mest og den næstmest åbne ventil i procent, rummet
+    # med den mest åbne, husets fremløb, og det største underskud blandt
+    # rummene (mål minus målt).
+    ventil_max: float | None = None
+    ventil_anden: float | None = None
+    ventil_rum: str | None = None
+    frem_hus: float | None = None
+    rum_mangler: float | None = None
 
 
 class Logbook:
@@ -116,6 +133,11 @@ class Logbook:
         self._source_minutes: dict[str, float] = {}
         self._outdoor_sum = 0.0
         self._outdoor_seconds = 0.0
+        self._mean_sums: dict[str, float] = {}
+        self._mean_seconds: dict[str, float] = {}
+        self._top_room_minutes: dict[str, float] = {}
+        self._shortfall_max: float | None = None
+        self._shortfall_seconds = 0.0
         self._last_store: float | None = None
         self._last: float | None = None
         self._last_reading: Reading | None = None
@@ -188,6 +210,21 @@ class Logbook:
             self._outdoor_seconds += seconds
         if _finite(reading.lager_kwh):
             self._last_store = reading.lager_kwh
+        for key in MEAN_KEYS:
+            value = getattr(reading, key)
+            if _finite(value):
+                self._mean_sums[key] = self._mean_sums.get(key, 0.0) + value * seconds
+                self._mean_seconds[key] = self._mean_seconds.get(key, 0.0) + seconds
+        if reading.ventil_rum:
+            self._top_room_minutes[reading.ventil_rum] = (
+                self._top_room_minutes.get(reading.ventil_rum, 0.0) + seconds / 60
+            )
+        # Underskuddet er det største i halvtimen, ikke middel: ét rum der
+        # var for koldt i ti minutter, havde sin ventil på vej op.
+        if _finite(reading.rum_mangler):
+            self._shortfall_seconds += seconds
+            if self._shortfall_max is None or reading.rum_mangler > self._shortfall_max:
+                self._shortfall_max = float(reading.rum_mangler)
 
     def _begin(self, slot: float, seen: Callable[[], dict[str, Any]]) -> None:
         self._slot = slot
@@ -202,6 +239,10 @@ class Logbook:
         self._minutes_charge_low = self._seconds_known = 0.0
         self._source_minutes = {}
         self._outdoor_sum = self._outdoor_seconds = 0.0
+        self._mean_sums, self._mean_seconds = {}, {}
+        self._top_room_minutes = {}
+        self._shortfall_max = None
+        self._shortfall_seconds = 0.0
         self._last_store = None
 
     def _finish(self) -> dict[str, Any]:
@@ -230,6 +271,25 @@ class Logbook:
         measured["lad_op_min"] = _r(self._minutes_charge, 1)
         measured["lad_op_lav_min"] = _r(self._minutes_charge_low, 1)
         measured["kilde_min"] = {k: _r(v, 1) for k, v in self._source_minutes.items()}
+        # Samme regel som energien: middel kun når det vidstes det meste af
+        # halvtimen.
+        for key in MEAN_KEYS:
+            seconds = self._mean_seconds.get(key, 0.0)
+            measured[key] = (
+                _r(self._mean_sums[key] / seconds, 1)
+                if seconds >= 0.8 * self._covered > 0
+                else None
+            )
+        measured["ventil_rum"] = (
+            max(self._top_room_minutes, key=self._top_room_minutes.get)
+            if self._top_room_minutes
+            else None
+        )
+        measured["rum_mangler"] = (
+            _r(self._shortfall_max, 2)
+            if self._shortfall_seconds >= 0.8 * self._covered > 0
+            else None
+        )
         row = {
             "t": int(self._slot),
             "dækning": _r(min(1.0, self._covered / SLOT_SECONDS), 2),

@@ -324,6 +324,24 @@ _DEFAULTS: dict[str, object] = {
     # Behovets faktor - se demandfix.py. Samler data fra første dag og virker
     # først når der er nok; den kan slås fra her.
     "demand_correction_enabled": True,
+    # Radiatorernes skyggemåling - se radiator.py. Pr. rum: termostaten der
+    # kender mål og temperatur, og rummets ventiler, adskilt med «;».
+    # Danfoss Ally-ventilerne, med setpunkter fra RoomMind. Ally-navnene
+    # «Kontor» og «Værelse» er byttet om i forhold til områderne; parringen
+    # her følger området. Gangen styres ikke af RoomMind, så dens egen
+    # termostat bruges. Badeværelset har gulvvarme og er ikke med.
+    "radiator_rooms": (
+        "climate.roommind_stue=sensor.stue_valve_opening,sensor.stue_valve_opening_2;"
+        "climate.roommind_spisestue=sensor.spisestue_valve_opening;"
+        "climate.roommind_kokken=sensor.kokken_valve_opening;"
+        "climate.roommind_kontor=sensor.magnus_vaerelse_valve_opening;"
+        "climate.roommind_magnus_vaerelse=sensor.kontor_valve_opening;"
+        "climate.roommind_sovevaerelse=sensor.sovevaerelse_valve_opening;"
+        "climate.gang=sensor.gang_valve_opening"
+    ),
+    # Hvor åben den mest åbne ventil må stå, før fremløbet er for lavt. Med
+    # luft op til fuldt åben kan termostaterne stadig klare en kold morgen.
+    "radiator_target_opening": 75.0,
 }
 
 
@@ -455,6 +473,8 @@ class Options:
     entity_tank_b_outlet: str
     auto_update: bool
     demand_correction_enabled: bool
+    radiator_rooms: str
+    radiator_target_opening: float
     control_enabled: bool
     control_min_dwell_minutes: float
     control_confirm_minutes: float
@@ -531,6 +551,8 @@ class Options:
             control_confirm_plans=int(values["control_confirm_plans"]),
             auto_update=_as_bool(values["auto_update"]),
             demand_correction_enabled=_as_bool(values["demand_correction_enabled"]),
+            radiator_rooms=str(values["radiator_rooms"] or ""),
+            radiator_target_opening=float(values["radiator_target_opening"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),

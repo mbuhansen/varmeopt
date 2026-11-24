@@ -38,6 +38,7 @@ from .ha import HaError, HomeAssistant, State
 from .journal import install as install_journal
 from .ledger import Ledger
 from .logbook import Logbook, Reading, read_rows
+from .radiator import RadiatorReport, RoomState, parse_rooms, room_state, snapshot
 from .migrate import (
     COP_TABLE_BT12_FILE,
     CURVE_FILE,
@@ -138,6 +139,8 @@ FOLLOW_FILE = "follow.json"
 LOGBOOK_FILE = "logbook.jsonl"
 # Behovets faktor - se demandfix.py.
 DEMAND_FIX_FILE = "demand_fix.json"
+# Radiatorernes skyggemåling - se radiator.py.
+RADIATOR_FILE = "radiator.json"
 # Nattens gennemgang kører første cyklus efter dette klokkeslæt. Midt om
 # natten, så den ikke falder sammen med en morgenopladning.
 NIGHTLY_HOUR = 3
@@ -383,6 +386,9 @@ class Varmeopt:
         self.logbook = Logbook(None)
         # Behovets faktor - se demandfix.py.
         self.demand = DemandFactor()
+        # Radiatorernes skyggemåling - se radiator.py. Styrer intet.
+        self.radiator_rooms = parse_rooms(options.radiator_rooms)
+        self.radiator = RadiatorReport()
         self._night: str | None = None
         self._night_task: Any = None
         # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
@@ -451,6 +457,8 @@ class Varmeopt:
         )
         vessels = await self._read_vessels(ha)
         solar = await self._read_solar(ha, buffer)
+        radiators = snapshot(await self._read_radiators(ha))
+        self.status["radiator_now"] = radiators.to_raw()
 
         # Kalder varmtvandsbeholderen eller spabadet, overstyres varmekurven
         # med et fast setpunkt, og de målinger hører ikke til i kurven.
@@ -1003,6 +1011,15 @@ class Varmeopt:
                 lad_op=bool(decision.charge and command.acting),
                 lad_op_lav=bool(decision.charge and decision.low and command.acting),
                 kilde=command.source or decision.source,
+                vp_el_rum=self._room_heating_power(
+                    hp_power, dhw_fact, vessels.get("spa_heating"),
+                    bool(decision.charge and command.acting),
+                ),
+                ventil_max=radiators.top,
+                ventil_anden=radiators.second,
+                ventil_rum=radiators.top_room,
+                frem_hus=flow_measured,
+                rum_mangler=radiators.shortfall,
             ),
             lambda: self._logbook_seen(
                 decision, command, prices, store, hot_kwh, locked_minutes,
@@ -1084,6 +1101,9 @@ class Varmeopt:
         # slutte og flagene skrives.
         if self._night_task is not None and self._night_task.done():
             self._night_task = None
+            # Kronerne regnes her og ikke i tråden: COP-tabellen og kurven
+            # læres i hovedtråden og må ikke læses samtidig.
+            self._price_radiator()
             self._dirty = True
             self._maybe_save(force=True)
         if self._night_task is None:
@@ -1093,6 +1113,7 @@ class Varmeopt:
                     asyncio.to_thread(self._nightly, night)
                 )
         self.status["demand_note"] = self.demand.note
+        self.status["radiator_note"] = self.radiator.note
         self._maybe_save()
 
     async def _publish(self, ha: HomeAssistant, lookup: Any) -> None:
@@ -1825,7 +1846,8 @@ class Varmeopt:
         return night
 
     def _nightly(self, night: str) -> None:
-        """Nattens gennemgang: behovets faktor - se demandfix.py.
+        """Nattens gennemgang: behovets faktor og radiatorerne - se
+        demandfix.py og radiator.py.
 
         Kører i en tråd for sig og efter flagene er skrevet. En fejl her må
         aldrig vælte cyklussen.
@@ -1838,10 +1860,63 @@ class Varmeopt:
         path = self.logbook.path
         try:
             rows = read_rows(path)
+        except Exception:  # noqa: BLE001 - nattens gennemgang vælter aldrig en cyklus
+            log.exception("nattens gennemgang kunne ikke læse logbogen")
+            return
+        # Hver for sig: en fejl i den ene må ikke tage den anden med.
+        try:
             self.demand.nightly(rows, night)
             log.info("behovets faktor: %s", self.demand.note)
-        except Exception:  # noqa: BLE001 - nattens gennemgang vælter aldrig en cyklus
-            log.exception("nattens gennemgang fejlede")
+        except Exception:  # noqa: BLE001
+            log.exception("behovets gennemgang fejlede")
+        try:
+            self.radiator.nightly(rows, night)
+        except Exception:  # noqa: BLE001
+            log.exception("radiatorernes gennemgang fejlede")
+
+    def _price_radiator(self) -> None:
+        """Radiatorernes luft og kroner - se ``RadiatorReport.price``."""
+        try:
+            self.radiator.price(
+                self.curve.predict,
+                lambda setpoint, outdoor: self.table.lookup(setpoint, outdoor).cop,
+                self.options.hp_flow_offset,
+                self.options.radiator_target_opening,
+            )
+            log.info("radiatorerne: %s", self.radiator.note)
+        except Exception:  # noqa: BLE001 - en rapport vælter aldrig en cyklus
+            log.exception("radiatorernes regnestykke fejlede")
+
+    async def _read_radiators(self, ha: HomeAssistant | None) -> list[RoomState]:
+        """Rummenes termostater og ventiler. Tom uden HA eller uden rum."""
+        if ha is None:
+            return []
+        out = []
+        for room in self.radiator_rooms:
+            state = await self._state(ha, room.climate)
+            openings = [await self._number(ha, v) for v in room.valves]
+            out.append(room_state(
+                room.name, state.attributes if state is not None else None, openings
+            ))
+        return out
+
+    @staticmethod
+    def _room_heating_power(
+        hp_power: float | None, dhw: bool | None, spa: bool | None, charging: bool
+    ) -> float | None:
+        """Varmepumpens strøm til rumvarme efter kurven.
+
+        0 under varmt vand, spa og opladning - de kører ved deres egne
+        temperaturer, og en lavere kurve ændrer ikke dem. Ukendt
+        varmtvandsflag er ukendt, ikke rumvarme.
+        """
+        if hp_power is None or not math.isfinite(hp_power):
+            return None
+        if dhw is None:
+            return None
+        if dhw or spa or charging:
+            return 0.0
+        return max(0.0, hp_power)
 
     def _cop_at(self, minutes: int) -> float | None:
         """COP om så mange minutter, hele vejen gennem kæden.
@@ -2830,6 +2905,7 @@ class Varmeopt:
             self.store.save(LEDGER_FILE, self.ledger.to_raw())
             self.store.save(FOLLOW_FILE, self.follow.to_raw())
             self.store.save(DEMAND_FIX_FILE, self.demand.to_raw())
+            self.store.save(RADIATOR_FILE, self.radiator.to_raw())
             self.store.save(OUTDOOR_BIAS_FILE, self.outdoor_bias.to_raw())
             # Vagtens binding. Den blev aldrig gemt, så opholdstiden
             # overlevede ikke en genstart og loglinjen "vagten genoptager
@@ -2932,6 +3008,10 @@ async def run() -> None:
         app.logbook = Logbook(store.path(LOGBOOK_FILE))
         app.demand = DemandFactor.from_raw(store.load(DEMAND_FIX_FILE, {}))
         app._night = app.demand.last_night
+        app.radiator = RadiatorReport.from_raw(store.load(RADIATOR_FILE, {}))
+        # Kurven og tabellen er indlæst; luften kan regnes med det samme, så
+        # siden ikke står tom til næste nat efter en genstart.
+        app._price_radiator()
         app.outdoor_bias = OutdoorBias.from_raw(store.load(OUTDOOR_BIAS_FILE, {}))
         log.info("ladehastighed: %s", app.charge_rate.note)
         log.info("udsigtens korrektion: %s", app.outdoor_bias.note)
@@ -2974,7 +3054,11 @@ async def run() -> None:
             charge_plan=lambda: app.charge_plan,
             ledger=lambda: app.ledger,
             follow=lambda: app.follow,
-            selftrain=lambda: {"behov": app.demand.to_raw()},
+            selftrain=lambda: {
+                "behov": app.demand.to_raw(),
+                "radiator": app.radiator.to_raw(),
+                "radiator_nu": app.status.get("radiator_now"),
+            },
             logbook=lambda: app.logbook,
             on_charge=lambda start: _toggle_charge(app, start),
             house_load=lambda: app.house_load,
