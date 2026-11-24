@@ -207,6 +207,12 @@ def _number(value: Any) -> float | None:
     return result if math.isfinite(result) else None
 
 
+def _or(value: Any, default: float) -> float:
+    """Tallet, eller standarden når det mangler - men 0 er et tal."""
+    number = _number(value)
+    return default if number is None else number
+
+
 def _stamp(value: Any) -> float | None:
     """Predbats tidsstempel («2026-09-15T00:00:00+0200») som epoch-sekunder."""
     if not isinstance(value, str):
@@ -545,6 +551,14 @@ class Plan:
         """Planen fra logbogen. ``None`` når linjen ikke kan læses."""
         if not isinstance(raw, dict) or not isinstance(raw.get("rækker"), list):
             return None
+        # Logbogen fra 0.101.0 havde også «rækker», men med skærmudtrækkets
+        # kolonner (minutter, tilstand, import …). Læst her ville tilstanden
+        # blive «0» og eksportprisen importprisen - uden en fejl.
+        if "kolonner" in raw or any(
+            not isinstance(r, list) or len(r) != 5 or not isinstance(r[0], str)
+            for r in raw["rækker"]
+        ):
+            return None
         try:
             slots = tuple(
                 Slot(
@@ -565,9 +579,9 @@ class Plan:
 
             return cls(
                 slots,
-                trip=float(raw.get("tur") or BATTERY_ROUND_TRIP),
-                export_floor=float(raw.get("eksportgulv") or EXPORT_FLOOR),
-                empty_percent=float(raw.get("tom") or BATTERY_EMPTY_PERCENT),
+                trip=_or(raw.get("tur"), BATTERY_ROUND_TRIP),
+                export_floor=_or(raw.get("eksportgulv"), EXPORT_FLOOR),
+                empty_percent=_or(raw.get("tom"), BATTERY_EMPTY_PERCENT),
                 starts_at=_number(raw.get("start")),
                 charge_limits=limits(raw.get("ladegrænser")),
                 export_limits=limits(raw.get("salgsgrænser")),

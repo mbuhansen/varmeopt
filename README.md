@@ -140,7 +140,7 @@ Hvad der virker nu:
   stræk, er det den høje — kun den kan lave det. Den lave tæller ikke i «én
   blok og én efteropladning pr. stræk», men har sin egen grænse: én pr.
   stræk.
-- **Fører logbog pr. halvtime** i `/data/logbook.jsonl`, fjorten dage tilbage:
+- **Fører logbog pr. halvtime** i `/data/logbook.jsonl`, 21 dage tilbage:
   hvad planen så ved halvtimens start (Predbats plan, låste priser, lagerets
   indhold og udsigten frem for behov, COP og udetemperatur) og hvad der
   faktisk skete (strøm og varme pr. kilde, husets træk, lageret ved
@@ -157,15 +157,20 @@ Hvad der virker nu:
     behovet med en faktor mellem 0,8 og 1,3 — først efter 14 brugbare dage,
     og en femtedel af vejen pr. nat. En faktor og ikke en margin: den retter
     en skævhed, men gør ikke hver opladning større.
-  - *Nattens justering* (`replay.py`, `selftune.py`): planlæggeren og blokken
-    genafspilles på logbogens dage, og `source_hysteresis`,
-    `charge_min_saving_kr` og `low_charge_min_saving_kr` prøves på nabo-værdier.
-    Den justerer kun når simulatoren har bestået en prøve — med de beslutninger
-    der faktisk blev truffet, skal den ramme pumpens og fyrets varme og
-    lagerets døgnforløb — og kun ét skridt pr. nat, inden for faste grænser,
-    når en anden værdi var klart billigere over mindst 5 dage og ikke dyrere på
-    de 3 nyeste, som holdes ude af valget. Mindstekørsel, antal blokke,
-    bekræftelser, temperaturer og slitage rører den aldrig.
+  - *Nattens justering* (`replay.py`, `selftune.py`) — **som standard en
+    rapport.** Planlæggeren og blokken genafspilles på logbogens dage, og
+    `source_hysteresis`, `charge_min_saving_kr` og `low_charge_min_saving_kr`
+    prøves på nabo-værdier. Hver nat står der hvad den *ville* ændre og hvor
+    mange kroner den regner med; den ændrer intet før `self_tune_apply` slås
+    til. Den regner kun når simulatoren har bestået en prøve — med de
+    beslutninger der faktisk blev truffet, skal den ramme pumpens og fyrets
+    varme, kompressorens driftstid og lagerets døgnforløb. Simulatoren regner
+    med opstartstab, solvarme og ACthor, vagtens hviletid og lageret ved
+    midnat. Et forslag er ét skridt, der selv skal være klart billigere over
+    mindst 5 dage og ikke dyrere på de 3 nyeste. En indstilling uden for
+    grænserne røres ikke, og ændrer du en indstilling, glemmes den justering
+    der byggede på den gamle. Mindstekørsel, antal blokke, bekræftelser,
+    temperaturer og slitage rører den aldrig.
   Status står i Selvkontrol-boksen på forsiden og i `debug.json` under
   `selvtræning`. Begge kan slås fra med `demand_correction_enabled` og
   `self_tune_enabled`.
@@ -343,7 +348,8 @@ siges i loggen ved opstart.
 | `charge_min_saving_kr` | 1.0 | Det mindste en opladning skal spare i kroner, før kompressoren startes for den — regnet på det der faktisk kan lades fra nettet, inden batteriet tager over. Den 18. oktober lovede en blok på 3,6 kWh 0,25 kr, og opstarten kostede mere varme end den hentede. 0 slår gulvet fra |
 | `low_charge_min_saving_kr` | 1.0 | Samme gulv for den lave opladning (`binary_sensor.varmeopt_lad_op_lav`). Den er ikke en ekstra start, men en start UVR'en ellers ville have lavet senere, så opstartstabet bag `charge_min_saving_kr` gælder ikke på samme måde. Morgenen den 24. november ville have sparet ~0,7 kr — under 1,0 |
 | `demand_correction_enabled` | true | Ret behovsudsigten med den faktor logbogen viser — virker først efter 14 dage |
-| `self_tune_enabled` | true | Nattens justering af de tre knapper ovenfor — kun med bestået prøve, ét skridt pr. nat |
+| `self_tune_enabled` | true | Nattens genafspilning og rapport om de tre knapper ovenfor |
+| `self_tune_apply` | false | Må rapportens forslag anvendes — ét skridt pr. nat. Slå først til når rapporterne er holdt op mod regnskabet |
 | `cop_learn_warmup_minutes` | 10 | Hvor længe varmepumpen skal have kørt, før dens COP læres. Lige efter en start fejer fremløbet op gennem tabellen med en COP der ikke har sat sig. |
 | `control_confirm_minutes` | 3 | Hvor længe en ny kilde skal holde før den tæller. Uden den gør hviletiden et ét-minuts udsving til et kvarters fejl |
 | `control_confirm_plans` | 2 | Hvor mange Predbat-beregninger en ny kilde skal holde på, før den tæller. Prisen skifter i Predbats takt, cirka hvert femte minut, så tre minutter kan ikke skelne en plan der kun står i fire minutter fra en der bliver stående. 1 slår det fra |

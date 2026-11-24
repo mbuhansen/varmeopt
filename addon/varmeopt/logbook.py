@@ -46,7 +46,9 @@ from typing import Any, Callable
 log = logging.getLogger(__name__)
 
 SLOT_SECONDS = 1800
-KEEP_DAYS = 14
+# 21 dage: behovets faktor skal kunne finde 14 hele dage, og første og sidste
+# dag i et vindue er altid halve.
+KEEP_DAYS = 21
 # Længste spring mellem to cyklusser der integreres. Samme grænse som
 # regnskabet: har add-on'en været nede, ved vi ikke hvad pumpen lavede.
 MAX_GAP_SECONDS = 300.0
@@ -54,7 +56,7 @@ MAX_GAP_SECONDS = 300.0
 RECENT_ROWS = 96
 
 # Det der summeres over halvtimen, som kW -> kWh.
-ENERGY_KEYS = ("vp_el", "vp_varme", "solvarme", "elpatron", "pillefyr", "behov")
+ENERGY_KEYS = ("vp_el", "vp_varme", "solvarme", "elpatron", "pillefyr", "behov", "hus")
 
 
 def _finite(value: Any) -> bool:
@@ -81,6 +83,11 @@ class Reading:
     elpatron: float | None = None
     pillefyr: float | None = None
     behov: float | None = None
+    # Husets forbrug som forbrugskurven er lært af - målt på lageret, med
+    # flowmåleren som bagstopper (``houseload``). Det er det behovets faktor
+    # skal sammenlignes med; ``behov`` er flowmåleren alene og falder ud under
+    # dens bund.
+    hus: float | None = None
     lager_kwh: float | None = None
     ude: float | None = None
     kompressor: bool | None = None

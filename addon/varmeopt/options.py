@@ -325,6 +325,10 @@ _DEFAULTS: dict[str, object] = {
     # første dag og virker først når der er nok; de kan slås fra her.
     "demand_correction_enabled": True,
     "self_tune_enabled": True,
+    # Må nattens justering selv flytte knapperne? Fra: den regner og skriver
+    # hvad den ville gøre (en rapport), men ændrer intet. Slås først til når
+    # rapporterne er holdt op mod regnskabet.
+    "self_tune_apply": False,
 }
 
 
@@ -457,6 +461,7 @@ class Options:
     auto_update: bool
     demand_correction_enabled: bool
     self_tune_enabled: bool
+    self_tune_apply: bool
     control_enabled: bool
     control_min_dwell_minutes: float
     control_confirm_minutes: float
@@ -534,6 +539,7 @@ class Options:
             auto_update=_as_bool(values["auto_update"]),
             demand_correction_enabled=_as_bool(values["demand_correction_enabled"]),
             self_tune_enabled=_as_bool(values["self_tune_enabled"]),
+            self_tune_apply=_as_bool(values["self_tune_apply"]),
             control_enabled=_as_bool(values["control_enabled"]),
             dhw_setpoint=float(values["dhw_setpoint"]),
             tank_liters=int(values["tank_liters"]),

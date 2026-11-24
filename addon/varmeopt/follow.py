@@ -57,9 +57,11 @@ PELLET_MARGIN_MINUTES = 10.0
 # add-on'en været nede, ved vi ikke hvad der skete imens.
 MAX_GAP_SECONDS = 300.0
 
-# Fristen følger de målte starter, når der er nok af dem: den længste af de
-# seneste plus en margin, inden for et loft og en bund. Starter pumpen altid
-# inden for 6 minutter, er 20 minutter for længe at vente på en fejl.
+# Fristen følger de målte starter, når der er nok af dem: den næstlængste af
+# de seneste plus en margin, inden for et loft og en bund. Starter pumpen
+# altid inden for 6 minutter, er 20 minutter for længe at vente på en fejl.
+# Den næstlængste og ikke den længste: én langsom start skal ikke flytte
+# fristen alene.
 LEARN_AFTER_STARTS = 5
 LEARN_MARGIN_MINUTES = 10.0
 LEARN_MIN_MINUTES, LEARN_MAX_MINUTES = 15.0, 45.0
@@ -224,7 +226,11 @@ class FollowWatch:
                 )
         else:
             if charge and running and not self._settled:
-                if self._ordered_since is not None:
+                # En start der kom efter en advarsel, var en fejl der blev
+                # rettet - Node-RED der stod, en UVR der blev genstartet. Den
+                # er ikke en ventetid, og den må ikke hæve fristen.
+                flagged = (self.open.get(NOT_STARTED) or Event("", 0, 0)).flagged
+                if self._ordered_since is not None and not flagged:
                     delay = round((now - self._ordered_since) / 60, 1)
                     if low:
                         self.delays_low = (self.delays_low + [delay])[-MAX_DELAYS:]
@@ -269,9 +275,10 @@ class FollowWatch:
         delays = (self.delays_low if low else self.delays)[-LEARN_FROM_LAST:]
         if len(delays) < LEARN_AFTER_STARTS:
             return self.grace_minutes
+        second = sorted(delays)[-2]
         return min(
             LEARN_MAX_MINUTES,
-            max(LEARN_MIN_MINUTES, max(delays) + LEARN_MARGIN_MINUTES),
+            max(LEARN_MIN_MINUTES, second + LEARN_MARGIN_MINUTES),
         )
 
     def _close_not_started(self, now: float, outcome: str) -> None:

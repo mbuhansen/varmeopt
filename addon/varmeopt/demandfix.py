@@ -38,15 +38,19 @@ from datetime import datetime
 from typing import Any
 
 MIN_DAYS = 14
-WINDOW_DAYS = 14
+# Vinduet er længere end kravet: første og sidste dag i det er altid halve,
+# og et par dårlige dage må ikke holde faktoren på 1 for altid.
+WINDOW_DAYS = 21
 STEP = 0.2
 MIN_FACTOR, MAX_FACTOR = 0.8, 1.3
 # Udsigten lavet så langt frem: en halv time er nuet, tolv timer er hvor langt
 # et dyrt stræk typisk ligger fra den opladning der lægges imod det.
 MIN_AHEAD, MAX_AHEAD = 2, 24
 MIN_COVER = 0.95
-# Så mange sammenlignelige halvtimer skal en dag have for at tælle.
-MIN_PAIRS_PER_DAY = 24
+# Så mange *målte halvtimer* skal en dag have for at tælle - ikke par. Hver
+# målt halvtime holdes op mod op til 23 udsigter, så 24 par kunne før nås med
+# to målinger i døgnet (gennemgangen den 24. november).
+MIN_SLOTS_PER_DAY = 24
 SLOT = 1800
 
 
@@ -83,7 +87,10 @@ class DemandFactor:
         actual = {}
         for row in rows:
             skete = row.get("skete") or {}
-            kwh = skete.get("behov_kwh")
+            # Husets forbrug som kurven er lært af. Flowmåleren alene falder
+            # ud under sin bund - netop de stille halvtimer - og trak faktoren
+            # opad; den måler også en lidt anden størrelse end kurven.
+            kwh = skete.get("hus_kwh")
             if (row.get("dækning") or 0) >= MIN_COVER and _finite(kwh) and kwh >= 0:
                 actual[int(row["t"])] = kwh * 2  # kWh på en halv time -> kW
         newest = max(actual) if actual else None
@@ -91,7 +98,7 @@ class DemandFactor:
             return False
         cut = newest - WINDOW_DAYS * 86400
         real = raw = 0.0
-        per_day: dict[str, int] = {}
+        per_day: dict[str, set[int]] = {}
         for row in rows:
             t = int(row["t"])
             if t < cut or (row.get("dækning") or 0) < MIN_COVER:
@@ -110,8 +117,8 @@ class DemandFactor:
                 real += actual[target]
                 raw += forecast / used
                 day = datetime.fromtimestamp(target).strftime("%Y-%m-%d")
-                per_day[day] = per_day.get(day, 0) + 1
-        self.days = sum(1 for n in per_day.values() if n >= MIN_PAIRS_PER_DAY)
+                per_day.setdefault(day, set()).add(target)
+        self.days = sum(1 for slots in per_day.values() if len(slots) >= MIN_SLOTS_PER_DAY)
         if raw <= 0:
             return False
         ratio = real / raw

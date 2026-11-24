@@ -389,6 +389,7 @@ class Varmeopt:
         self.demand = DemandFactor()
         self.tuner = Tuner()
         self._night: str | None = None
+        self._night_task: Any = None
         # Sidste gode aflæsning pr. tank, så et enkelt minuts tavshed ikke
         # halverer lageret. Kun i hukommelsen: efter en genstart er svaret
         # «ved ikke», og det er det rigtige svar.
@@ -925,8 +926,12 @@ class Varmeopt:
                 "store_full_by_hour": self.options.store_full_by_hour,
                 "dhw_temp": self.options.dhw_usable_temp,
                 "min_runtime_minutes": self.options.hp_min_runtime_minutes,
-                "min_saving_kr": self.options.charge_min_saving_kr,
-                "low_min_saving_kr": self.options.low_charge_min_saving_kr,
+                # De værdier der *gælder* - også når nattens justering har
+                # flyttet dem. Her stod indstillingerne, og så skrev siden
+                # «gevinst under 1,00 kr» mens planlæggeren brugte 0,5.
+                "min_saving_kr": knobs.charge_min_saving_kr,
+                "low_min_saving_kr": knobs.low_charge_min_saving_kr,
+                "hysteresis": knobs.source_hysteresis,
                 "confirm_plans": self.options.charge_confirm_plans,
                 "max_delivered_share": MAX_DELIVERED_SHARE,
             },
@@ -1005,6 +1010,7 @@ class Varmeopt:
                 elpatron=balance.element_kw if balance is not None else None,
                 pillefyr=balance.boiler_kw if balance is not None else None,
                 behov=balance.load.kw if balance is not None else None,
+                hus=self._house_measured(time.time()),
                 lager_kwh=store.heat_kwh if store is not None else None,
                 ude=outdoor_temp,
                 kompressor=running_now if power_known else None,
@@ -1087,14 +1093,25 @@ class Varmeopt:
                 "elpris", self._publish_price(ha, prices, decision, command)
             )
 
-        night = self._night_due(time.time())
-        if night is not None:
-            await asyncio.to_thread(self._nightly, night)
+        # Nattens gennemgang kører ved siden af. Cyklussen venter ikke på den:
+        # genafspilningen kan tage et halvt minut eller mere, og imens skal
+        # blokkene stadig kunne slutte og flagene skrives (gennemgangen den
+        # 24. november).
+        if self._night_task is not None and self._night_task.done():
+            self._night_task = None
             self._dirty = True
             self._maybe_save(force=True)
+        if self._night_task is None:
+            night = self._night_due(time.time())
+            if night is not None:
+                self._night_task = asyncio.ensure_future(
+                    asyncio.to_thread(self._nightly, night)
+                )
         self.status["demand_note"] = self.demand.note
         self.status["tune_note"] = (
-            self.tuner.note if self.options.self_tune_enabled else "slået fra"
+            ("" if self.options.self_tune_apply else "rapport - ") + self.tuner.note
+            if self.options.self_tune_enabled
+            else "slået fra"
         )
         self._maybe_save()
 
@@ -1667,7 +1684,10 @@ class Varmeopt:
             },
             # Planen som den kan bygges op igen - genafspilningen regner de
             # samme marginalpriser som beslutningen blev truffet på.
-            "plan": plan.to_replay(rows) if plan is not None else None,
+            # Hele planen, ikke kun horisonten: reserven og den billigste
+            # genopladning regnes over alle rækker, og afkortet giver den
+            # andre priser end beslutningen blev truffet på.
+            "plan": plan.to_replay() if plan is not None else None,
             "net": dataclasses.asdict(prices["grid"]) if prices.get("grid") is not None else None,
             # Det simulatoren af lageret skal have med fra start: pladsen
             # til begge ladetemperaturer, toppen til solvarmen, og den
@@ -1793,6 +1813,13 @@ class Varmeopt:
         # demandfix.py. 1 indtil der er data nok.
         return None if predicted is None else predicted * self.demand_factor
 
+    def _house_measured(self, now: float) -> float | None:
+        """Husets forbrug målt på lageret - kun når målingen er frisk."""
+        load = self.house_load
+        if load.kw is None or load.measured_at is None:
+            return None
+        return load.kw if now - load.measured_at <= MAX_AGE_MINUTES * 60 else None
+
     @property
     def demand_factor(self) -> float:
         return self.demand.factor if self.options.demand_correction_enabled else 1.0
@@ -1805,9 +1832,15 @@ class Varmeopt:
         )
 
     def _knobs(self) -> Knobs:
-        """De tre knapper som de gælder nu - justeret, hvis justeringen er slået til."""
+        """De tre knapper som de gælder nu.
+
+        Justeret kun når justeringen både kører og må handle. I rapportform
+        står justeringerne aldrig, så indstillingerne gælder.
+        """
         configured = self._configured_knobs()
-        return self.tuner.knobs(configured) if self.options.self_tune_enabled else configured
+        if self.options.self_tune_enabled and self.options.self_tune_apply:
+            return self.tuner.knobs(configured)
+        return configured
 
     def _night_due(self, now: float) -> str | None:
         """Er det tid til nattens gennemgang? Første cyklus efter ``NIGHTLY_HOUR``."""
@@ -1847,7 +1880,9 @@ class Varmeopt:
                         dhw_temp=self.options.dhw_usable_temp,
                         store_full_by_hour=self.options.store_full_by_hour,
                         low_max_temp=LOW_CHARGE_MAX_TEMP,
+                        min_dwell_minutes=self.options.control_min_dwell_minutes,
                     ),
+                    apply=self.options.self_tune_apply,
                 )
                 log.info("selvjustering: %s", self.tuner.note)
         except Exception:  # noqa: BLE001 - nattens gennemgang vælter aldrig en cyklus

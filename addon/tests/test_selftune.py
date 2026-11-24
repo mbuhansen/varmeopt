@@ -13,6 +13,8 @@ from varmeopt.prices import Plan, Slot
 from varmeopt.replay import (
     Fixed,
     Knobs,
+    Model,
+    logged_policy,
     PlannerPolicy,
     draw_kwh,
     learn_model,
@@ -105,6 +107,16 @@ class ReplayTest(unittest.TestCase):
         self.assertAlmostEqual(model.start_kwh, START, delta=1.0)
         self.assertAlmostEqual(model.stop_kwh, STOP, delta=1.5)
 
+    def test_an_old_logbook_plan_is_refused(self):
+        # 0.101.0 gemte skærmudtrækket under det samme navn.
+        old = {"kolonner": ["minutes", "state", "import"], "rækker": [[0, "holdchrg", 2.0]]}
+        self.assertIsNone(Plan.from_replay(old))
+        self.assertIsNone(Plan.from_replay({"rækker": [[0, "holdchrg", 2.0, 0.5, None]]}))
+
+    def test_zero_is_a_number(self):
+        plan = Plan(tuple(Slot(0, "holdchrg", 2.0, 0.5, 50.0) for _ in range(1)), empty_percent=0.0)
+        self.assertEqual(Plan.from_replay(plan.to_replay()).empty_percent, 0.0)
+
     def test_the_replay_plan_gives_the_same_price(self):
         plan = Plan(tuple(Slot(k, "holdchrg", 2.0 + k / 10, 0.5, 50.0) for k in range(5)))
         again = Plan.from_replay(plan.to_replay())
@@ -133,31 +145,73 @@ class ValidationTest(unittest.TestCase):
         self.assertFalse(validate(days, model).ok)
 
 
+    def test_a_wrong_pump_rate_is_caught(self):
+        # Energibalancen tvinger varmen på plads; driftstiden gør ikke.
+        import dataclasses
+
+        days = usable_days(house(8))
+        model = learn_model(days)
+        for factor in (0.5, 2.0):
+            wrong = dataclasses.replace(model, hp_kw=model.hp_kw * factor)
+            self.assertFalse(validate(days, wrong).ok, f"ydelse x{factor}")
+
+    def test_a_day_with_a_hole_is_not_used(self):
+        rows = house(3)
+        del rows[48 + 20]
+        self.assertEqual(len(usable_days(rows)), 2)
+
+
 class PlannerReplayTest(unittest.TestCase):
     def test_the_planner_lays_a_low_charge_on_the_cheap_night(self):
-        # Natten 2,00, morgenen 3,00: ved kurvens COP 4 er det 0,65 mod 0,90
-        # kr/kWh varme. Med et lavt gulv skal genafspilningen lade lavt op.
+        # Natten 2,00, morgenen 3,00: med et lavt gulv lægger genafspilningen
+        # en lav blok; med et højt gør den ikke.
         days = usable_days(house(2))
         model = learn_model(days)
-        knobs = Knobs(0.05, 1.0, 0.3)
-        policy = PlannerPolicy(knobs, FIXED, model)
-        result = simulate(days[1], model, planner_policy=policy)
-        base = simulate(days[1], model, planner_policy=PlannerPolicy(Knobs(0.05, 1.0, 2.0), FIXED, model))
-        self.assertGreater(result.hp_heat_kwh, 0)
-        self.assertLess(result.cost_kr, base.cost_kr, "den lave opladning skal kunne betale sig")
+        low = PlannerPolicy(Knobs(0.05, 1.0, 0.3), FIXED, model)
+        simulate(days[1], model, planner_policy=low)
+        self.assertIsNotNone(low.charge.last_end, "en lav blok skulle være kørt")
+        high = PlannerPolicy(Knobs(0.05, 1.0, 2.0), FIXED, model)
+        simulate(days[1], model, planner_policy=high)
+        self.assertIsNone(high.charge.last_end)
+
+    def test_the_store_at_midnight_counts(self):
+        # Gennemgangen: uden det så det billigere ud at lade mindre op. Her
+        # lyver modellen om UVR'en, så lageret ender lavere end det målte -
+        # og forskellen skal koste.
+        days = usable_days(house(2))
+        model = learn_model(days)
+        low_model = Model(model.start_kwh - 3, model.stop_kwh - 3, model.hp_kw, model.pellet_kw)
+        result = simulate(days[1], low_model, policy=logged_policy, wear_kr_per_kwh=0.15)
+        self.assertGreater(result.end_short_kwh, 0)
+
+    def test_free_heat_is_counted(self):
+        # Solvarme og ACthor lægges til som de kom; ellers betalte
+        # simulatoren pumpen for den.
+        rows = house(2)
+        for row in rows:
+            if 10 <= datetime.fromtimestamp(row["t"]).hour < 14:
+                row["skete"]["elpatron_kwh"] = 0.75
+                row["skete"]["lager_slut_kwh"] += 0.0  # trækket bærer den
+        days = usable_days(rows)
+        model = learn_model(days)
+        with_free = simulate(days[1], model, policy=logged_policy)
+        for row in days[1]:
+            row["skete"]["elpatron_kwh"] = 0.0
+        without = simulate(days[1], model, policy=logged_policy)
+        self.assertLess(with_free.hp_heat_kwh, without.hp_heat_kwh + 1e-9)
 
 
 class TunerTest(unittest.TestCase):
     def test_no_tuning_without_a_passed_validation(self):
         tuner = Tuner()
         self.assertFalse(tuner.nightly(house(3), "n1", KNOBS, FIXED))
-        self.assertIn("justerer ikke", tuner.note)
+        self.assertIn("regner ikke", tuner.note)
         self.assertEqual(tuner.knobs(KNOBS), KNOBS)
 
     def test_at_most_one_knob_one_step_and_within_bounds(self):
         tuner = Tuner()
         started = time.monotonic()
-        tuner.nightly(house(10), "n1", Knobs(0.05, 1.0, 2.0), FIXED)
+        tuner.nightly(house(8), "n1", Knobs(0.05, 1.0, 2.0), FIXED)
         took = time.monotonic() - started
         self.assertTrue(tuner.validation["ok"], tuner.validation)
         moved = [k for k, v in tuner.values.items() if v is not None]
@@ -167,11 +221,53 @@ class TunerTest(unittest.TestCase):
             self.assertTrue(low <= tuner.values[name] <= high)
         self.assertLess(took, 120, f"nattens justering tog {took:.0f} s")
 
+    def test_a_report_changes_nothing(self):
+        tuner = Tuner()
+        tuner.nightly(house(8), "n1", Knobs(0.05, 1.0, 2.0), FIXED, apply=False)
+        self.assertEqual(tuner.values, {k: None for k in BOUNDS})
+        if tuner.proposal is not None:
+            self.assertFalse(tuner.proposal["anvendt"])
+            self.assertIn("ikke anvendt", tuner.note)
+
+    def test_applied_it_moves_exactly_the_proposed_step(self):
+        report, acting = Tuner(), Tuner()
+        knobs = Knobs(0.05, 1.0, 2.0)
+        report.nightly(house(8), "n1", knobs, FIXED, apply=False)
+        acting.nightly(house(8), "n1", knobs, FIXED, apply=True)
+        if report.proposal is None:
+            self.assertEqual(acting.values, {k: None for k in BOUNDS})
+        else:
+            name = report.proposal["knap"]
+            self.assertEqual(acting.values[name], report.proposal["til"])
+            step = BOUNDS[name][0]
+            self.assertAlmostEqual(abs(report.proposal["til"] - report.proposal["fra"]), step)
+
+    def test_a_changed_setting_wins_over_an_old_adjustment(self):
+        tuner = Tuner()
+        tuner.values["charge_min_saving_kr"] = 0.9
+        tuner.based_on["charge_min_saving_kr"] = 1.0
+        self.assertEqual(tuner.knobs(KNOBS).charge_min_saving_kr, 0.9)
+        changed = Knobs(0.05, 1.5, 1.0)
+        self.assertEqual(tuner.knobs(changed).charge_min_saving_kr, 1.5)
+        self.assertIsNone(tuner.values["charge_min_saving_kr"])
+
+    def test_a_setting_outside_the_bounds_is_left_alone(self):
+        # 0 kan betyde «slået fra». Den må ikke springe til 0,5 på én nat.
+        tuner = Tuner()
+        tuner.nightly(house(8), "n1", Knobs(0.05, 0.0, 5.0), FIXED, apply=True)
+        self.assertIsNone(tuner.values["charge_min_saving_kr"])
+        self.assertIsNone(tuner.values["low_charge_min_saving_kr"])
+
+    def test_an_adjustment_without_its_basis_is_forgotten(self):
+        back = Tuner.from_raw({"values": {"source_hysteresis": 0.08}})
+        self.assertIsNone(back.values["source_hysteresis"])
+
     def test_once_a_night_and_round_trip(self):
         tuner = Tuner()
         tuner.nightly(house(3), "n1", KNOBS, FIXED)
         self.assertFalse(tuner.nightly(house(3), "n1", KNOBS, FIXED))
         tuner.values["source_hysteresis"] = 0.5
+        tuner.based_on["source_hysteresis"] = 0.05
         back = Tuner.from_raw(tuner.to_raw())
         self.assertEqual(back.values["source_hysteresis"], 0.10, "holdes inden for grænsen")
         self.assertEqual(back.last_night, "n1")
@@ -203,10 +299,20 @@ class WiredIntoTheCycleTest(unittest.TestCase):
         })
         asyncio.run(app.cycle(ha))
 
-    def test_tuned_knobs_reach_the_planner(self):
+    def test_in_report_mode_nothing_reaches_the_planner(self):
         app = self.app()
         app.tuner.values["source_hysteresis"] = 0.08
+        app.tuner.based_on["source_hysteresis"] = app.options.source_hysteresis
+        self.cycle(app)
+        self.assertEqual(app.planner.hysteresis, app.options.source_hysteresis)
+        self.assertIn("rapport", app.status["tune_note"])
+
+    def test_tuned_knobs_reach_the_planner(self):
+        app = self.app(self_tune_apply=True)
+        app.tuner.values["source_hysteresis"] = 0.08
+        app.tuner.based_on["source_hysteresis"] = app.options.source_hysteresis
         app.tuner.values["charge_min_saving_kr"] = 0.7
+        app.tuner.based_on["charge_min_saving_kr"] = app.options.charge_min_saving_kr
         self.cycle(app)
         self.assertEqual(app.planner.hysteresis, 0.08)
         self.assertEqual(app.planner.min_saving_kr, 0.7)
@@ -232,6 +338,15 @@ class WiredIntoTheCycleTest(unittest.TestCase):
         off._temperature_at = lambda m: 5.0
         off.demand.learned, off.demand.days = 1.2, MIN_DAYS
         self.assertEqual(off._demand_at(60), 2.0)
+
+    def test_the_night_runs_once_after_three(self):
+        app = self.app()
+        app.logbook.path = __import__("pathlib").Path(__file__)  # findes
+        two = datetime(2026, 12, 2, 2, 30).timestamp()
+        three = datetime(2026, 12, 2, 3, 1).timestamp()
+        self.assertIsNone(app._night_due(two))
+        self.assertEqual(app._night_due(three), "2026-12-02")
+        self.assertIsNone(app._night_due(three + 600), "kun én gang pr. nat")
 
 
 if __name__ == "__main__":

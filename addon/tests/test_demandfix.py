@@ -14,7 +14,7 @@ def rows(days, forecast_kw=2.0, actual_kw=2.3, used=1.0, cover=1.0):
             "t": T0 + i * 1800,
             "dækning": cover,
             "så": {"frem": {"behov_kw": [forecast_kw * used] * 48}, "behov_faktor": used},
-            "skete": {"behov_kwh": actual_kw / 2},
+            "skete": {"hus_kwh": actual_kw / 2},
         })
     return out
 
@@ -59,6 +59,27 @@ class DemandFactorTest(unittest.TestCase):
         f = DemandFactor()
         f.nightly(rows(MIN_DAYS + 2, cover=0.5), "n1")
         self.assertEqual(f.days, 0)
+        self.assertEqual(f.learned, 1.0)
+
+    def test_days_count_measured_slots_not_pairs(self):
+        # To målte halvtimer i døgnet giver 46 par, men det er ikke en dag.
+        data = rows(MIN_DAYS + 2)
+        for row in data:
+            # Begge felter, så testen rammer optællingen og ikke feltnavnet.
+            row["skete"]["behov_kwh"] = row["skete"]["hus_kwh"]
+            if (row["t"] // 1800) % 48 not in (0, 1):
+                row["skete"]["hus_kwh"] = row["skete"]["behov_kwh"] = None
+        f = DemandFactor()
+        f.nightly(data, "n1")
+        self.assertEqual(f.days, 0)
+        self.assertFalse(f.active)
+
+    def test_the_flowmeter_alone_is_not_used(self):
+        data = rows(MIN_DAYS + 2)
+        for row in data:
+            row["skete"] = {"behov_kwh": 9.0}
+        f = DemandFactor()
+        f.nightly(data, "n1")
         self.assertEqual(f.learned, 1.0)
 
     def test_round_trip(self):
