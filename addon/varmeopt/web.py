@@ -2053,8 +2053,8 @@ def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
         ))
     if s.get("demand_note"):
         rows.append(("Behovets faktor", _esc(s["demand_note"])))
-    # Radiatorernes skyggemåling - se radiator.py. Nu-billedet først, så man
-    # kan se at ventilerne bliver læst, før der er en nat at regne på.
+    # Radiatorerne - se radiator.py. Kun nu-billedet; et forsøg med kurven
+    # læses i logbogen.
     now = s.get("radiator_now") or {}
     if now.get("ventil_max") is not None:
         rows.append((
@@ -2065,9 +2065,7 @@ def _selfcheck_section(s: dict[str, Any], logbook: Any) -> str:
                 + (f", udeladt: {', '.join(now['udeladt'])}" if now.get("udeladt") else "")
             ),
         ))
-    if s.get("radiator_note"):
-        rows.append(("Radiatorernes luft", _esc(s["radiator_note"])))
-    dl ="".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
+    dl = "".join(f"<dt>{k}</dt><dd>{v}</dd>" for k, v in rows)
     return f'<h2>Selvkontrol</h2><div class="card">{items}<dl>{dl}</dl></div>'
 
 

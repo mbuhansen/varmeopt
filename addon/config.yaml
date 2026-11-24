@@ -112,7 +112,6 @@ options:
   auto_update: false
   demand_correction_enabled: true
   radiator_rooms: "climate.roommind_stue=sensor.stue_valve_opening,sensor.stue_valve_opening_2;climate.roommind_spisestue=sensor.spisestue_valve_opening;climate.roommind_kokken=sensor.kokken_valve_opening;climate.roommind_kontor=sensor.magnus_vaerelse_valve_opening;climate.roommind_magnus_vaerelse=sensor.kontor_valve_opening;climate.roommind_sovevaerelse=sensor.sovevaerelse_valve_opening;climate.gang=sensor.gang_valve_opening"
-  radiator_target_opening: 75
 schema:
   log_level: list(debug|info|warning|error)
   cycle_seconds: int(30,600)
@@ -211,4 +210,3 @@ schema:
   auto_update: bool
   demand_correction_enabled: bool
   radiator_rooms: str?
-  radiator_target_opening: float(30,100)?

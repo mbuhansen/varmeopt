@@ -112,6 +112,9 @@ class Reading:
     ventil_rum: str | None = None
     frem_hus: float | None = None
     rum_mangler: float | None = None
+    # Hvert rums underskud for sig - så et forsøg med en lavere kurve kan
+    # se hvilket rum der ikke holdt.
+    rum_mangler_rum: dict[str, float] | None = None
 
 
 class Logbook:
@@ -138,6 +141,7 @@ class Logbook:
         self._top_room_minutes: dict[str, float] = {}
         self._shortfall_max: float | None = None
         self._shortfall_seconds = 0.0
+        self._room_shortfall: dict[str, float] = {}
         self._last_store: float | None = None
         self._last: float | None = None
         self._last_reading: Reading | None = None
@@ -225,6 +229,9 @@ class Logbook:
             self._shortfall_seconds += seconds
             if self._shortfall_max is None or reading.rum_mangler > self._shortfall_max:
                 self._shortfall_max = float(reading.rum_mangler)
+        for room, value in (reading.rum_mangler_rum or {}).items():
+            if _finite(value) and value > self._room_shortfall.get(room, -math.inf):
+                self._room_shortfall[room] = float(value)
 
     def _begin(self, slot: float, seen: Callable[[], dict[str, Any]]) -> None:
         self._slot = slot
@@ -243,6 +250,7 @@ class Logbook:
         self._top_room_minutes = {}
         self._shortfall_max = None
         self._shortfall_seconds = 0.0
+        self._room_shortfall = {}
         self._last_store = None
 
     def _finish(self) -> dict[str, Any]:
@@ -290,6 +298,9 @@ class Logbook:
             if self._shortfall_seconds >= 0.8 * self._covered > 0
             else None
         )
+        measured["rum_mangler_rum"] = {
+            k: _r(v, 2) for k, v in sorted(self._room_shortfall.items())
+        }
         row = {
             "t": int(self._slot),
             "dækning": _r(min(1.0, self._covered / SLOT_SECONDS), 2),
